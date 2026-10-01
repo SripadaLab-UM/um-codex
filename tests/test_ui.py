@@ -553,9 +553,25 @@ def test_a_refused_key_isnt_saved(memory_keychain):
     with_server(test, check_key=lambda key: "refused")
 
 
-def test_the_key_page_field_is_masked():
-    page = (REPO / "src" / "umcodex" / "ui" / "static" / "index.html").read_text()
-    assert re.search(r'<input id="key-input" type="password" autocomplete="off"', page)
+def test_the_key_field_is_masked_and_not_offered_for_saving():
+    static = REPO / "src" / "umcodex" / "ui" / "static"
+    page = (static / "index.html").read_text()
+    field = re.search(r'<input id="key-input"[^>]*>', page, re.S).group(0)
+    # Dots, but not a password field (so no "save password?"); password managers asked to keep off.
+    assert 'type="text"' in field and 'class="masked"' in field
+    assert 'autocomplete="new-password"' in field
+    assert "data-1p-ignore" in field and 'data-lpignore="true"' in field
+    assert "-webkit-text-security: disc" in (static / "app.css").read_text()
+    script = (static / "app.js").read_text()
+    assert 'if (!CSS.supports("-webkit-text-security", "disc")) keyField.type = "password"' in script
+    assert 'addEventListener("close", () => (keyField.value = ""))' in script  # Escape or Cancel empties it
+
+
+def test_destructive_questions_start_on_cancel():
+    static = REPO / "src" / "umcodex" / "ui" / "static"
+    page = (static / "index.html").read_text()
+    assert page.index('id="confirm-no"') < page.index('id="confirm-yes"')
+    assert 'document.getElementById("confirm-no").focus()' in (static / "app.js").read_text()
 
 
 # --- Docker status ----------------------------------------------------------------
@@ -894,3 +910,264 @@ def test_setups_keep_open_in(tmp_path):
     raw = store.path.read_text().replace('open_in = "codex-app"', 'open_in = "elsewhere"')
     store.path.write_text(raw)
     assert store.get("a-1").open_in == "terminal"  # type: ignore[union-attr]
+
+
+# --- Review fixes ----------------------------------------------------------------
+
+
+def test_parallel_changes_to_setups_are_all_kept(folders_here):
+    """Ten Duplicates at once (the page's API runs them on threads) all land."""
+    store = SetupStore()
+    original = Setup(id="thesis-abc123", name="thesis", working=str(folders_here["thesis"]))
+    store.save(original)
+    launcher = launcher_for_tests()
+    threads = [threading.Thread(target=launcher.duplicate, args=("thesis-abc123",)) for _ in range(10)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(SetupStore().all()) == 11
+    assert not list(store.path.parent.glob(".setups.toml.*.tmp"))
+
+
+def test_changes_from_other_processes_are_all_kept(folders_here):
+    """A launch's mark_used (another process) can't undo the page's saves."""
+    script = (
+        "import sys\n"
+        "from umcodex.setups import Setup, SetupStore\n"
+        "for n in range(15):\n"
+        "    SetupStore().save(Setup(id=f'{sys.argv[1]}-{n}', name='x', working=sys.argv[2]))\n"
+        "    SetupStore().mark_used(f'{sys.argv[1]}-{n}')\n"
+    )
+    workers = [
+        subprocess.Popen(
+            [sys.executable, "-c", script, f"p{i}", str(folders_here["thesis"])], env=dict(os.environ)
+        )
+        for i in range(4)
+    ]
+    assert [worker.wait(60) for worker in workers] == [0] * 4
+    assert len(SetupStore().all()) == 60
+
+
+def test_every_problem_in_the_form_comes_back_at_once_in_order(folders_here, home_with_keys):
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        body = {
+            "name": "",
+            "working": str(home_with_keys / ".ssh"),
+            "folders": [{"path": "relative"}],
+            "model": "no good",
+            "approvals": "sometimes",
+            "open_in": "elsewhere",
+        }
+        answer = await (await h.post("/api/setups", body)).json()
+        assert list(answer["errors"]) == ["working", "name", "folders", "approvals", "model", "open_in"]
+        assert answer["field"] == "working" and "SSH keys" in answer["errors"]["working"]
+        assert "isn't a full path" in answer["errors"]["folders"]
+
+    with_server(test)
+
+
+def test_start_waits_for_docker(folders_here):
+    credentials.save_api_key(FAKE_KEY)
+
+    class Stopped(FakeDocker):
+        def __call__(self, command, **kwargs):
+            done = super().__call__(command, **kwargs)
+            code = 1 if command[:2] == ["docker", "info"] else 0
+            return subprocess.CompletedProcess(command, code, done.stdout, "")
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        made = await (await h.post("/api/setups", setup_body(folders_here["thesis"]))).json()
+        answer = await h.post(f"/api/setups/{made['id']}/start", {})
+        body = await answer.json()
+        assert answer.status == 409 and body["error"] == "Docker Desktop isn't running. Open it first."
+        assert body["field"] == "docker"
+        assert h.launcher.openers["terminal"].opened == []  # type: ignore[attr-defined]
+
+    with_server(test, fake_docker=Stopped(), run=Stopped())
+
+
+def test_one_docker_check_at_a_time():
+    calls = []
+    release = threading.Event()
+
+    def slow(command, **kwargs):
+        calls.append(command)
+        release.wait(5)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    launcher = launcher_for_tests(run=slow)
+    first = threading.Thread(target=launcher.docker_state)
+    first.start()
+    time.sleep(0.2)
+    assert launcher.docker_state() == "unknown"  # the running check's answer comes next time
+    release.set()
+    first.join()
+    assert len(calls) == 1 and launcher.docker_state() == "ready"
+
+
+def test_the_picker_tells_a_cancel_from_a_failure():
+    picker.outcome(0, "")
+    picker.outcome(1, "execution error: User canceled. (-128)", platform="darwin")
+    with pytest.raises(picker.PickerFailed, match="Not authorized"):
+        picker.outcome(1, "execution error: Not authorized to send Apple events. (-1743)", platform="darwin")
+    with pytest.raises(picker.PickerFailed):
+        picker.outcome(1, "Add-Type : failed", platform="win32")
+
+
+def test_a_picker_failure_shows_on_the_page(monkeypatch):
+    async def broken(*, start_in=None):
+        raise picker.PickerFailed("The folder picker couldn't be shown (no display). Try again.")
+
+    monkeypatch.setattr(picker, "pick_folder", broken)
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        answer = await h.post("/api/folders/pick", {})
+        assert answer.status == 409 and "couldn't be shown" in (await answer.json())["error"]
+
+    with_server(test)
+
+
+def test_old_command_files_are_swept(tmp_path):
+    folder = tmp_path / "ui"
+    folder.mkdir()
+    old, new, other = folder / "start-old.command", folder / "start-new.command", folder / "keep.txt"
+    for file in (old, new, other):
+        file.write_text("x")
+    os.utime(old, (time.time() - 3600, time.time() - 3600))
+    os.utime(other, (time.time() - 3600, time.time() - 3600))
+    server.sweep_command_files(tmp_path)
+    assert not old.exists() and new.exists() and other.exists()
+
+
+class FakeChild:
+    def __init__(self, code=None, then=None):
+        self.code = code
+        self.then = then
+
+    def poll(self):
+        if self.then:
+            self.then()
+            self.then = None
+        return self.code
+
+
+def test_detach_returns_once_its_server_is_up():
+    data = data_dir()
+    alerts = []
+
+    def popen(command, **options):
+        assert command[-1] == "ui" and options["env"]["PYTHONUTF8"] == "1"
+        nonce = options["env"][server.NONCE_ENV]
+        return FakeChild(then=lambda: (data / server.UI_INFO).write_text(json.dumps({"nonce": nonce})))
+
+    assert server.detach(popen=popen, alert=alerts.append, wait=3) == 0
+    assert alerts == []
+    # A second one hands over to the first and ends with 0: fine too.
+    assert server.detach(popen=lambda c, **o: FakeChild(code=0), alert=alerts.append, wait=3) == 0
+    assert alerts == []
+
+
+def test_detach_says_so_in_a_message_box_when_it_fails(caplog):
+    caplog.set_level(logging.INFO)
+    data = data_dir()
+    (data).mkdir(parents=True, exist_ok=True)
+    (data / server.UI_INFO).write_text(json.dumps({"nonce": "an-older-one"}))
+    alerts = []
+
+    def popen(command, stdout, stderr, **options):
+        assert stdout == subprocess.DEVNULL  # its normal output has the sign-in link
+        stderr.write(b"Traceback: ModuleNotFoundError: no module named x\n")
+        return FakeChild(code=1)
+
+    assert server.detach(popen=popen, alert=alerts.append, wait=3) == 1
+    assert "didn't start" in alerts[0] and str(data / "um-codex.log") in alerts[0]
+    assert "ModuleNotFoundError" in caplog.text
+    # And one that never comes up (no ui.json with its nonce in time).
+    assert server.detach(popen=lambda c, **o: FakeChild(), alert=alerts.append, wait=0.3) == 1
+    assert len(alerts) == 2
+
+
+def test_the_mac_message_box_gets_the_text_as_an_argument():
+    ran = []
+    server.show_alert('a "quoted" message', platform="darwin", run=lambda c, **k: ran.append(c))
+    assert ran[0][0] == "osascript" and ran[0][-1] == 'a "quoted" message'
+    assert "display dialog (item 1 of argv)" in " ".join(ran[0])
+
+
+def test_a_failing_server_is_logged(monkeypatch, caplog):
+    async def broken(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(server, "serve", broken)
+    said = []
+    assert server.main(say=said.append) == 1
+    assert "the launcher window failed" in caplog.text and "boom" in caplog.text
+    assert "um-codex.log" in said[-1]
+
+
+def test_a_newer_install_is_noticed_and_reopened(monkeypatch):
+    import umcodex.update as update
+
+    class Installed:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def pointer(self):
+            return ("9.9.9", "0.1.0a1")
+
+        def running_version(self):
+            return "0.1.0a1"
+
+    monkeypatch.setattr(update, "Layout", Installed)
+    quits = []
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        state = await (await h.client.get("/api/state")).json()
+        assert state["installed"] == "9.9.9"
+        assert (await h.post("/api/reopen")).status == 409  # no server to end in this test
+        h.launcher.quit = lambda: quits.append(1)
+        assert await (await h.post("/api/reopen")).json() == {"reopening": True}
+        assert quits == [1] and h.launcher.reopen_after
+
+    with_server(test)
+
+
+def test_a_development_copy_notices_nothing(monkeypatch):
+    launcher = launcher_for_tests()
+    assert launcher.installed_version() is None  # not run from an installed layout
+
+
+def test_stop_requests_are_logged(caplog):
+    caplog.set_level(logging.INFO)
+    launcher = launcher_for_tests()
+    with pytest.raises(server.Invalid):
+        launcher.stop("0123abcd")
+    assert "Stop asked for launch 0123abcd" in caplog.text
+
+
+def test_the_data_folder_override_is_resolved(monkeypatch, tmp_path):
+    (tmp_path / "real").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "real")
+    monkeypatch.setenv("UMCODEX_DATA_DIR", str(tmp_path / "link"))
+    assert data_dir() == Path(os.path.realpath(tmp_path / "real"))
+
+
+def test_the_launch_logs_how_the_agent_ended(caplog):
+    from umcodex.launch import log_agent_state
+
+    caplog.set_level(logging.INFO)
+
+    def run(command, **kwargs):
+        if command[1] == "inspect":
+            out = "status=exited exit_code=137 oom_killed=false finished_at=2026-10-01T21:00:00Z"
+        else:
+            out = "watchdog: launch gone, ending\n"
+        return subprocess.CompletedProcess(command, 0, out, "")
+
+    log_agent_state(Docker(run), "umcodex-x-agent", "0123abcd")
+    assert "exit_code=137" in caplog.text and "watchdog: launch gone, ending" in caplog.text

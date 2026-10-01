@@ -579,8 +579,17 @@ modes, rigor, and the frontend.
      in the background with no window and returns at once (what the app and
      the shortcuts run). One at a time per data folder: the server holds a
      lock (`ui.lock`) and writes its port and a private control secret to
-     `ui.json` (readable by the person only); a second `um-codex ui` asks the
+     `ui.json` (readable by the person only: mode 0600 on a Mac; on Windows,
+     where that mode does nothing, the file takes `%LOCALAPPDATA%`'s
+     permissions, which give the person, SYSTEM and administrators access
+     and no other account); a second `um-codex ui` asks the
      running one, with that secret, for a new sign-in link and opens that.
+     `--detach` waits up to 10 s for the background server's `ui.json`
+     (carrying a nonce of that start) or for it to hand over to one already
+     running; otherwise it says so in a native message box (`osascript
+     display dialog` on a Mac, `MessageBoxW` on Windows) pointing to
+     `um-codex.log`, where what the server printed and any exception are
+     logged.
      The server ends after 15 minutes with no request from the page (the page
      asks every few seconds while it's open). Launches it started go on: each
      runs in its own terminal.
@@ -665,8 +674,40 @@ modes, rigor, and the frontend.
      that runs `um-codex.exe ui --detach`; the server then has a console
      that's never shown, which the Docker commands it runs share (so they
      don't flash windows either).
-   - `um-codex uninstall` closes a running launcher window first (over its
-     control link), since its files are about to go.
+   - `um-codex uninstall`, `um-codex update` and `--rollback` close a
+     running launcher window first (over its control link): its files are
+     about to go or be replaced. If the installed version still changes
+     under a running window (an installer run again), the page says "UM-Codex
+     X is installed; this window is still Y" with Reopen, which ends this
+     server and starts the installed version's (`bin/um-codex ui --detach`).
+   - Saved setups are changed under a lock (`setups.toml.lock`: a thread
+     lock and an OS file lock), each write through a temporary file of its
+     own and a rename, so neither the page's parallel requests nor a
+     launch's `mark_used` loses another's change.
+   - Start is refused while Docker isn't running ("Docker Desktop isn't
+     running. Open it first."), with Open Docker Desktop (or, on Windows,
+     Fix it…) on the summary page. While a start runs its button is
+     disabled; the card says "Starting…" until the launch's `launch.json`
+     shows it running, then "Running · Stop" in place of Start.
+   - The page: paths show the folder's name in bold with its parent
+     shortened (`~`, a middle ellipsis), the whole path in the tooltip and a
+     Copy button; the summary shows each folder as `/work ← ~/…/thesis`.
+     The first run shows three steps (add the key, Docker running, a new
+     setup), and a new setup opens on "Choose working folder…". The form
+     reports every problem at once, in its order, each tied to its field
+     (`aria-describedby`), and focuses the first; focus stays put when the
+     form redraws; questions before Delete and Stop start on Cancel. The key
+     field shows dots but isn't a password field (`-webkit-text-security`;
+     `type=password` with `autocomplete=new-password` where that's not
+     supported), so browsers don't offer to save it, and it's emptied
+     whenever its box closes. The page keeps asking for the state while a
+     box is open, so an open box never counts as the page being gone.
+   - Diagnostics: before a launch removes its containers it logs the
+     agent's state (status, exit code, OOM-killed, finish time) and the last
+     lines it printed; the watchdog prints "watchdog: launch gone, ending"
+     before it ends one; the server logs each Stop it's asked for, and
+     whether the native picker was cancelled (osascript's -128) or failed
+     (shown on the page).
    - The setup's `open_in` ("terminal" or "codex-app") is saved with it;
      setups saved before M5 have none, which means Terminal. The summary
      (both ways) now also says "These are your real files: changes and
@@ -692,6 +733,18 @@ modes, rigor, and the frontend.
      with nothing in the log (consistent with its window being closed; the
      cause wasn't found). The launch now logs Codex's exit code, and the
      signal when its terminal closes, so a repeat can be told apart.
+   - **Live check after the review fixes** (same stand-ins, a fresh data
+     folder): the first-run checklist; the key box shows dots in a text
+     field and Escape empties it (whether a browser offers to save it can't
+     be seen in the test browser); an empty new setup reported both
+     problems at once and focused "Choose working folder…"; focus stayed on
+     the Internet switch through its redraw; cards and the summary showed
+     short paths and `/work ← …`; Start went "Starting…" then "Running ·
+     Stop" on the card; Stop's question started on Cancel; the log had the
+     Stop request and the agent's state. The Docker-stopped summary was
+     checked by setting the page's state (Docker itself wasn't stopped:
+     other sessions use it). `ui --detach` returned at once with its
+     server up, and a second one handed over to it.
    - Not checked: Windows (the shortcut, the hidden console, Windows
      Terminal and PowerShell windows, the picker), and the picker itself on
      a Mac (it needs a person); the real Mac installer's app.

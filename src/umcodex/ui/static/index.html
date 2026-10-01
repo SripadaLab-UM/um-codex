@@ -26,8 +26,10 @@
       <p>Paste your U-M GPT Toolkit API key. It's checked with the Toolkit, saved in this
         computer's keychain, and never goes into the sandbox.</p>
       <label class="field">
-        <span class="label">Key</span>
-        <input id="key-input" type="password" autocomplete="off" spellcheck="false" required>
+        <span class="label">Key (shown as dots)</span>
+        <input id="key-input" type="text" class="masked" autocomplete="new-password" autocapitalize="off"
+          autocorrect="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore
+          data-form-type="other" aria-describedby="key-message" required>
       </label>
       <p id="key-message" class="message" role="alert" hidden></p>
       <div class="actions">
@@ -42,8 +44,8 @@
       <h2 id="confirm-title"></h2>
       <p id="confirm-text"></p>
       <div class="actions">
-        <button value="yes" class="primary" id="confirm-yes">OK</button>
-        <button value="no">Cancel</button>
+        <button value="no" id="confirm-no">Cancel</button>
+        <button value="yes" class="danger-solid" id="confirm-yes">OK</button>
       </div>
     </form>
   </dialog>

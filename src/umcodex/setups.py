@@ -23,7 +23,7 @@ from pathlib import Path
 
 import tomli_w
 
-from umcodex import folders
+from umcodex import folders, locks
 from umcodex.codex_config import Approvals
 from umcodex.folders import FolderRefused
 from umcodex.paths import data_dir
@@ -108,10 +108,25 @@ class SetupStore:
             return {}
 
     def _write(self, raw: dict) -> None:
+        """Write the file whole: a temporary file of this write's own, then
+        a rename, so a reader never sees half of it."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".toml.tmp")
-        temporary.write_text(tomli_w.dumps(raw), encoding="utf-8", newline="\n")
-        os.replace(temporary, self.path)
+        temporary = self.path.with_name(f".{self.path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+        try:
+            temporary.write_text(tomli_w.dumps(raw), encoding="utf-8", newline="\n")
+            os.replace(temporary, self.path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    @contextlib.contextmanager
+    def _changing(self):
+        """Read, change and write the setups under one lock, across this
+        process's threads and other processes (a launch's mark_used, the
+        launcher window's saves): no change is lost to another's."""
+        with locks.held(self.path.with_name(self.path.name + ".lock")):
+            raw = self._read()
+            yield raw
+            self._write(raw)
 
     def all(self) -> list[Setup]:
         """Every setup, the last one used first."""
@@ -130,25 +145,22 @@ class SetupStore:
         return next((s for s in self.all() if s.id == setup_id), None)
 
     def save(self, setup: Setup, *, used: bool = False) -> None:
-        raw = self._read()
-        entries = [e for e in raw.get("setup", []) if e.get("id") != setup.id]
-        entries.append(setup.to_toml())
-        raw["setup"] = entries
-        if used:
-            raw["last_used"] = setup.id
-        self._write(raw)
+        with self._changing() as raw:
+            entries = [e for e in raw.get("setup", []) if e.get("id") != setup.id]
+            entries.append(setup.to_toml())
+            raw["setup"] = entries
+            if used:
+                raw["last_used"] = setup.id
 
     def mark_used(self, setup_id: str) -> None:
-        raw = self._read()
-        raw["last_used"] = setup_id
-        self._write(raw)
+        with self._changing() as raw:
+            raw["last_used"] = setup_id
 
     def delete(self, setup_id: str) -> None:
-        raw = self._read()
-        raw["setup"] = [e for e in raw.get("setup", []) if e.get("id") != setup_id]
-        if raw.get("last_used") == setup_id:
-            raw.pop("last_used")
-        self._write(raw)
+        with self._changing() as raw:
+            raw["setup"] = [e for e in raw.get("setup", []) if e.get("id") != setup_id]
+            if raw.get("last_used") == setup_id:
+                raw.pop("last_used")
 
     def last_used(self) -> Setup | None:
         raw = self._read()

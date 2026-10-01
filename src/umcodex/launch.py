@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
-from umcodex import codex_config, credentials, toolkit
+from umcodex import codex_config, credentials, locks, toolkit
 from umcodex.containers import (
     INSTANCE_LABEL,
     LAUNCH_LABEL,
@@ -91,28 +91,8 @@ class LaunchLock:
             self._file = None
 
 
-def _lock(handle: IO[bytes]) -> None:
-    if sys.platform == "win32":
-        import msvcrt
-
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-    else:
-        import fcntl
-
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-
-def _unlock(handle: IO[bytes]) -> None:
-    if sys.platform == "win32":
-        import msvcrt
-
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-    else:
-        import fcntl
-
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+_lock = locks.lock
+_unlock = locks.unlock
 
 
 def launches_dir(data: Path) -> Path:
@@ -433,6 +413,8 @@ def run(
         log.info("launch %s: Codex ended (exit code %s)", launch_id, done.returncode)
         return done.returncode
     finally:
+        if spec is not None:
+            log_agent_state(docker, spec.agent, launch_id)
         remove_containers()
         if server is not None:
             server.stop()
@@ -440,6 +422,25 @@ def run(
         lock.release()
         shutil.rmtree(folder, ignore_errors=True)
         say("Launch ended; the container was removed. Your setup's Codex history was kept.")
+
+
+def log_agent_state(docker: Docker, agent: str, launch_id: str, *, timeout: float = 10) -> None:
+    """Before the containers go: how the agent stands (did it exit, why, when)
+    and the last lines it printed (the watchdog says when it ends a launch),
+    for the log. The container holds no key, so nothing secret is in either."""
+    with contextlib.suppress(DockerError):
+        code, out, _ = docker.status(
+            "inspect", "--format",
+            "status={{.State.Status}} exit_code={{.State.ExitCode}} oom_killed={{.State.OOMKilled}} "
+            "finished_at={{.State.FinishedAt}}",
+            agent, timeout=timeout,
+        )  # fmt: skip
+        log.info("launch %s: agent %s", launch_id, out.strip() if code == 0 else "already gone")
+        if code == 0:
+            code, out, err = docker.status("logs", "--tail", "20", agent, timeout=timeout)
+            tail = (out + err).strip() if code == 0 else ""
+            if tail:
+                log.info("launch %s: the agent's last output:\n%s", launch_id, tail[-4000:])
 
 
 @contextlib.contextmanager

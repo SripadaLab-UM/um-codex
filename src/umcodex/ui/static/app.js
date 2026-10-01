@@ -5,10 +5,13 @@
 
 const BROWSER_PLAIN =
   "Codex can open websites in a fresh browser inside the sandbox; it has none of your logins.";
+const START_WAIT_MS = 90000; // how long a card says "Starting…" before giving up
 
 let state = null; // the last /api/state
 let view = { name: "list" }; // "list" | "form" | "summary"
 let models = null;
+let polling = true;
+const starting = new Map(); // setup id -> when Start was pressed (until its launch shows as running)
 
 // ---------------------------------------------------------------- helpers
 
@@ -18,6 +21,7 @@ function el(tag, props, ...children) {
     if (value === undefined || value === null || value === false) continue;
     if (key === "class") node.className = value;
     else if (key === "text") node.textContent = value;
+    else if (key === "key") node.dataset.key = value; // keeps focus across re-renders
     else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
     else node.setAttribute(key, value === true ? "" : value);
   }
@@ -28,11 +32,21 @@ function el(tag, props, ...children) {
   return node;
 }
 
+// Replace main's content, keeping keyboard focus on the same control.
+function render(...children) {
+  const main = document.getElementById("main");
+  const focused = document.activeElement;
+  const key = focused && main.contains(focused) ? focused.dataset.key : null;
+  main.replaceChildren(...children);
+  if (key) main.querySelector(`[data-key="${CSS.escape(key)}"]`)?.focus();
+}
+
 class ApiError extends Error {
-  constructor(status, message, field) {
-    super(message);
+  constructor(status, data) {
+    super(data.error || "That didn't work.");
     this.status = status;
-    this.field = field;
+    this.field = data.field;
+    this.errors = data.errors || (data.field ? { [data.field]: this.message } : {});
   }
 }
 
@@ -43,13 +57,11 @@ async function api(method, path, body) {
   try {
     response = await fetch(path, options);
   } catch {
-    throw new ApiError(0, "UM-Codex isn't answering. Open it again from its app.");
+    throw new ApiError(0, { error: "UM-Codex isn't answering. Open it again from its app." });
   }
   const data = await response.json().catch(() => ({}));
-  if (response.status === 401) {
-    location.reload();
-  }
-  if (!response.ok) throw new ApiError(response.status, data.error || "That didn't work.", data.field);
+  if (response.status === 401) location.reload();
+  if (!response.ok) throw new ApiError(response.status, data);
   return data;
 }
 
@@ -60,6 +72,8 @@ function notice(text, bad = false) {
   box.hidden = !text;
 }
 
+// A question before something that can't be undone: Cancel has the focus,
+// so Enter or Escape leaves things as they are.
 function confirmBox(title, text, yes) {
   const dialog = document.getElementById("confirm-dialog");
   document.getElementById("confirm-title").textContent = title;
@@ -67,6 +81,7 @@ function confirmBox(title, text, yes) {
   document.getElementById("confirm-yes").textContent = yes;
   dialog.returnValue = "";
   dialog.showModal();
+  document.getElementById("confirm-no").focus();
   return new Promise((resolve) => {
     dialog.addEventListener("close", () => resolve(dialog.returnValue === "yes"), { once: true });
   });
@@ -83,18 +98,66 @@ function internetWords(s) {
   return words;
 }
 
-function chip(folder, extra) {
-  return el(
-    "span",
-    { class: folder.write ? "chip write" : "chip", title: folder.path },
-    el("span", { class: "path", text: folder.shown }),
-    extra || el("span", { class: "access", text: folder.write ? "READ & WRITE" : "READ" }),
-  );
-}
-
 function openerLabel(key) {
   const found = (state?.openers || []).find((o) => o.key === key);
   return found ? found.label : key;
+}
+
+// ---------------------------------------------------------------- paths
+
+// "~/Documents/projects/thesis" -> parent "~/Documents/projects/", name "thesis".
+function splitPath(shown) {
+  const sep = shown.includes("\\") && !shown.includes("/") ? "\\" : "/";
+  const trimmed = shown.length > 1 ? shown.replace(/[\\/]+$/, "") : shown;
+  const at = trimmed.lastIndexOf(sep);
+  if (at < 0) return { parent: "", name: trimmed };
+  return { parent: trimmed.slice(0, at + 1), name: trimmed.slice(at + 1) || trimmed };
+}
+
+function middle(text, max) {
+  if (text.length <= max) return text;
+  const head = Math.ceil((max - 1) * 0.4);
+  return text.slice(0, head) + "…" + text.slice(text.length - (max - 1 - head));
+}
+
+async function copyPath(path, name) {
+  try {
+    await navigator.clipboard.writeText(path);
+    notice(`Copied the full path of “${name}”.`);
+  } catch {
+    notice("The path couldn't be copied here.", true);
+  }
+}
+
+// The folder's name in bold, its parent shortened; the whole path in the
+// tooltip and a Copy button.
+function pathView(folder, { copy = true, key } = {}) {
+  const { parent, name } = splitPath(folder.shown);
+  return el(
+    "span",
+    { class: "pathview", title: folder.path },
+    parent ? el("span", { class: "parent", text: middle(parent, 34) }) : null,
+    el("b", { class: "name", text: name }),
+    copy
+      ? el("button", {
+          type: "button",
+          class: "copy",
+          key,
+          "aria-label": `Copy the full path of ${name}`,
+          text: "Copy",
+          onclick: () => copyPath(folder.path, name),
+        })
+      : null,
+  );
+}
+
+function chip(folder, extra) {
+  return el(
+    "span",
+    { class: folder.write ? "chip write" : "chip" },
+    pathView(folder, { copy: !extra }),
+    extra || el("span", { class: "access", text: folder.write ? "READ & WRITE" : "READ" }),
+  );
 }
 
 // ---------------------------------------------------------------- status line
@@ -124,7 +187,17 @@ function renderStatus() {
       el("button", { class: "link", onclick: openKeyDialog, text: state.key.saved ? "Replace key…" : "Add key…" }),
     ),
   );
-  if (state.update) {
+  if (state.installed) {
+    box.append(
+      el(
+        "span",
+        { class: "item stale" },
+        el("span", { class: "dot attn" }),
+        el("span", { text: `UM-Codex ${state.installed} is installed; this window is still ${state.version}.` }),
+        el("button", { class: "link", onclick: reopenNewer, text: "Reopen" }),
+      ),
+    );
+  } else if (state.update) {
     box.append(
       el(
         "span",
@@ -161,20 +234,32 @@ async function fixDocker() {
   refresh();
 }
 
+async function reopenNewer() {
+  try {
+    await api("POST", "/api/reopen");
+    polling = false;
+    notice("Reopening as the installed version: a new window opens in your browser. You can close this one.");
+  } catch (error) {
+    notice(error.message, true);
+  }
+}
+
 // ---------------------------------------------------------------- the key
+
+function keyInput() {
+  return document.getElementById("key-input");
+}
 
 function openKeyDialog() {
   const dialog = document.getElementById("key-dialog");
-  const input = document.getElementById("key-input");
-  input.value = "";
+  keyInput().value = "";
   document.getElementById("key-message").hidden = true;
   dialog.showModal();
-  input.focus();
+  keyInput().focus();
 }
 
 async function saveKey(event) {
   event.preventDefault();
-  const input = document.getElementById("key-input");
   const message = document.getElementById("key-message");
   const button = document.getElementById("key-save");
   button.disabled = true;
@@ -182,8 +267,7 @@ async function saveKey(event) {
   message.className = "message ok";
   message.textContent = "Checking the key with the Toolkit…";
   try {
-    const result = await api("POST", "/api/key", { key: input.value });
-    input.value = "";
+    const result = await api("POST", "/api/key", { key: keyInput().value });
     document.getElementById("key-dialog").close();
     models = null;
     notice(result.words);
@@ -191,6 +275,7 @@ async function saveKey(event) {
   } catch (error) {
     message.className = "message";
     message.textContent = error.message;
+    keyInput().focus();
   } finally {
     button.disabled = false;
   }
@@ -198,15 +283,18 @@ async function saveKey(event) {
 
 // ---------------------------------------------------------------- the list
 
+function runningOf(setupId) {
+  return state.running.find((run) => run.setup_id === setupId);
+}
+
 function renderList() {
-  const main = document.getElementById("main");
   const parts = [];
   if (state.running.length) {
     parts.push(
       el(
         "section",
         { class: "block", "aria-label": "Running" },
-        el("div", { class: "block-head" }, el("span", { class: "label", text: "Running now" })),
+        el("div", { class: "block-head" }, el("h2", { class: "label", text: "Running now" })),
         state.running.map((run) =>
           el(
             "div",
@@ -215,31 +303,99 @@ function renderList() {
             el("span", { class: "name", text: run.setup_name }),
             el("span", { class: "since", text: `Running since ${run.since}` }),
             el("span", { class: "grow" }),
-            el("button", { onclick: () => stopLaunch(run), text: "Stop" }),
+            el("button", { key: `stop-${run.launch_id}`, onclick: () => stopLaunch(run), text: "Stop" }),
           ),
         ),
       ),
     );
   }
-  const head = el(
-    "div",
-    { class: "block-head" },
-    el("span", { class: "label", text: "Your setups" }),
-    el("button", { class: "primary", onclick: () => showForm(null), text: "New setup" }),
+  if (!state.setups.length) {
+    parts.push(firstRun());
+  } else {
+    const head = el(
+      "div",
+      { class: "block-head" },
+      el("h2", { class: "label", text: "Your setups" }),
+      el("button", { class: "primary", key: "new", onclick: () => showForm(null), text: "New setup" }),
+    );
+    parts.push(el("section", { class: "block", "aria-label": "Setups" }, head, el("div", { class: "cards" }, state.setups.map(card))));
+  }
+  render(...parts);
+}
+
+// The first time: what's needed, in order.
+function firstRun() {
+  const docker = state.docker;
+  const step = (done, title, detail, action) =>
+    el(
+      "li",
+      { class: done ? "done" : "" },
+      el("span", { class: "tick", "aria-hidden": "true", text: done ? "✓" : "" }),
+      el("span", { class: "step" }, el("strong", { text: title }), el("span", { class: "help", text: done ? "Done." : detail })),
+      done ? null : action,
+    );
+  return el(
+    "section",
+    { class: "block", "aria-label": "Getting started" },
+    el("h2", { text: "Getting started" }),
+    el("p", { class: "muted", text: "Three things, then Codex opens in a terminal window whenever you start a setup." }),
+    el(
+      "ol",
+      { class: "checklist" },
+      step(
+        state.key.saved,
+        "Add your Toolkit key",
+        "It's kept in this computer's keychain and never goes into the sandbox.",
+        el("button", { key: "first-key", onclick: openKeyDialog, text: "Add key…" }),
+      ),
+      step(
+        docker.state === "ready",
+        "Docker Desktop running",
+        docker.words,
+        docker.can_open
+          ? el("button", { key: "first-docker", onclick: openDocker, text: "Open Docker Desktop" })
+          : docker.can_fix
+            ? el("button", { key: "first-fix", onclick: fixDocker, text: "Fix it…" })
+            : null,
+      ),
+      step(
+        false,
+        "Make your first setup",
+        "Which folders Codex can use, and whether it can reach the internet.",
+        el("button", { class: "primary", key: "new", onclick: () => showForm(null), text: "New setup" }),
+      ),
+    ),
   );
-  const cards = state.setups.length
-    ? el("div", { class: "cards" }, state.setups.map(card))
-    : el(
-        "p",
-        { class: "empty" },
-        "No setups yet. A setup says which folders Codex can use, whether it can reach the internet, " +
-          "and how it asks you before acting. Make one with New setup.",
-      );
-  parts.push(el("section", { class: "block", "aria-label": "Setups" }, head, cards));
-  main.replaceChildren(...parts);
 }
 
 function card(s) {
+  const run = runningOf(s.id);
+  if (run) starting.delete(s.id);
+  const since = starting.get(s.id);
+  if (since && Date.now() - since > START_WAIT_MS) {
+    starting.delete(s.id);
+    notice(`“${s.name}” didn't start. Its terminal window says why.`, true);
+  }
+  let start;
+  if (run) {
+    start = el(
+      "span",
+      { class: "running-tag" },
+      el("span", { class: "pulse", "aria-hidden": "true" }),
+      "Running · ",
+      el("button", { class: "link", key: `stop-card-${s.id}`, onclick: () => stopLaunch(run), text: "Stop" }),
+    );
+  } else if (starting.has(s.id)) {
+    start = el("button", { class: "primary", disabled: true, text: "Starting…" });
+  } else {
+    start = el("button", {
+      class: "primary",
+      key: `start-${s.id}`,
+      disabled: Boolean(s.problem),
+      onclick: (e) => showSummary(s, e.currentTarget),
+      text: "Start",
+    });
+  }
   return el(
     "article",
     { class: "card", "aria-label": s.name },
@@ -253,24 +409,20 @@ function card(s) {
       "div",
       { class: "working" },
       el("span", { class: "label", text: "Working folder (read & write)" }),
-      el("span", { class: "path", title: s.working.path, text: s.working.shown }),
+      pathView(s.working, { key: `copy-${s.id}` }),
     ),
     s.folders.length
       ? el("div", {}, el("span", { class: "label", text: "More folders" }), el("div", { class: "chips" }, s.folders.map((f) => chip(f))))
       : null,
-    el(
-      "p",
-      { class: "facts" },
-      [...internetWords(s), approvalsWords(s), s.model].map((w) => el("span", { text: w })),
-    ),
+    el("p", { class: "facts" }, [...internetWords(s), approvalsWords(s), s.model].map((w) => el("span", { text: w }))),
     s.problem ? el("p", { class: "problem", text: `Can't start as it is: ${s.problem}` }) : null,
     el(
       "div",
       { class: "actions" },
-      el("button", { class: "primary", disabled: Boolean(s.problem), onclick: () => showSummary(s), text: "Start" }),
-      el("button", { onclick: () => showForm(s), text: "Edit" }),
-      el("button", { class: "quiet", onclick: () => duplicate(s), text: "Duplicate" }),
-      el("button", { class: "quiet danger", onclick: () => remove(s), text: "Delete" }),
+      start,
+      el("button", { key: `edit-${s.id}`, onclick: () => showForm(s), text: "Edit" }),
+      el("button", { class: "quiet", key: `dup-${s.id}`, onclick: () => duplicate(s), text: "Duplicate" }),
+      el("button", { class: "quiet danger", key: `del-${s.id}`, onclick: () => remove(s), text: "Delete" }),
     ),
   );
 }
@@ -320,6 +472,16 @@ async function remove(s) {
 
 // ---------------------------------------------------------------- the form
 
+// Each field's control, for focusing the first problem (in the form's order).
+const FIELD_CONTROLS = {
+  working: "pick-working",
+  name: "name",
+  folders: "pick-more",
+  approvals: "ask",
+  model: "model",
+  open_in: "open-terminal",
+};
+
 function showForm(existing) {
   notice("");
   const draft = existing
@@ -338,6 +500,7 @@ function showForm(existing) {
       };
   view = { name: "form", draft, errors: {}, nameTouched: Boolean(existing) };
   renderForm();
+  document.querySelector('#main [data-key="pick-working"]')?.focus();
   loadModels();
 }
 
@@ -362,109 +525,137 @@ async function pickFolder(start) {
 
 function renderForm() {
   const { draft, errors } = view;
-  const main = document.getElementById("main");
-  const error = (field) => (errors[field] ? el("p", { class: "message", role: "alert", text: errors[field] }) : null);
-  const switchRow = (label, help, checked, onchange, extraClass) =>
+  const errorId = (field) => (errors[field] ? `err-${field}` : null);
+  const describe = (...ids) => ids.filter(Boolean).join(" ") || null;
+  const error = (field) => (errors[field] ? el("p", { class: "message", id: `err-${field}`, text: errors[field] }) : null);
+  const switchRow = (key, label, help, checked, onchange, extraClass) =>
     el(
       "label",
       { class: `switch ${extraClass || ""}` },
-      el("input", { type: "checkbox", role: "switch", checked, onchange }),
-      el("span", { class: "text" }, el("strong", { text: label }), help ? el("span", { class: "help", text: help }) : null),
+      el("input", { type: "checkbox", role: "switch", key, checked, onchange, "aria-describedby": help ? `help-${key}` : null }),
+      el(
+        "span",
+        { class: "text" },
+        el("strong", { text: label }),
+        help ? el("span", { class: "help", id: `help-${key}`, text: help }) : null,
+      ),
     );
 
-  const nameInput = el("input", {
-    type: "text",
-    value: draft.name,
-    maxlength: "80",
-    oninput: (e) => {
-      draft.name = e.target.value;
-      view.nameTouched = true;
-    },
-  });
+  const chooseWorking = async () => {
+    const chosen = await pickFolder(draft.working?.path);
+    if (!chosen) return;
+    if (chosen.error) errors.working = chosen.error;
+    else {
+      delete errors.working;
+      draft.working = chosen;
+      if (!view.nameTouched || !draft.name) draft.name = splitPath(chosen.shown).name;
+    }
+    renderForm();
+  };
 
   const working = el(
-    "div",
+    "fieldset",
     { class: "field" },
-    el("span", { class: "label", text: "Working folder" }),
-    el(
-      "div",
-      { class: "folder-line" },
-      draft.working
-        ? el("span", { class: "path", title: draft.working.path, text: draft.working.shown })
-        : el("span", { class: "muted", text: "None chosen yet" }),
-      el("button", {
-        type: "button",
-        text: "Choose folder…",
-        onclick: async () => {
-          const chosen = await pickFolder(draft.working?.path);
-          if (!chosen) return;
-          if (chosen.error) errors.working = chosen.error;
-          else {
-            delete errors.working;
-            draft.working = chosen;
-            if (!view.nameTouched || !draft.name) draft.name = chosen.path.split(/[\\/]/).filter(Boolean).pop() || "";
-          }
-          renderForm();
-        },
-      }),
-    ),
-    el("span", { class: "help", text: "Codex starts here, and can read, change and delete files in it." }),
+    el("legend", { class: "label", text: "Working folder" }),
+    draft.working
+      ? el(
+          "div",
+          { class: "folder-line" },
+          pathView(draft.working, { key: "copy-working" }),
+          el("button", {
+            type: "button",
+            key: "pick-working",
+            text: "Change…",
+            "aria-describedby": describe("help-working", errorId("working")),
+            onclick: chooseWorking,
+          }),
+        )
+      : el("button", {
+          type: "button",
+          class: "primary big",
+          key: "pick-working",
+          text: "Choose working folder…",
+          "aria-describedby": describe("help-working", errorId("working")),
+          "aria-invalid": errors.working ? "true" : null,
+          onclick: chooseWorking,
+        }),
+    el("span", { class: "help", id: "help-working", text: "Codex starts here, and can read, change and delete files in it." }),
     (draft.working?.warnings || []).map((w) => el("p", { class: "note", text: w })),
     error("working"),
   );
 
-  const more = el(
+  const nameField = el(
     "div",
     { class: "field" },
-    el("span", { class: "label", text: "More folders" }),
+    el("label", { class: "label", for: "setup-name", text: "Name" }),
+    el("input", {
+      type: "text",
+      id: "setup-name",
+      key: "name",
+      value: draft.name,
+      maxlength: "80",
+      "aria-invalid": errors.name ? "true" : null,
+      "aria-describedby": errorId("name"),
+      oninput: (e) => {
+        draft.name = e.target.value;
+        view.nameTouched = true;
+      },
+    }),
+    error("name"),
+  );
+
+  const more = el(
+    "fieldset",
+    { class: "field" },
+    el("legend", { class: "label", text: "More folders" }),
     el(
       "div",
       { class: "chips" },
-      draft.folders.map((folder, index) =>
-        chip(
+      draft.folders.map((folder, index) => {
+        const { name } = splitPath(folder.shown);
+        const access = (write, text) =>
+          el("button", {
+            type: "button",
+            key: `access-${index}-${write}`,
+            "aria-pressed": String(folder.write === write),
+            text,
+            onclick: () => {
+              folder.write = write;
+              renderForm();
+            },
+          });
+        return chip(
           folder,
           el(
             "span",
             { class: "controls" },
             el(
               "span",
-              { class: "segmented", role: "group", "aria-label": `Access to ${folder.shown}` },
-              el("button", {
-                type: "button",
-                "aria-pressed": String(!folder.write),
-                text: "Read only",
-                onclick: () => {
-                  folder.write = false;
-                  renderForm();
-                },
-              }),
-              el("button", {
-                type: "button",
-                "aria-pressed": String(folder.write),
-                text: "Read & write",
-                onclick: () => {
-                  folder.write = true;
-                  renderForm();
-                },
-              }),
+              { class: "segmented", role: "group", "aria-label": `Access to ${name}` },
+              access(false, "Read only"),
+              access(true, "Read & write"),
             ),
             el("button", {
               type: "button",
               class: "remove",
-              "aria-label": `Remove ${folder.shown}`,
+              key: `remove-${index}`,
+              "aria-label": `Remove ${name}`,
               text: "×",
               onclick: () => {
                 draft.folders.splice(index, 1);
                 renderForm();
+                document.querySelector('#main [data-key="pick-more"]')?.focus();
               },
             }),
           ),
-        ),
-      ),
+        );
+      }),
     ),
     el("button", {
       type: "button",
+      key: "pick-more",
       text: "Choose folder…",
+      "aria-describedby": describe("help-more", errorId("folders")),
       onclick: async () => {
         const chosen = await pickFolder();
         if (!chosen) return;
@@ -478,6 +669,7 @@ function renderForm() {
     }),
     el("span", {
       class: "help",
+      id: "help-more",
       text: "Optional. Read only: Codex can look but not change. Read & write: Codex can change and delete files there too.",
     }),
     draft.folders.flatMap((f) => f.warnings || []).map((w) => el("p", { class: "note", text: w })),
@@ -487,12 +679,18 @@ function renderForm() {
   const modelList = models ? [...models.models] : [];
   const currentModel = draft.model || models?.default || "gpt-5.6-terra";
   if (!modelList.includes(currentModel)) modelList.unshift(currentModel);
-  const modelSelect = el(
-    "select",
-    { onchange: (e) => (draft.model = e.target.value) },
-    modelList.map((m) => el("option", { value: m, selected: m === currentModel, text: m })),
-  );
   draft.model = currentModel;
+  const modelField = el(
+    "div",
+    { class: "field" },
+    el("label", { class: "label", for: "setup-model", text: "Model" }),
+    el(
+      "select",
+      { id: "setup-model", key: "model", "aria-describedby": errorId("model"), onchange: (e) => (draft.model = e.target.value) },
+      modelList.map((m) => el("option", { value: m, selected: m === currentModel, text: m })),
+    ),
+    error("model"),
+  );
 
   const openers = (state?.openers || []).map((o) =>
     el(
@@ -501,12 +699,13 @@ function renderForm() {
       el("input", {
         type: "radio",
         name: "open_in",
+        key: `open-${o.key}`,
         value: o.key,
         checked: draft.open_in === o.key,
         disabled: !o.available,
         onchange: () => (draft.open_in = o.key),
       }),
-      o.available ? `${o.label}` : `${o.label} (coming soon)`,
+      o.available ? o.label : `${o.label} (coming soon)`,
     ),
   );
 
@@ -516,53 +715,58 @@ function renderForm() {
     el("h2", { text: draft.id ? `Edit “${draft.name}”` : "New setup" }),
     el("p", { class: "muted", text: "What Codex can see and do when it starts. You can change this later." }),
     working,
-    el("label", { class: "field" }, el("span", { class: "label", text: "Name" }), nameInput, error("name")),
+    nameField,
     more,
-    el("span", { class: "label", text: "Internet and approvals" }),
-    switchRow("Internet", "Off: Codex can reach only the model. On: the whole internet.", draft.internet, (e) => {
-      draft.internet = e.target.checked;
-      if (!draft.internet) draft.browser = false;
-      renderForm();
-    }),
-    draft.internet
-      ? switchRow("Browser tool", BROWSER_PLAIN, draft.browser, (e) => {
-          draft.browser = e.target.checked;
-          renderForm();
-        }, "indent")
-      : null,
-    draft.internet && draft.browser
-      ? switchRow(
-          "Approve each browser action",
-          "Opening pages, clicking, typing. Reading a page doesn't ask.",
-          draft.browser_asks,
-          (e) => (draft.browser_asks = e.target.checked),
-          "indent",
-        )
-      : null,
-    switchRow(
-      "Ask me before commands",
-      "Off (recommended): Codex runs commands without asking; the sandbox is what keeps it in.",
-      draft.approvals === "on-request",
-      (e) => (draft.approvals = e.target.checked ? "on-request" : "never"),
+    el(
+      "fieldset",
+      { class: "field" },
+      el("legend", { class: "label", text: "Internet and approvals" }),
+      switchRow("internet", "Internet", "Off: Codex can reach only the model. On: the whole internet.", draft.internet, (e) => {
+        draft.internet = e.target.checked;
+        if (!draft.internet) draft.browser = false;
+        renderForm();
+      }),
+      draft.internet
+        ? switchRow("browser", "Browser tool", BROWSER_PLAIN, draft.browser, (e) => {
+            draft.browser = e.target.checked;
+            renderForm();
+          }, "indent")
+        : null,
+      draft.internet && draft.browser
+        ? switchRow(
+            "browser-asks",
+            "Approve each browser action",
+            "Opening pages, clicking, typing. Reading a page doesn't ask.",
+            draft.browser_asks,
+            (e) => (draft.browser_asks = e.target.checked),
+            "indent",
+          )
+        : null,
+      switchRow(
+        "ask",
+        "Ask me before commands",
+        "Off (recommended): Codex runs commands without asking; the sandbox is what keeps it in.",
+        draft.approvals === "on-request",
+        (e) => (draft.approvals = e.target.checked ? "on-request" : "never"),
+      ),
+      error("approvals"),
     ),
-    error("approvals"),
-    el("label", { class: "field" }, el("span", { class: "label", text: "Model" }), modelSelect, error("model")),
-    el("fieldset", {}, el("legend", { class: "label", text: "Open in" }), el("div", { class: "radios" }, openers), error("open_in")),
-    error("general"),
+    modelField,
+    el("fieldset", { class: "field" }, el("legend", { class: "label", text: "Open in" }), el("div", { class: "radios" }, openers), error("open_in")),
+    errors.general ? el("p", { class: "message", role: "alert", text: errors.general }) : null,
     el(
       "div",
       { class: "actions" },
-      el("button", { type: "submit", class: "primary", text: "Save" }),
-      el("button", { type: "button", onclick: backToList, text: "Cancel" }),
+      el("button", { type: "submit", class: "primary", key: "save", text: "Save" }),
+      el("button", { type: "button", key: "cancel", onclick: backToList, text: "Cancel" }),
     ),
   );
-  main.replaceChildren(form);
+  render(form);
 }
 
 async function saveForm(event) {
   event.preventDefault();
   const { draft } = view;
-  view.errors = {};
   const body = {
     name: draft.name,
     working: draft.working?.path || "",
@@ -581,8 +785,11 @@ async function saveForm(event) {
     notice(`Saved “${saved.name}”.`);
     backToList();
   } catch (error) {
-    view.errors[error.field || "general"] = error.message;
+    // Every problem at once, in the form's order; the first one gets the focus.
+    view.errors = Object.keys(error.errors).length ? { ...error.errors } : { general: error.message };
     renderForm();
+    const first = Object.keys(view.errors).find((field) => FIELD_CONTROLS[field]);
+    if (first) document.querySelector(`#main [data-key="${FIELD_CONTROLS[first]}"]`)?.focus();
   }
 }
 
@@ -593,15 +800,39 @@ function backToList() {
 
 // ---------------------------------------------------------------- before a start
 
-async function showSummary(s) {
+async function showSummary(s, button) {
   notice("");
+  if (button) button.disabled = true;
   try {
     const prepared = await api("POST", `/api/setups/${encodeURIComponent(s.id)}/prepare`);
-    view = { name: "summary", setup: s, prepared, confirmed: false };
+    view = { name: "summary", setup: s, prepared, confirmed: false, busy: false };
     renderSummary();
+    document.querySelector('#main [data-key="go"]:not([disabled]), #main [data-key="back"]')?.focus();
   } catch (error) {
     notice(error.message, true);
+    if (button) button.disabled = false;
   }
+}
+
+function shortHome(path) {
+  const home = state?.home;
+  if (!home) return path;
+  return path === home || path.startsWith(home + "/") || path.startsWith(home + "\\") ? "~" + path.slice(home.length) : path;
+}
+
+// A summary folder line, "  <folder>   (<where in the sandbox>)", as
+// "/work ← <short path>".
+function folderLine(line) {
+  const at = line.lastIndexOf("   (");
+  const path = line.slice(0, at).trim();
+  const where = line.slice(at + 4, -1).split(", ").pop();
+  return el(
+    "div",
+    { class: "path-line" },
+    el("code", { class: "target", text: where }),
+    el("span", { class: "arrow", "aria-label": "is", text: " ← " }),
+    pathView({ path, shown: shortHome(path) }),
+  );
 }
 
 function summaryBlock(lines) {
@@ -618,9 +849,9 @@ function summaryBlock(lines) {
   for (const line of lines) {
     const text = line.trim();
     if (!text || line.startsWith("Setup: ")) flush();
-    else if (line.startsWith("  ") && line.includes("   (")) {
+    else if (line.startsWith("  ") && line.includes("   (") && line.endsWith(")")) {
       flush();
-      block.append(el("div", { class: "path-line", text }));
+      block.append(folderLine(line));
     } else if (line.startsWith("  ")) {
       flush();
       block.append(el("p", { class: text.startsWith("Note:") ? "note" : "muted", text }));
@@ -636,10 +867,25 @@ function summaryBlock(lines) {
 
 function renderSummary() {
   const { setup, prepared } = view;
-  const main = document.getElementById("main");
-  const start = el("button", { class: "primary", onclick: startSetup, text: `Start in ${openerLabel(setup.open_in)}` });
+  const docker = state.docker;
+  const dockerReady = docker.state === "ready";
   const needsConfirm = prepared.moved.length > 0;
-  start.disabled = needsConfirm && !view.confirmed;
+  const start = el("button", {
+    class: "primary",
+    key: "go",
+    onclick: startSetup,
+    text: view.busy ? "Starting…" : `Start in ${openerLabel(setup.open_in)}`,
+  });
+  start.disabled = view.busy || !dockerReady || (needsConfirm && !view.confirmed);
+  const dockerBox = dockerReady
+    ? null
+    : el(
+        "div",
+        { class: "warning", role: "status" },
+        el("p", { class: "strong", text: docker.state === "stopped" ? "Docker Desktop isn't running. Open it first." : docker.words }),
+        docker.can_open ? el("button", { key: "open-docker", onclick: openDocker, text: "Open Docker Desktop" }) : null,
+        docker.can_fix ? el("button", { key: "fix-docker", onclick: fixDocker, text: "Fix it…" }) : null,
+      );
   const warning = needsConfirm
     ? el(
         "div",
@@ -648,47 +894,59 @@ function renderSummary() {
         prepared.moved.map((m) =>
           el("p", {}, el("span", { class: "path", text: m.saved }), el("span", { class: "path", text: `now goes to ${m.now}` })),
         ),
-        el(
-          "p",
-          { text: "This can happen when something (an earlier launch, a sync, an unpacked archive) replaced part of the path with a link. Check that this is what you want, or go back and edit the setup." },
-        ),
+        el("p", {
+          text:
+            "This can happen when something (an earlier launch, a sync, an unpacked archive) replaced part of the path " +
+            "with a link. Check that this is what you want, or go back and edit the setup.",
+        }),
         el(
           "label",
           {},
           el("input", {
             type: "checkbox",
+            key: "confirm-moved",
+            checked: view.confirmed,
             onchange: (e) => {
               view.confirmed = e.target.checked;
-              start.disabled = !view.confirmed;
+              renderSummary();
             },
           }),
           "Use them where they go now",
         ),
       )
     : null;
-  main.replaceChildren(
+  render(
     el(
       "section",
       { class: "block" },
       el("h2", { text: `Start “${setup.name}”?` }),
       el("p", { class: "muted", text: "Here's what Codex will be able to see and do." }),
+      dockerBox,
       warning,
       summaryBlock(prepared.summary),
-      el("div", { class: "actions" }, start, el("button", { onclick: backToList, text: "Back" })),
+      el("div", { class: "actions" }, start, el("button", { key: "back", onclick: backToList, text: "Back" })),
     ),
   );
 }
 
 async function startSetup() {
   const { setup } = view;
+  view.busy = true;
+  renderSummary();
   try {
     const result = await api("POST", `/api/setups/${encodeURIComponent(setup.id)}/start`, {
       confirm_moved: Boolean(view.confirmed),
     });
+    starting.set(setup.id, Date.now());
     notice(`Opened in ${result.opened}: Codex is starting there. Quit Codex there (or Stop here) to end it.`);
     backToList();
   } catch (error) {
     notice(error.message, true);
+    view.busy = false;
+    if (view.name === "summary") {
+      await refresh();
+      renderSummary();
+    }
   }
 }
 
@@ -704,24 +962,32 @@ async function refresh(force = true) {
     notice(error.message, true);
     return;
   }
-  // A poll that finds nothing new changes nothing on screen (keeps focus).
+  // A poll that finds nothing new changes nothing on screen.
   const seen = JSON.stringify(fresh);
-  if (!force && seen === lastSeen) return;
+  if (!force && seen === lastSeen && !starting.size) return;
   lastSeen = seen;
   state = fresh;
   renderStatus();
   if (view.name === "list") renderList();
+  else if (view.name === "summary" && !view.busy) renderSummary();
 }
 
+// The key field: shown as dots, but not a password field, so browsers don't
+// offer to save it in their password managers (and the managers' extensions
+// are asked to leave it alone). Where the dots aren't supported, it's a
+// password field that asks for no saving.
+const keyField = keyInput();
+if (!CSS.supports("-webkit-text-security", "disc")) keyField.type = "password";
 document.getElementById("key-form").addEventListener("submit", saveKey);
-document.getElementById("key-cancel").addEventListener("click", () => {
-  document.getElementById("key-input").value = "";
-  document.getElementById("key-dialog").close();
-});
+document.getElementById("key-cancel").addEventListener("click", () => document.getElementById("key-dialog").close());
+// Escape, Cancel or saving: the field is emptied whenever the box closes.
+document.getElementById("key-dialog").addEventListener("close", () => (keyField.value = ""));
 refresh();
+// Polling goes on while a dialog is open, so an open box never makes the
+// server think the page has gone.
 setInterval(() => {
-  if (!document.querySelector("dialog[open]")) refresh(false);
+  if (polling) refresh(false);
 }, 4000);
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) refresh(false);
+  if (!document.hidden && polling) refresh(false);
 });

@@ -109,6 +109,26 @@ class PickerBusy(RuntimeError):
     pass
 
 
+class PickerFailed(RuntimeError):
+    """The picker couldn't be shown (not the person cancelling it)."""
+
+
+# osascript's "User canceled." (the person pressed Cancel).
+MAC_CANCELLED = "(-128)"
+
+
+def outcome(returncode: int, err: str, platform: str = sys.platform) -> None:
+    """Raise PickerFailed if a picker that ended with `returncode` failed;
+    return if it was cancelled or succeeded. On a Mac a cancel is an error
+    -128; on Windows the script reports a cancel as an empty choice."""
+    if returncode == 0 or (platform == "darwin" and MAC_CANCELLED in err):
+        return
+    detail = " ".join(err.strip().splitlines()[-1:])[:200]
+    raise PickerFailed(
+        "The folder picker couldn't be shown" + (f" ({detail})." if detail else ".") + " Try again."
+    )
+
+
 # One picker at a time.
 _lock = asyncio.Lock()
 
@@ -133,12 +153,14 @@ async def pick_folder(*, start_in: Path | None = None) -> Path | None:
             *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env
         )
         try:
-            out, _ = await process.communicate()
+            out, err = await process.communicate()
         finally:
             # If the request is abandoned, close the picker too.
             if process.returncode is None:
                 process.kill()
-    if process.returncode != 0:
+    returncode = process.returncode if process.returncode is not None else 1
+    outcome(returncode, err.decode("utf-8", "replace"))
+    if returncode != 0:
         return None  # cancelled
     chosen = parse(out.decode("utf-8-sig", "replace"))  # PowerShell may start with a BOM
     return chosen[0] if chosen else None

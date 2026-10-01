@@ -456,6 +456,7 @@ class Updater:
             if offer is None:
                 self.say(f"UM-Codex {self.current} is the newest version.")
                 return 0
+            _close_launcher_window(self.data)
             try:
                 self.install(offer)
             except UpdateFailed as failed:
@@ -481,6 +482,7 @@ class Updater:
             if previous is None or previous == current or not self.layout.complete(previous):
                 self.say("There's no earlier version to go back to.")
                 return 1
+            _close_launcher_window(self.data)
             try:
                 self.layout.switch(previous, previous=current)
             except OSError as error:
@@ -715,6 +717,15 @@ class Updater:
             yield True
         finally:
             lock.release()
+
+
+def _close_launcher_window(data: Path) -> None:
+    """A launcher window (`um-codex ui`) runs this version's code, and on
+    Windows holds its files open: it's closed before a switch (the app opens
+    the new version's next time)."""
+    from umcodex.ui.server import close_running
+
+    close_running(data)
 
 
 # ------------------------------------------------------------------ at launch

@@ -27,6 +27,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import webbrowser
 from collections.abc import Callable
@@ -73,10 +74,18 @@ MAX_NAME = 80
 class Invalid(ValueError):
     """A request that can't be done; the message is for the person."""
 
-    def __init__(self, message: str, field: str | None = None, status: int = 400) -> None:
+    def __init__(
+        self,
+        message: str,
+        field: str | None = None,
+        status: int = 400,
+        errors: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.field = field
         self.status = status
+        # Every problem found, by field, in the form's order (the first is `field`).
+        self.errors = errors if errors is not None else ({field: message} if field else {})
 
 
 # --- What the page sees -----------------------------------------------------
@@ -122,40 +131,59 @@ def checked_folder(raw: object, *, own_data: Path | None, field: str) -> tuple[s
 
 
 def setup_from(body: object, *, setup_id: str | None, own_data: Path | None = None) -> Setup:
-    """A setup from the page's form, checked as the terminal's questions check it."""
+    """A setup from the page's form, checked as the terminal's questions check
+    it. Every problem is reported at once, in the form's order."""
     if not isinstance(body, dict):
         raise Invalid("That request wasn't understood.")
-    name = body.get("name")
-    if not isinstance(name, str) or not name.strip():
-        raise Invalid("Give the setup a name.", "name")
-    name = " ".join(name.split())
-    if len(name) > MAX_NAME or _UNPRINTABLE.search(name):
-        raise Invalid(f"Use a shorter name, of ordinary characters (at most {MAX_NAME}).", "name")
-    working, _ = checked_folder(body.get("working"), own_data=own_data, field="working")
+    errors: dict[str, str] = {}
+
+    def check_part(field: str, step: Callable[[], Any]) -> Any:
+        try:
+            return step()
+        except Invalid as why:
+            errors.setdefault(field, str(why))
+            return None
+
+    working = check_part(
+        "working", lambda: checked_folder(body.get("working"), own_data=own_data, field="working")[0]
+    )
+    name = check_part("name", lambda: _name(body.get("name")))
+    writes: list[str] = []
+    reads: list[str] = []
     raw_folders = body.get("folders", [])
     if not isinstance(raw_folders, list) or len(raw_folders) > 50:
-        raise Invalid("That list of folders wasn't understood.", "folders")
-    writes, reads = [], []
+        errors.setdefault("folders", "That list of folders wasn't understood.")
+        raw_folders = []
     for entry in raw_folders:
         if not isinstance(entry, dict):
-            raise Invalid("That list of folders wasn't understood.", "folders")
-        path, _ = checked_folder(entry.get("path"), own_data=own_data, field="folders")
-        (writes if entry.get("write") is True else reads).append(path)
-    try:
-        folders.plan(Path(working), [Path(p) for p in writes], [Path(p) for p in reads])
-    except FolderRefused as why:
-        raise Invalid(str(why), "folders") from None
+            errors.setdefault("folders", "That list of folders wasn't understood.")
+            continue
+        raw_path = entry.get("path")
+        path = check_part(
+            "folders", lambda raw=raw_path: checked_folder(raw, own_data=own_data, field="folders")[0]
+        )
+        if path is not None:
+            (writes if entry.get("write") is True else reads).append(path)
+    if working is not None and "folders" not in errors:
+        try:
+            folders.plan(Path(working), [Path(p) for p in writes], [Path(p) for p in reads])
+        except FolderRefused as why:
+            errors["folders"] = str(why)
     internet = body.get("internet") is True
     browser = internet and body.get("browser") is True
-    model = body.get("model") or toolkit.DEFAULT_MODEL
-    if not isinstance(model, str) or not _MODEL.fullmatch(model):
-        raise Invalid("That isn't a model name.", "model")
     approvals = body.get("approvals", "never")
     if approvals not in ("never", "on-request"):
-        raise Invalid("That approval choice wasn't understood.", "approvals")
+        errors["approvals"] = "That approval choice wasn't understood."
+    model = body.get("model") or toolkit.DEFAULT_MODEL
+    if not isinstance(model, str) or not _MODEL.fullmatch(model):
+        errors["model"] = "That isn't a model name."
     open_in = body.get("open_in", "terminal")
     if open_in not in OPEN_IN:
-        raise Invalid("That choice of where to open Codex wasn't understood.", "open_in")
+        errors["open_in"] = "That choice of where to open Codex wasn't understood."
+    if errors:
+        field, message = next(iter(errors.items()))
+        raise Invalid(message, field, errors=errors)
+    assert working is not None and name is not None
     return Setup(
         id=setup_id or new_id(name),
         name=name,
@@ -170,6 +198,24 @@ def setup_from(body: object, *, setup_id: str | None, own_data: Path | None = No
         open_in=open_in,
     )
 
+
+def _name(raw: object) -> str:
+    if not isinstance(raw, str) or not raw.strip():
+        raise Invalid("Give the setup a name.", "name")
+    name = " ".join(raw.split())
+    if len(name) > MAX_NAME or _UNPRINTABLE.search(name):
+        raise Invalid(f"Use a shorter name, of ordinary characters (at most {MAX_NAME}).", "name")
+    return name
+
+
+# Why Start can't go ahead, by Docker's state (the page offers what fixes it).
+DOCKER_NOT_READY = {
+    "stopped": "Docker Desktop isn't running. Open it first.",
+    "starting": "Docker Desktop is still starting. Wait until it's running, then Start.",
+    "not-installed": "Docker Desktop isn't installed. Install it, then Start.",
+    "vm-refused": "Docker can't start until Windows' policy is fixed: use Fix it… first.",
+    "unknown": "Docker isn't answering. Restart Docker Desktop, then Start.",
+}
 
 DOCKER_WORDS = {
     "ready": "Docker is running.",
@@ -224,6 +270,9 @@ class Status:
     key_checked: float = 0.0
     update: str | None = None
     models: list[str] = field(default_factory=list)
+    # One Docker check at a time: a page polling while another check runs
+    # gets the last answer instead of starting a second one.
+    docker_checking: threading.Lock = field(default_factory=threading.Lock)
 
 
 @dataclass
@@ -243,12 +292,23 @@ class Launcher:
     status: Status = field(default_factory=Status)
     windows_doctor: windows_vm.DockerDoctor | None = None
     own_data: Path | None = None  # for the folder rules (tests)
+    quit: Callable[[], None] | None = None  # set by serve(): ends the server
+    reopen_after: bool = False  # start the installed version's window once this one has ended
 
     # ----------------------------------------------------------- reading
 
     def docker_state(self, *, fresh: bool = False) -> str:
         if not fresh and time.monotonic() - self.status.docker_checked < 5:
             return self.status.docker
+        checking = self.status.docker_checking
+        if not checking.acquire(blocking=fresh):
+            return self.status.docker  # a check is running: its answer comes next time
+        try:
+            return self._check_docker(fresh=fresh)
+        finally:
+            checking.release()
+
+    def _check_docker(self, *, fresh: bool) -> str:
         if self.platform == "win32":
             self.windows_doctor = self.windows_doctor or windows_vm.DockerDoctor(run=self.run)
             state = self.windows_doctor.state(fresh=fresh)
@@ -272,6 +332,7 @@ class Launcher:
         docker = self.docker_state()
         return {
             "version": __version__,
+            "home": str(Path.home()),  # for showing paths as ~/…
             "setups": [setup_json(s, own_data=self.own_data) for s in self.store.all()],
             "running": self.running(),
             "docker": {
@@ -283,11 +344,32 @@ class Launcher:
             },
             "key": {"saved": self.key_saved()},
             "update": self.status.update,
+            "installed": self.installed_version(),
             "openers": [
                 {"key": key, "label": opener.label, "available": opener.available()}
                 for key, opener in self.openers.items()
             ],
         }
+
+    def installed_version(self) -> str | None:
+        """The version the installed launchers now open, when it isn't this
+        server's own (an update or a new install happened while it ran)."""
+        from umcodex.update import Layout, install_root
+
+        with contextlib.suppress(Exception):
+            layout = Layout(install_root(), windows=self.platform == "win32")
+            current = layout.pointer()[0]
+            if layout.running_version() is not None and current and current != __version__:
+                return current
+        return None
+
+    def reopen_newer(self) -> dict[str, Any]:
+        """Close this server and start the installed version's launcher window."""
+        if self.quit is None:
+            raise Invalid("This window can't reopen itself. Open UM-Codex again from its app.", status=409)
+        self.reopen_after = True
+        self.quit()
+        return {"reopening": True}
 
     def running(self) -> list[dict[str, Any]]:
         return [
@@ -372,7 +454,10 @@ class Launcher:
         setup = self.setup(setup_id)
         confirmed = isinstance(body, dict) and body.get("confirm_moved") is True
         if not self.key_saved(fresh=True):
-            raise Invalid("Save your Toolkit key first (Replace key…).", status=409)
+            raise Invalid("Save your Toolkit key first (Add key…).", "key", status=409)
+        docker = self.docker_state(fresh=True)
+        if docker != "ready":
+            raise Invalid(DOCKER_NOT_READY.get(docker, DOCKER_NOT_READY["unknown"]), "docker", status=409)
         opener = self.openers.get(setup.open_in)
         if opener is None or not opener.available():
             raise Invalid("Codex can't be opened there yet: edit the setup and choose Terminal.", status=409)
@@ -395,6 +480,7 @@ class Launcher:
     def stop(self, launch_id: str) -> dict[str, Any]:
         if not re.fullmatch(r"[0-9a-f]{8}", launch_id):
             raise Invalid("There's no such launch.", status=404)
+        log.info("launcher window: Stop asked for launch %s", launch_id)
         try:
             found = stop_launch(self.docker, self.data, launch_id)
         except DockerError:
@@ -564,7 +650,7 @@ def make_app(
             start_in = Path(body["start"])
         try:
             chosen = await picker.pick_folder(start_in=start_in)
-        except (picker.PickerUnavailable, picker.PickerBusy) as why:
+        except (picker.PickerUnavailable, picker.PickerBusy, picker.PickerFailed) as why:
             raise Invalid(str(why), "folder", status=409) from None
         if chosen is None:
             return web.json_response({"cancelled": True})
@@ -577,6 +663,10 @@ def make_app(
     async def docker_open(request: web.Request) -> web.Response:
         await _body(request)
         return web.json_response(await blocking(launcher.open_docker))
+
+    async def reopen_newer(request: web.Request) -> web.Response:
+        await _body(request)
+        return web.json_response(launcher.reopen_newer())
 
     async def docker_fix(request: web.Request) -> web.Response:
         await _body(request)
@@ -601,6 +691,7 @@ def make_app(
     app.router.add_post("/api/key", key)
     app.router.add_post("/api/docker/open", docker_open)
     app.router.add_post("/api/docker/fix", docker_fix)
+    app.router.add_post("/api/reopen", reopen_newer)
     return app
 
 
@@ -610,7 +701,9 @@ async def _errors(request: web.Request, handler) -> web.StreamResponse:
     try:
         return await handler(request)
     except Invalid as why:
-        return web.json_response({"error": str(why), "field": why.field}, status=why.status)
+        return web.json_response(
+            {"error": str(why), "field": why.field, "errors": why.errors}, status=why.status
+        )
     except web.HTTPException:
         raise
     except Exception as error:  # a bug: say so plainly, log only its type
@@ -704,6 +797,20 @@ def reopen(
     return 0
 
 
+COMMAND_FILES_KEPT_SECONDS = 10 * 60
+NONCE_ENV = "UMCODEX_UI_NONCE"
+
+
+def sweep_command_files(data: Path, now: float | None = None) -> None:
+    """Remove the Mac's start-*.command files that never ran (Terminal
+    removes each when it runs it), once they're older than a few minutes."""
+    now = time.time() if now is None else now
+    for leftover in (data / "ui").glob("start-*.command"):
+        with contextlib.suppress(OSError):
+            if now - leftover.lstat().st_mtime > COMMAND_FILES_KEPT_SECONDS:
+                leftover.unlink()
+
+
 async def serve(
     launcher: Launcher,
     *,
@@ -717,6 +824,7 @@ async def serve(
     """Serve until the page has been away for `idle_seconds` (or `stop` is set)."""
     control = secrets.token_urlsafe(32)
     seen = [time.monotonic()]
+    sweep_command_files(data)
     # The port is known only once the socket is bound: bind first, then build
     # the session (the cookie's name carries the port) and the app.
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -724,21 +832,28 @@ async def serve(
     port = sock.getsockname()[1]
     session = BrowserSession(port)
     stop = stop or asyncio.Event()
-    app = make_app(launcher, session, control_secret=control, seen=seen, quit=stop.set)
+    loop = asyncio.get_running_loop()
+
+    def quit() -> None:  # from any thread
+        loop.call_soon_threadsafe(stop.set)
+
+    launcher.quit = quit
+    app = make_app(launcher, session, control_secret=control, seen=seen, quit=quit)
     runner = web.AppRunner(app, access_log=None, handle_signals=False)
     await runner.setup()
     site = web.SockSite(runner, sock)
     await site.start()
     info = data / UI_INFO
-    _write_private(info, json.dumps({"port": port, "control": control, "pid": os.getpid()}) + "\n")
+    record = {"port": port, "control": control, "pid": os.getpid(), "nonce": os.environ.pop(NONCE_ENV, None)}
+    _write_private(info, json.dumps(record) + "\n")
     url = f"http://127.0.0.1:{port}{session.sign_in_path()}"
-    asyncio.get_running_loop().run_in_executor(None, launcher.check_update)
+    loop.run_in_executor(None, launcher.check_update)
     say(f"UM-Codex's window (if your browser doesn't open it, go here): {url}")
     say("It closes by itself a while after its page is closed. Ctrl-C ends it now.")
     if ready is not None:
         ready(port, url)
     else:
-        await asyncio.get_running_loop().run_in_executor(None, opening, url)
+        await loop.run_in_executor(None, opening, url)
     try:
         while not stop.is_set():
             with contextlib.suppress(TimeoutError):
@@ -755,41 +870,121 @@ def _no_browser(url: str) -> None:
     """`--no-browser`: serve() has printed the link already."""
 
 
-def main(*, say: Callable[[str], None] = print, open_browser: bool = True) -> int:
+def _say(text: str) -> None:
+    print(text, flush=True)  # at once, even when the output is a pipe or a file
+
+
+def main(*, say: Callable[[str], None] = _say, open_browser: bool = True) -> int:
     """`um-codex ui` (`open_browser=False`: the link is only printed)."""
     data = data_dir()
     data.mkdir(parents=True, exist_ok=True)
     lock = LaunchLock(data / UI_LOCK)
     if not lock.acquire(tries=3):
         return reopen(data, say=say, opening=open_in_browser if open_browser else say)
+    launcher = Launcher(data=data)
     try:
         opening = open_in_browser if open_browser else _no_browser
-        asyncio.run(serve(Launcher(data=data), data=data, say=say, opening=opening))
+        asyncio.run(serve(launcher, data=data, say=say, opening=opening))
     except KeyboardInterrupt:
         say("Closed.")
+    except Exception:
+        log.exception("the launcher window failed")
+        say(f"UM-Codex's window stopped because of a problem. Details are in {data / 'um-codex.log'}.")
+        return 1
     finally:
         lock.release()
+    if launcher.reopen_after:
+        start_installed()
     return 0
 
 
-def detach(*, open_browser: bool = True) -> int:
-    """`um-codex ui --detach`: start the server in the background, with no
-    window (on Windows, a console of its own that's never shown, which the
-    Docker commands it runs share), and return at once."""
-    command = [sys.executable, "-m", "umcodex", "ui", *([] if open_browser else ["--no-browser"])]
-    env = {**os.environ, "PYTHONUTF8": "1"}
-    options: dict[str, Any] = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-        "env": env,
-        "close_fds": True,
-    }
+def start_installed() -> None:
+    """Start the installed version's launcher window (after an update)."""
+    from umcodex.update import Layout, install_root
+
+    command = Layout(install_root()).command
+    log.info("launcher window: reopening as the installed version")
+    with contextlib.suppress(OSError):
+        subprocess.Popen([str(command), "ui", "--detach"], **_background())
+
+
+def _background() -> dict[str, Any]:
+    options: dict[str, Any] = {"stdin": subprocess.DEVNULL, "close_fds": True}
     if sys.platform == "win32":
         options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) | getattr(
             subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200
         )
     else:
         options["start_new_session"] = True
-    subprocess.Popen(command, **options)
-    return 0
+    return options
+
+
+def show_alert(message: str, *, platform: str = sys.platform, run=subprocess.run) -> None:
+    """A native message box (the app and shortcuts have no window to say it in)."""
+    with contextlib.suppress(Exception):
+        if platform == "darwin":
+            script = [
+                "on run argv",
+                'display dialog (item 1 of argv) with title "UM-Codex" buttons {"OK"} '
+                'default button "OK" with icon caution',
+                "end run",
+            ]
+            args = [part for line in script for part in ("-e", line)]
+            run(["osascript", *args, message], capture_output=True, timeout=600)
+        elif platform == "win32":
+            import ctypes
+
+            # MB_OK | MB_ICONWARNING | MB_SETFOREGROUND
+            ctypes.windll.user32.MessageBoxW(None, message, "UM-Codex", 0x0 | 0x30 | 0x10000)  # type: ignore[attr-defined]
+        else:
+            print(message, file=sys.stderr)
+
+
+DETACH_WAIT_SECONDS = 10.0
+
+
+def detach(
+    *,
+    open_browser: bool = True,
+    wait: float = DETACH_WAIT_SECONDS,
+    popen: Callable[..., Any] = subprocess.Popen,
+    alert: Callable[[str], None] = show_alert,
+) -> int:
+    """`um-codex ui --detach`: start the server in the background, with no
+    window (on Windows, a console of its own that's never shown, which the
+    Docker commands it runs share), and wait until it's serving (its ui.json,
+    with this start's nonce) or has handed over to one already running (it
+    ends with 0). Anything else is shown in a native message box: the app and
+    the shortcuts have no window of their own to say it in."""
+    data = data_dir()
+    data.mkdir(parents=True, exist_ok=True)
+    nonce = secrets.token_hex(8)
+    command = [sys.executable, "-m", "umcodex", "ui", *([] if open_browser else ["--no-browser"])]
+    env = {**os.environ, "PYTHONUTF8": "1", NONCE_ENV: nonce}
+    # Its error output, if it fails early (a traceback). Not its normal output:
+    # that has the sign-in link in it.
+    errors = data / "ui-start.log"
+    with errors.open("wb") as output:
+        child = popen(command, stdout=subprocess.DEVNULL, stderr=output, env=env, **_background())
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        with contextlib.suppress(OSError, ValueError, AttributeError):
+            if json.loads((data / UI_INFO).read_text(encoding="utf-8")).get("nonce") == nonce:
+                return 0
+        code = child.poll()
+        if code == 0:
+            return 0  # another window was running: it was opened again
+        if code is not None:
+            break
+        time.sleep(0.1)
+    with contextlib.suppress(OSError):
+        tail = errors.read_text(encoding="utf-8", errors="replace").strip().splitlines()[-20:]
+        if tail:
+            log.error("the launcher window didn't start; it printed:\n%s", "\n".join(tail))
+    log.error("the launcher window didn't start (exit code %s)", child.poll())
+    alert(
+        "UM-Codex's window didn't start.\n\n"
+        f"What went wrong is in its log: {data / 'um-codex.log'}\n\n"
+        "Try again; if it still doesn't start, send that file to whoever looks after UM-Codex."
+    )
+    return 1
