@@ -1087,10 +1087,20 @@ cat "$UMCODEX_TEST_CLOCK" 2>/dev/null || echo 1000
     '[ -z "${UMCODEX_TEST_MDFIND:-}" ] || printf \'%s\\n\' "$UMCODEX_TEST_MDFIND"\n',
     "ditto": """#!/bin/sh
 case "${UMCODEX_TEST_DITTO:-}" in
-  # Ctrl-C reaches the whole foreground process group, this copy included,
-  # which dies of it. (Signalling only the installer while the copy then exits
-  # normally is something else: sh may take it that the copy dealt with it.)
-  interrupt) mkdir -p "$2/Contents"; echo half > "$2/Contents/half"; kill -INT 0; exit 1 ;;
+  # Ctrl-C, as a terminal sends it: to the whole foreground process group,
+  # once the installer is waiting for this copy (asleep in wait), and the copy
+  # dies of it. A copy that exited normally instead would tell sh (bash 3.2)
+  # that it dealt with the Ctrl-C itself, and the installer would carry on.
+  interrupt)
+    mkdir -p "$2/Contents"; echo half > "$2/Contents/half"
+    tries=0
+    until /bin/ps -o stat= -p "$PPID" | grep -q '^ *[SI]' || [ "$tries" -ge 200 ]; do
+      tries=$((tries + 1)); /bin/sleep 0.05
+    done
+    trap - INT
+    kill -INT 0
+    kill -INT $$
+    /bin/sleep 30; exit 1 ;;  # (not reached: it has died of SIGINT by now)
   not-permitted) echo "ditto: $2: Operation not permitted" >&2; exit 1 ;;
   fails) echo "ditto: $2: No space left on device" >&2; exit 1 ;;
   tamper) cp -R "$1" "$2" && echo "Other (ABCDE12345)" > "$2/Contents/fake-signer" ;;

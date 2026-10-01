@@ -70,7 +70,7 @@ def test_the_sign_job_runs_no_build_and_no_docker():
         "pip install",
     ):
         assert forbidden not in text, forbidden
-    assert "uv sync --locked --no-dev --no-install-project" in text and "sign-release.py" in text
+    assert "uv sync --locked --no-build --no-dev --no-install-project" in text and "sign-release.py" in text
     assert "sha256sum --strict -c SHA256SUMS" in text
     uploads = [s for s in sign["steps"] if str(s.get("uses", "")).startswith("actions/upload")]
     assert [u["with"]["path"] for u in uploads] == ["signature/SHA256SUMS.sig"]
@@ -80,7 +80,7 @@ def test_the_sign_job_runs_no_build_and_no_docker():
 def test_publishing_waits_for_the_signature_and_nothing_else_publishes():
     all_jobs = jobs()
     assert set(all_jobs["publish"]["needs"]) == {"package", "sign"}
-    creating = [n for n, j in all_jobs.items() if "gh release create" in yaml.safe_dump(j)]
+    creating = [n for n, j in all_jobs.items() if "gh release create" in scripts(j)]
     assert creating == ["publish"]
     writers = {n for n, j in all_jobs.items() if (j.get("permissions") or {}).get("contents") == "write"}
     assert writers == {"publish"}
@@ -120,13 +120,15 @@ def scripts(job: dict) -> str:
     return "\n".join(str(step.get("run", "")) for step in job.get("steps", []))
 
 
-def test_every_release_is_a_normal_one_and_latest_only_if_newest():
+def test_publish_takes_its_latest_and_prerelease_flags_from_the_script():
     publish = scripts(jobs()["publish"])
-    assert "--prerelease" not in publish
-    assert "scripts/release-latest.py" in publish and '"$latest"' in publish
+    assert "flags=$(.venv/bin/python scripts/release-latest.py" in publish
+    assert 'gh release create "$GITHUB_REF_NAME" $flags' in publish
+    # Only the script says --prerelease (once a full release exists).
+    assert "--prerelease" not in publish.replace("# shellcheck", "")
 
 
-def test_one_release_runs_at_a_time_and_none_is_cancelled():
+def test_one_release_runs_at_a_time_and_a_running_one_isnt_cancelled():
     parsed = yaml.safe_load(WORKFLOW.read_text())
     assert parsed["concurrency"] == {"group": "release", "cancel-in-progress": False}
 
@@ -163,6 +165,9 @@ def test_the_jobs_that_sign_or_build_use_the_pinned_uv_uncached_and_no_git_crede
     sign = yaml.safe_dump(all_jobs["sign"]["steps"])
     assert "PYTHONPATH=src .venv/bin/python scripts/sign-release.py assets/SHA256SUMS" in sign
     assert "uv run" not in sign
+    # Locked dependencies only, from wheels: no build backend runs where the key is.
+    for name in ("version", "sign", "publish"):
+        assert "uv sync --locked --no-build --no-dev --no-install-project" in scripts(all_jobs[name]), name
 
 
 def test_the_installers_pinned_uv_is_the_workflows():
@@ -187,6 +192,7 @@ def test_a_reused_image_must_hold_both_platforms_and_this_workflows_provenance()
         [attest] = steps_using(all_jobs[name], "actions/attest-build-provenance")
         assert (
             attest["with"]["push-to-registry"] is True
+            and attest["with"]["create-storage-record"] is False
             and attest["with"]["subject-name"] == "${{ env.IMAGE }}"
         )
         assert all_jobs[name]["permissions"]["id-token"] == "write"
@@ -247,6 +253,10 @@ def latest(tmp_path: Path, tag: str, published: list[str], **env: str) -> subpro
         ("v0.2.0", ["v0.10.0"], "--latest=false"),  # versions, not text
         ("v0.10.0", ["v0.9.0", "not-a-version"], "--latest"),
         ("v0.1.0-alpha.2", ["v0.1.0-alpha.2", "v0.1.0-alpha.1"], "--latest"),  # itself doesn't count
+        # Once a full release exists, a pre-release is never the latest, and is marked one.
+        ("v1.1.0-alpha.1", ["v1.0.0"], "--latest=false --prerelease"),
+        ("v1.1.0-alpha.1", ["v1.0.0", "v0.9.0-rc.1"], "--latest=false --prerelease"),
+        ("v1.0.0", ["v1.0.0-rc.1"], "--latest"),  # the first full release after its candidates
     ],
 )
 def test_a_release_is_the_latest_only_if_it_is_the_newest(tmp_path, tag, published, flag):
