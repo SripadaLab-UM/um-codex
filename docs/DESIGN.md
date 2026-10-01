@@ -643,6 +643,11 @@ modes, rigor, and the frontend.
        installed, else Windows PowerShell in a new console, each with the
        command as `-EncodedCommand` (each part a single-quoted PowerShell
        string; no Windows or Windows Terminal quoting to get wrong).
+       Windows PowerShell 5.1 can't pass a double quote inside an argument
+       on reliably, so one is refused (no Windows path has one), and a part
+       with a space that ends in backslashes gets them doubled. The setup's
+       id must be Docker-safe, as `new_id` makes it (it names the setup's
+       volume too), or the start is refused.
        The command runs the server's own Python (`-m umcodex`), so it's the
        same version, and carries the development variables (`UMCODEX_*`) the
        server was started with, and keyring's `PYTHON_KEYRING_BACKEND` (the

@@ -51,6 +51,11 @@ class OpenFailed(RuntimeError):
     """The window couldn't be opened. The message is for the person."""
 
 
+# A setup's id, as new_id makes it: also its Codex home volume's name, so it
+# follows Docker's rules for names.
+SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
+
+
 class Opener(Protocol):
     key: str  # what a setup saves as `open_in`
     label: str
@@ -98,10 +103,14 @@ def ps_quote(text: str) -> str:
 def native_arg(text: str) -> str:
     """An argument as Windows PowerShell 5.1 must be given it for a program
     to receive it unchanged. 5.1 puts quotes around an argument with a space
-    in it but doesn't escape the double quotes inside (nor the backslashes
-    before them, or before its own closing quote), so this does, by the rules
-    programs use to split their command line (CommandLineToArgvW)."""
-    text = re.sub(r'(\\*)"', lambda m: m.group(1) * 2 + '\\"', text)
+    in it, but a backslash before its closing quote would escape it (by the
+    rules programs split their command line with, CommandLineToArgvW), so
+    trailing backslashes are doubled. A double quote inside an argument can't
+    be passed through 5.1 reliably at all (it decides whether to add quotes
+    by counting them), so it's refused: no Windows path has one, and a
+    setup's id never does (SAFE_ID)."""
+    if '"' in text:
+        raise OpenFailed("A terminal window can't be opened for this: a double quote can't be passed on.")
     if re.search(r"\s", text):
         text = re.sub(r"(\\+)$", lambda m: m.group(1) * 2, text)
     return text
@@ -175,6 +184,8 @@ class TerminalOpener:
         )
 
     def open(self, setup_id: str) -> None:
+        if not SAFE_ID.fullmatch(setup_id):
+            raise OpenFailed("This setup can't be started from here: its saved id has unusual characters.")
         if self._platform == "darwin":
             self._open_mac(setup_id)
         elif self._platform == "win32":

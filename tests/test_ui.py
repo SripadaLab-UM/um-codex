@@ -616,6 +616,8 @@ NASTY = [
     "x y\\",
     'q\\"z w',
 ]
+# Windows PowerShell 5.1 can't pass a double quote on reliably: refused (native_arg).
+WINDOWS_NASTY = [text for text in NASTY if '"' not in text]
 
 
 def echo_program(tmp_path: Path, name: str) -> list[str]:
@@ -673,8 +675,9 @@ def test_the_mac_opener_opens_one_command_file_in_terminal(tmp_path):
 
 def test_native_arguments_survive_windows_powershell_5():
     # What the program gets back (CommandLineToArgvW) from PowerShell 5.1's quoting.
-    assert opening.native_arg('say "hi"') == 'say \\"hi\\"'
-    assert opening.native_arg('a\\"b') == 'a\\\\\\"b'
+    for quoted in ('say "hi"', 'a\\"b'):
+        with pytest.raises(opening.OpenFailed):
+            opening.native_arg(quoted)
     assert opening.native_arg("C:\\a b\\") == "C:\\a b\\\\"
     assert opening.native_arg("C:\\ab\\") == "C:\\ab\\"
     assert opening.native_arg("plain") == "plain"
@@ -682,7 +685,7 @@ def test_native_arguments_survive_windows_powershell_5():
 
 def test_the_windows_command_is_encoded_and_quoted(tmp_path):
     terminal = Path("C:/Users/o'brien/AppData/Local/Microsoft/WindowsApps/wt.exe")
-    for setup_id in NASTY:
+    for setup_id in WINDOWS_NASTY:
         program = ["C:\\Users\\o'brien\\um codex\\python.exe", "-m", "umcodex"]
         env = {"UMCODEX_DATA_DIR": "C:\\d'x"}
         with_wt = opening.windows_command(
@@ -704,7 +707,7 @@ def test_the_windows_command_is_encoded_and_quoted(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="runs Windows PowerShell")
-@pytest.mark.parametrize("setup_id", NASTY)
+@pytest.mark.parametrize("setup_id", WINDOWS_NASTY)
 def test_the_windows_command_runs_exactly_the_launch(tmp_path, setup_id):
     program = echo_program(tmp_path, "o'brien x")
     script = opening.powershell_script(program, setup_id, {"UMCODEX_DATA_DIR": "C:\\a b'c"})
@@ -718,6 +721,18 @@ def test_the_windows_command_runs_exactly_the_launch(tmp_path, setup_id):
         "argv": ["launch", "--setup", setup_id],
         "data": "C:\\a b'c",
     }
+
+
+def test_an_odd_setup_id_isnt_opened(tmp_path):
+    ran = []
+    terminal = opening.TerminalOpener(
+        program=["/x/um-codex"], platform="darwin", environ={}, folder=tmp_path,
+        run=lambda command, **_: ran.append(command),
+    )  # fmt: skip
+    for odd in ("", "-rf", "a b", "a;b", "x" * 200, "a/b"):
+        with pytest.raises(opening.OpenFailed):
+            terminal.open(odd)
+    assert ran == [] and list(tmp_path.iterdir()) == []
 
 
 def test_the_codex_app_opener_is_a_placeholder():
