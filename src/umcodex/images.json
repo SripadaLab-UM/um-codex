@@ -1,0 +1,5 @@
+{
+  "_comment": "Pinned images. Written by the release (M2); for M1 the agent image is built locally from images/agent.",
+  "agent": "um-codex-agent:dev",
+  "gateway": "nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de"
+}
