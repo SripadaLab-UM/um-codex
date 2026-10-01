@@ -13,11 +13,9 @@ and the next key; the release after that can be signed with the next one.
 
 from __future__ import annotations
 
-# TODO(maintainer): before the first release, make the release key on your
-# own computer (`uv run python scripts/sign-release.py --new-key`), put its
-# private half in the "release" environment's RELEASE_SIGNING_KEY secret, and
-# paste its public half here, as a string, with the date it was made.
-RELEASE_KEYS: tuple[str, ...] = ()
+RELEASE_KEYS: tuple[str, ...] = (
+    "Q8JnprurKnHvkgNR3RopLFbxFhHXjeOAOUJ/1XbqM8c=",  # made 2026-10-01 by the maintainer
+)
 
 
 def trusted_keys() -> tuple[str, ...]:
