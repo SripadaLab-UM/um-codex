@@ -343,7 +343,7 @@ def test_uninstall_yes_asks_nothing(data_folder, docker_here):
 def test_launch_from_the_app_doesnt_offer_the_current_folder(monkeypatch):
     seen = {}
     monkeypatch.setattr(
-        cli, "_launch", lambda args, from_app=False: seen.update(args=args, from_app=from_app) or 0
+        cli, "_launch", lambda args, from_app=False, **_: seen.update(args=args, from_app=from_app) or 0
     )
     cli.main(["launch", "--from-app"])
     assert seen == {"args": [], "from_app": True}

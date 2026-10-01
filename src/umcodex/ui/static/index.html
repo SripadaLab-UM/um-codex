@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UM-Codex</title>
+  <link rel="icon" href="/static/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <img class="mark" src="/static/mark.svg" alt="" width="40" height="40">
+    <div class="title">
+      <h1>UM-Codex</h1>
+      <p class="sub">Codex on the U-M GPT Toolkit, in a sandbox on this computer <span id="version" class="faint"></span></p>
+    </div>
+  </header>
+  <section id="status" class="status" aria-label="Status"></section>
+  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+  <main id="main" aria-live="polite"><p class="faint">Loading…</p></main>
+
+  <dialog id="key-dialog" aria-labelledby="key-title">
+    <form id="key-form" method="dialog" autocomplete="off">
+      <h2 id="key-title">Toolkit API key</h2>
+      <p>Paste your U-M GPT Toolkit API key. It's checked with the Toolkit, saved in this
+        computer's keychain, and never goes into the sandbox.</p>
+      <label class="field">
+        <span class="label">Key</span>
+        <input id="key-input" type="password" autocomplete="off" spellcheck="false" required>
+      </label>
+      <p id="key-message" class="message" role="alert" hidden></p>
+      <div class="actions">
+        <button type="submit" class="primary" id="key-save">Save key</button>
+        <button type="button" id="key-cancel">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+    <form method="dialog">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-text"></p>
+      <div class="actions">
+        <button value="yes" class="primary" id="confirm-yes">OK</button>
+        <button value="no">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

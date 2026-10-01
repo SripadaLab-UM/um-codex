@@ -27,11 +27,14 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
 from umcodex import codex_config, credentials, toolkit
 from umcodex.containers import (
+    INSTANCE_LABEL,
+    LAUNCH_LABEL,
     BindMount,
     Docker,
     DockerError,
@@ -63,16 +66,22 @@ class LaunchLock:
         self.path = path
         self._file: IO[bytes] | None = None
 
-    def acquire(self) -> bool:
+    def acquire(self, *, tries: int = 1, wait: float = 0.05) -> bool:
+        """Take the lock. `tries` > 1 waits a little between tries: another
+        process may be probing it for a moment (launch_is_live)."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        handle = self.path.open("a+b")
-        try:
-            _lock(handle)
-        except OSError:
-            handle.close()
-            return False
-        self._file = handle
-        return True
+        for attempt in range(tries):
+            handle = self.path.open("a+b")
+            try:
+                _lock(handle)
+            except OSError:
+                handle.close()
+                if attempt + 1 < tries:
+                    time.sleep(wait)
+                continue
+            self._file = handle
+            return True
+        return False
 
     def release(self) -> None:
         if self._file is not None:
@@ -119,6 +128,75 @@ def launch_is_live(data: Path, launch_id: str) -> bool:
     if probe.acquire():
         probe.release()
         return False
+    return True
+
+
+# --- Running launches (for the launcher window) -----------------------------
+
+LAUNCH_INFO = "launch.json"
+
+
+@dataclass(frozen=True)
+class RunningLaunch:
+    launch_id: str
+    setup_id: str
+    setup_name: str
+    started_at: float  # seconds since the epoch
+
+
+def write_launch_info(folder: Path, setup: Setup, started_at: float | None = None) -> None:
+    """What the launcher window shows about a running launch."""
+    info = {
+        "setup_id": setup.id,
+        "setup_name": setup.name,
+        "started_at": time.time() if started_at is None else started_at,
+    }
+    _write(folder / LAUNCH_INFO, json.dumps(info) + "\n")
+
+
+def running_launches(data: Path) -> list[RunningLaunch]:
+    """The launches of this data folder that are running now (each holds its
+    lock), the oldest first. A launch that hasn't written its info yet is left
+    out until it has."""
+    folder = launches_dir(data)
+    if not folder.is_dir():
+        return []
+    found = []
+    for entry in folder.iterdir():
+        if entry.is_symlink() or not entry.is_dir() or not (entry / LAUNCH_INFO).is_file():
+            continue
+        try:
+            raw = json.loads((entry / LAUNCH_INFO).read_text(encoding="utf-8"))
+            launch = RunningLaunch(
+                launch_id=entry.name,
+                setup_id=str(raw["setup_id"]),
+                setup_name=str(raw["setup_name"]),
+                started_at=float(raw["started_at"]),
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if launch_is_live(data, entry.name):
+            found.append(launch)
+    return sorted(found, key=lambda launch: launch.started_at)
+
+
+def stop_launch(docker: Docker, data: Path, launch_id: str) -> bool:
+    """End a running launch from outside it: remove its containers and
+    networks, by label (this data folder's, and that launch's), as cleanup
+    does. Codex's `docker exec` then ends, and the launch's own `um-codex`
+    removes the rest. False if there's no such running launch."""
+    if not any(launch.launch_id == launch_id for launch in running_launches(data)):
+        return False
+    filters = [
+        "--filter", f"label={INSTANCE_LABEL}={instance_of(data)}",
+        "--filter", f"label={LAUNCH_LABEL}={launch_id}",
+    ]  # fmt: skip
+    containers = docker("ps", "-a", "-q", *filters, check=False).split()
+    if containers:
+        docker("rm", "-f", *containers, check=False)
+    networks = docker("network", "ls", "-q", *filters, check=False).split()
+    if networks:
+        docker("network", "rm", *networks, check=False)
     return True
 
 
@@ -278,8 +356,9 @@ def run(
     folder = launches_dir(data) / launch_id
     folder.mkdir(parents=True)
     lock = LaunchLock(folder / "lock")
-    if not lock.acquire():
+    if not lock.acquire(tries=40):
         raise RuntimeError("couldn't lock the launch folder")
+    write_launch_info(folder, setup)
     server: RelayServer | None = None
     spec: LaunchSpec | None = None
 
@@ -351,6 +430,7 @@ def run(
         sys.stdout.flush()
         with _codex_owns_ctrl_c():
             done = run_exec(command)
+        log.info("launch %s: Codex ended (exit code %s)", launch_id, done.returncode)
         return done.returncode
     finally:
         remove_containers()
@@ -406,6 +486,7 @@ def _exit_on_hangup(cleanup: Callable[[float], None]) -> Callable[[], None]:
         return restore_windows
 
     def leave(signum, frame):
+        log.info("the launch's terminal closed or it was asked to end (signal %d)", signum)
         raise SystemExit(128 + signum)
 
     saved = {s: signal.signal(s, leave) for s in (signal.SIGHUP, signal.SIGTERM)}

@@ -510,27 +510,27 @@ def test_the_installer_needs_a_console_host():
 # --- Launchers -------------------------------------------------------------------
 
 
-def test_the_start_menu_and_desktop_shortcuts_open_a_terminal_running_um_codex():
+def test_the_start_menu_and_desktop_shortcuts_open_the_launcher_window():
     seven = step(7)
     assert '$Links = @(Join-Path $StartMenu "$LinkName.lnk")' in seven
     assert '$LinkName = "UM-Codex"' in seven
     assert '[Environment]::GetFolderPath("Desktop")' in seven
     assert "$Links += $DesktopLink" in seven
-    # Windows Terminal if it's there, else Windows PowerShell; ";" escaped for wt.
-    assert 'Join-Path $Env:LOCALAPPDATA "Microsoft\\WindowsApps\\wt.exe"' in seven
-    assert '.Replace(";", "\\;")' in seven
+    # Windows PowerShell, hidden and minimized, starts the launcher window in
+    # the background; no terminal stays open.
     assert "$LinkTarget = $WindowsPowerShell" in seven
+    assert '$LinkArguments = "-NoProfile -WindowStyle Hidden -Command `"$Launch`""' in seven
+    assert "$Shortcut.WindowStyle = 7" in seven
+    assert "-NoExit" not in code(seven) and "wt.exe" not in code(seven)
     # The version `current` names, run directly (no cmd.exe "Terminate batch job?").
     assert "EscapeSingleQuotedStringContent($Root)" in seven
     assert "$Marker = \"'$QuotedRoot\\current'\"" in seven
     assert "\\Scripts\\um-codex.exe')" in seven and "um-codex.cmd" not in code(seven)
-    assert '$PowerShellArguments = "-NoProfile -NoExit -Command `"$Launch`""' in seven
-    # From the app, um-codex asks for the working folder (home is refused).
-    assert "\\Scripts\\um-codex.exe') launch --from-app\"" in seven
-    launch = re.search(r"(?s)\$Launch = (.*?)\n\$PowerShellArguments", seven).group(1)
+    assert "\\Scripts\\um-codex.exe') ui --detach\"" in seven
+    launch = re.search(r"(?s)\$Launch = (.*?)\n\$LinkTarget", seven).group(1)
     assert '`"' not in launch  # no double quotes inside -Command "..."
     assert "([string](Get-Content -LiteralPath $Marker -TotalCount 1)).Trim()" in launch
-    assert '-d `"$UserHome`" -- `"$WindowsPowerShell`"' in seven  # "--" ends wt's options
+    assert "`$Env:PYTHONUTF8 = '1'" in launch
     # Someone else's Desktop shortcut of that name is left alone, and it says so.
     assert ".IndexOf($Marker, [StringComparison]::OrdinalIgnoreCase) -lt 0" in seven
     assert "that isn't UM-Codex's; it was left alone." in seven

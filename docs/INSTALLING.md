@@ -63,10 +63,11 @@ Steps:
    no terminal never stops the install: `um-codex` asks for the key at its
    first launch.
 6. **Launcher:** `UM-Codex.app` (bundle id `edu.umich.umcodex`, icon from
-   the package's `umcodex/branding/UM-Codex.icns`), which opens one Terminal
-   window running `bin/um-codex launch --from-app` (so the working folder
-   offered is the last setup's, or `~/Documents/UM-Codex`, not Terminal's
-   home folder); and a Desktop shortcut `~/Desktop/UM-Codex`.
+   the package's `umcodex/branding/UM-Codex.icns`), whose script runs
+   `bin/um-codex ui --detach`: UM-Codex's launcher window (DESIGN.md, M5)
+   starts in the background and opens in the browser. No Terminal window
+   opens until a setup is started there, and `LSUIElement` keeps the app
+   out of the Dock. And a Desktop shortcut `~/Desktop/UM-Codex`.
    Then "Done", where everything went, and the offer to show and open it.
 
 `installer/macos/uninstall.sh` runs `um-codex uninstall` (which first asks
@@ -165,7 +166,7 @@ Commits are in github.com/SripadaLab-UM/ihs-datalab.
 - The app goes in `/Applications` if writable without sudo, else `~/Applications`. Only UM-Codex's own app (its bundle id) is replaced or removed: someone else's in `/Applications` is left and ours goes in `~/Applications`; someone else's in `~/Applications` stops the installer with what to do; ours that can't be replaced in `/Applications` falls back to `~/Applications`, in `~/Applications` it says to quit UM-Codex. (`627383c`, `86efba7`)
 - An earlier installer's copy in the other Applications folder is removed. (`627383c`)
 - The app runs `bin/um-codex`, never a version's folder, so it keeps working when `current` changes. (`627383c`)
-- The program's path goes to AppleScript as an argument (`osascript - '<path>'`, single-quote escaped; `quoted form of` for Terminal), so a home folder like `/Users/o'brien` works. (`86efba7`)
+- The program's path is single-quote escaped in the app's script, so a home folder like `/Users/o'brien` works. (`86efba7`; DataLab handed it to AppleScript as an argument, as UM-Codex did before M5.)
 - The icon is copied out of the package into the bundle, so removing an old version doesn't take it; `touch` the app so Finder notices. (`627383c`)
 - A Desktop shortcut: a link to the app, replacing only a link to exactly `~/Applications/UM-Codex.app` or `/Applications/UM-Codex.app`; anything else there is left alone. The uninstaller removes only such a link. (`627383c`, `86efba7`)
 - "Done" says where the app, the shortcut, the command and the program files are, then, only with someone at a terminal, offers "Show in Finder" (`open -R`) and "Open now". (`627383c`)
@@ -189,8 +190,12 @@ Commits are in github.com/SripadaLab-UM/ihs-datalab.
 - The key step runs `um-codex key < /dev/tty` (DataLab's `datalab setup`
   asked for keys itself), and `set +a` follows `set -eu`, so nothing the
   script sets is exported even if sh started with allexport.
-- The app runs `um-codex launch --from-app` in a single Terminal window (a
-  Terminal that wasn't running uses the window it opens with).
+- The app runs `um-codex ui --detach` (the launcher window, M5) with no
+  Terminal window and no Dock icon (`LSUIElement`). A setup started there
+  opens one Terminal window, through a `.command` file the launcher writes
+  for that start (it removes itself), so no permission to control Terminal
+  is needed. Before M5 the app ran `um-codex launch --from-app` in Terminal
+  through AppleScript; that command still works.
 - The uninstaller removes `~/Library/Caches/UM-Codex` and an empty data
   folder.
 
@@ -237,10 +242,12 @@ right if a policy took it; (3) the pinned uv; (4) UM-Codex in
 Toolkit key, read masked and piped to `um-codex key --from-stdin` (0 saved,
 1 invalid: asked again up to 3 times, 2 cancelled), kept if one is saved
 unless `-ReplaceKey`, skipped under `-Yes`; (7) "UM-Codex" in the Start menu
-and on the Desktop with `UM-Codex.ico`, opening Windows Terminal if it's
-installed, else Windows PowerShell, running `um-codex launch --from-app`
-(which asks for the working folder: the terminal starts in the home folder,
-which Codex may not have). Then "All done!" with
+and on the Desktop with `UM-Codex.ico`, running Windows PowerShell with its
+window hidden (and the shortcut minimized, so it at most flashes), which runs
+`um-codex.exe ui --detach`: the launcher window (DESIGN.md, M5) starts in the
+background with a console that's never shown (the Docker commands it runs
+share it) and opens in the browser. A setup started there opens Windows
+Terminal if it's installed, else Windows PowerShell. Then "All done!" with
 a summary.
 
 `uninstall.ps1 [-DeleteData | -KeepData] [-Yes]` (both data options at once:
@@ -340,7 +347,10 @@ Uninstalling
 - The after-restart run uses a saved copy of the installer (`%LOCALAPPDATA%\UM-Codex\installer\install.ps1`).
 - The `um-codex` command: `bin` is added to the user PATH as stored (REG_EXPAND_SZ entries kept unexpanded), announced with WM_SETTINGCHANGE, and removed on uninstall.
 - No `.cmd` shim: cmd.exe asks "Terminate batch job (Y/N)?" after every Ctrl-C. The typed `um-codex` is `bin\um-codex.exe`, a copy of the current version's own uv launcher (which names that version's `python.exe` by full path), recopied on every switch, before `current` is written: copied beside it as `.um-codex.exe.new`, then a running copy is renamed aside rather than overwritten and the new one moved into place; old copies are removed later. `um-codex update` does the same. The shortcut runs the version `current` names directly. A `.cmd` beside the `.exe` would never run (PATHEXT prefers `.exe`), so an earlier one is removed.
-- In Windows Terminal, `;` is escaped as `\;` and `--` ends wt's own options.
+- In Windows Terminal, `--` ends wt's own options; the launcher window gives
+  PowerShell its command as `-EncodedCommand`, so there's no `;` for wt to
+  split at (before M5 the shortcut escaped it as `\;`, and the uninstaller
+  still recognises such a shortcut).
 - `current` and `previous` are written to `<file>.tmp` and moved into place (`Move-Item -Force`), and read as `"$(Get-Content -TotalCount 1)".Trim()`, so an empty or half-written file never breaks a launch.
 - The key is never on a command line, in the environment or in a file: the installer writes it to `um-codex key --from-stdin`'s standard input itself (`Process.StandardInput`, UTF-8 without a BOM), not through PowerShell's pipe (`$OutputEncoding`).
 - A host other than the console (PowerShell ISE, an editor's) stops at once and says to open Windows PowerShell or Windows Terminal; if a key can't be read a key at a time, the prompt falls back to `Read-Host -AsSecureString`.
@@ -354,7 +364,8 @@ job parses both under Windows PowerShell 5.1 and runs the parts that can run
 there. Still unverified until a Windows acceptance run: the full install and
 restart, the elevated part, the VM fix and Docker restart against a real
 Docker Desktop, the masked prompt in conhost and Windows Terminal, the
-Windows Terminal shortcut, the PATH change reaching new terminals, the
+shortcut's hidden PowerShell and the launcher window's terminal (Windows
+Terminal or PowerShell) and folder picker, the PATH change reaching new terminals, the
 uninstaller with UM-Codex installed, and `um-codex update` and `--rollback`
 (the copy of the new launcher into `bin`, renaming the running one aside),
 which are unit-tested only.

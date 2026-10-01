@@ -36,8 +36,8 @@
 #   5. Runs `um-codex key`, which asks for your U-M GPT Toolkit API key (one *
 #      per character) and saves it in your macOS Keychain. A key that's saved
 #      already is kept, unless --replace-key.
-#   6. Adds the UM-Codex app (it opens Terminal running `um-codex launch
-#      --from-app`) to
+#   6. Adds the UM-Codex app (it opens UM-Codex's launcher window, `um-codex
+#      ui`, in the browser) to
 #      /Applications, or to ~/Applications if you can't add to /Applications
 #      without sudo, and a shortcut to it on your Desktop. At the end it says
 #      where everything went and offers to show the app in Finder and open it.
@@ -993,45 +993,23 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>UM-Codex</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>$ICONFILE</string>
+  <key>LSUIElement</key><true/>
 </dict></plist>
 PLIST
-# UM-Codex runs in a Terminal window: Codex's own interface is its front end.
-# It runs `um-codex launch --from-app`: Terminal's folder (home) isn't offered
-# as the working folder; the last setup's is, or ~/Documents/UM-Codex.
+# The app opens UM-Codex's launcher window (`um-codex ui --detach`): a page in
+# the browser, served by UM-Codex on this computer, where the person picks or
+# makes a setup. It runs in the background, so no Terminal window opens until
+# a setup is started (then the launcher opens one, with Codex in it), and the
+# app has no Dock icon of its own (LSUIElement in Info.plist).
 # The app runs bin/um-codex, never a version's own folder: that opens the
 # version `current` names, so the app (and the Desktop shortcut to it) keeps
 # working when another version is installed.
-# The path goes to AppleScript as an argument, single-quoted for this script
-# ('\'' for a quote, as in /Users/o'brien), and AppleScript quotes it for
-# Terminal's shell with `quoted form of`.
+# The path is single-quoted for the app's script ('\'' for a quote, as in
+# /Users/o'brien).
 QUOTED="$(printf '%s' "$UMCODEX" | sed "s/'/'\\\\''/g")"
 cat > "$APP/Contents/MacOS/UM-Codex" <<LAUNCH
 #!/bin/sh
-exec osascript - '$QUOTED' <<'OSA'
-on run argv
-  set command to (quoted form of item 1 of argv) & " launch --from-app"
-  set wasRunning to application "Terminal" is running
-  tell application "Terminal"
-    if wasRunning then
-      do script command
-    else
-      -- Starting Terminal opens its own first window: use that one, so
-      -- there's one window, not that one plus another for UM-Codex.
-      activate
-      repeat 50 times
-        if (count of windows) > 0 then exit repeat
-        delay 0.1
-      end repeat
-      if (count of windows) > 0 then
-        do script command in window 1
-      else
-        do script command
-      end if
-    end if
-    activate
-  end tell
-end run
-OSA
+exec '$QUOTED' ui --detach
 LAUNCH
 chmod +x "$APP/Contents/MacOS/UM-Codex"
 touch "$APP" # so Finder picks up the icon
@@ -1076,10 +1054,9 @@ if [ -n "$DESKTOP_LINK" ]; then echo "  Desktop shortcut:  $DESKTOP_LINK"; fi
 if [ "$LINKED" = 1 ]; then echo "  The command:       $COMMAND_LINK"; fi
 echo "  Program files:     $ROOT"
 echo "Open it with the Desktop shortcut, from Applications in Finder, or with Spotlight"
-echo "(Cmd-Space, then type $NAME). It opens a Terminal window and asks which folder"
-echo "Codex works in: drag a folder there, or press Enter for your last one (the first"
-echo "time, ~/Documents/UM-Codex, made for you). Then it asks what else Codex may see"
-echo "and do, and starts Codex there."
+echo "(Cmd-Space, then type $NAME). It opens UM-Codex's window in your browser: make a"
+echo "setup there (which folders Codex may use, and whether it can reach the internet),"
+echo "then Start opens Codex in a Terminal window."
 echo "Or, in any Terminal window, in the folder you want to work in, run: $RUN_HOW"
 if [ "$LINKED" = 1 ] && [ "$ON_PATH" = 0 ]; then
   echo "(In a new Terminal window plain um-codex may work too: ~/.local/bin wasn't on"

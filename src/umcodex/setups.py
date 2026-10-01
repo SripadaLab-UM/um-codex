@@ -32,6 +32,9 @@ from umcodex.toolkit import DEFAULT_MODEL
 Ask = Callable[[str], str]
 Say = Callable[[str], None]
 
+# Where a launch from the launcher window opens Codex (ui/opener.py).
+OPEN_IN = ("terminal", "codex-app")
+
 
 @dataclass(frozen=True)
 class Setup:
@@ -47,6 +50,9 @@ class Setup:
     # it existed have neither key, which means off.
     browser: bool = False
     browser_asks: bool = True  # approve each browser action
+    # Where Codex opens when started from the launcher window (M5): only
+    # "terminal" for now; "codex-app" is being tried on another branch.
+    open_in: str = "terminal"
 
     def to_toml(self) -> dict:
         return {
@@ -60,6 +66,7 @@ class Setup:
             "approvals": self.approvals,
             "browser": self.browser,
             "browser_asks": self.browser_asks,
+            "open_in": self.open_in,
         }
 
     @classmethod
@@ -79,6 +86,7 @@ class Setup:
             approvals=approvals,
             browser=internet and raw.get("browser", False) is True,
             browser_asks=raw.get("browser_asks", True) is not False,
+            open_in=str(raw["open_in"]) if raw.get("open_in") in OPEN_IN else "terminal",
         )
 
 
@@ -185,6 +193,9 @@ def resolved(setup: Setup, layout: folders.Layout) -> Setup:
 # --- Asking -----------------------------------------------------------------
 
 
+WRITES_ARE_REAL = (
+    "These are your real files: changes and deletions there happen straight away, with no undo."
+)
 BROWSER_PLAIN = "Codex can open websites in a fresh browser inside the sandbox; it has none of your logins."
 BROWSER_QUESTION = f"Browser tool on? ({BROWSER_PLAIN})"
 BROWSER_ASKS_QUESTION = "Approve each browser action (opening pages, clicking, typing)?"
@@ -348,6 +359,7 @@ def ask_setup(
         approvals=approvals,
         browser=browser,
         browser_asks=browser_asks,
+        open_in=base.open_in if base else "terminal",
     )
     return setup
 
@@ -369,6 +381,7 @@ def summary(setup: Setup, layout: folders.Layout) -> list[str]:
         f"  {layout.working}   (its working folder, /work)",
     ]
     lines += [f"  {host}   ({target})" for host, target in layout.writes]
+    lines.append(WRITES_ARE_REAL)
     if layout.reads:
         lines += ["", "Codex can only read:"]
         lines += [f"  {host}   ({target})" for host, target in layout.reads]
