@@ -239,7 +239,32 @@ modes, rigor, and the frontend.
      question isn't offered.
 4. **M3, releases:** signed releases (Ed25519, the `release` environment,
    the tag rules) and `um-codex update` with rollback.
-5. **Acceptance, on a fresh Mac and a fresh Windows machine:**
+5. **M4, "On this computer" mode (asked for on 2026-10-01):**
+   - The first launch question becomes "Where should Codex run? In a
+     sandbox (container) / On this computer". It's saved with the setup.
+     The group is expected to use both.
+   - On this computer:
+     - A native Codex, pinned and installed by UM-Codex in its program
+       folder, not whatever `codex` is on PATH.
+     - The same localhost relay, so the key stays in the keychain and is
+       never put in `auth.json`.
+     - A working folder, and Codex's own sandbox as a choice: "full access"
+       (the default) or "this folder only".
+   - Browser control in the person's own browser: the Playwright MCP server
+     connected to their running Chrome or Edge through its extension. Each
+     action asks for approval by default.
+   - Computer control:
+     - First, a short spike on the pinned Codex: do `computer_use`,
+       `browser_use` and `in_app_browser` work in the terminal Codex?
+     - If they don't, add a computer-control MCP tool (screenshots, mouse,
+       keyboard), with approval for each action.
+     - On a Mac, this needs one-time Screen Recording and Accessibility
+       permission.
+   - The summary says plainly that Codex can do anything the person can do
+     on this computer.
+   - Docker becomes optional in the installer for people who use only this
+     mode.
+6. **Acceptance, on a fresh Mac and a fresh Windows machine:**
    1. install from the README in under 20 minutes;
    2. launch with internet off: Codex answers, `curl https://example.com`
       fails, and it can write in the working folder but not in a read-only
