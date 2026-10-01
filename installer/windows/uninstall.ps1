@@ -299,7 +299,7 @@ foreach ($folder in @(Get-ChildItem -LiteralPath $StateDir -Directory -Filter "u
 # The program files: only what install.ps1 and the updater put there
 # (downloads: a release while it installs); anything else in the folder stays.
 foreach ($name in "versions", "bin", "icons", "downloads") { Remove-Tree (Join-Path $Root $name) }
-foreach ($name in "current", "previous") {
+foreach ($name in "current", "previous", "launchers") {
     $file = Join-Path $Root $name
     $item = Get-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
     if ($item -and -not $item.PSIsContainer) { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
@@ -309,7 +309,7 @@ if (Test-Path -LiteralPath $Root) {
     $inRoot = @(Get-ChildItem -LiteralPath $Root -Force -ErrorAction SilentlyContinue)
     if ($inRoot.Count -eq 0) { Remove-Tree $Root }
     foreach ($entry in $inRoot) {
-        if ($entry.Name -in "versions", "bin", "icons", "downloads", "current", "previous") {
+        if ($entry.Name -in "versions", "bin", "icons", "downloads", "current", "previous", "launchers") {
             $Left += "$($entry.FullName) (couldn't be removed: a file still in use? Delete it yourself)"
         } else {
             $Left += "$($entry.FullName) (not UM-Codex's, so it was left)"
@@ -317,13 +317,14 @@ if (Test-Path -LiteralPath $Root) {
     }
 }
 
-# The Start menu entry, and the Desktop shortcut only if it's UM-Codex's: it
-# runs this program folder's current version, written as install.ps1 writes it.
+# The Start menu entry, and the Desktop shortcut only if it's UM-Codex's: its
+# command line names this program folder (single-quoted, then "\"), as every
+# installer and `um-codex launchers` (umcodex/launchers.py) write it.
 $StartMenu = Join-Path $Env:APPDATA "Microsoft\Windows\Start Menu\Programs"
 $Link = Join-Path $StartMenu "UM-Codex.lnk"
 if (Test-Path -LiteralPath $Link -PathType Leaf) { Remove-Item -LiteralPath $Link -Force }
 $QuotedRoot = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Root)
-$Marker = "'$QuotedRoot\current'"
+$Marker = "'$QuotedRoot\"
 $Desktop = [Environment]::GetFolderPath("Desktop")
 if ($Desktop) {
     $Link = Join-Path $Desktop "UM-Codex.lnk"

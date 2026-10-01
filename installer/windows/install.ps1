@@ -1897,40 +1897,28 @@ if ($HasKey -and -not $ReplaceKey) {
 }
 
 Step "Step 7 of 7: Adding UM-Codex to the Start menu and the Desktop"
-# The shortcuts open UM-Codex's launcher window: `um-codex ui --detach` starts
-# it in the background (no window of its own) and its page opens in the
-# browser; starting a setup there opens Windows Terminal (or Windows
-# PowerShell) with Codex in it. The shortcut runs Windows PowerShell with its
-# window hidden (it may show for a moment) and minimized, which runs the
-# version `current` names (what an update switches), with PYTHONUTF8.
+# What the shortcuts contain comes from UM-Codex itself (umcodex/launchers.py),
+# which `um-codex update` also uses to bring them up to date, so the two never
+# differ: they open UM-Codex's launcher window (`um-codex ui --detach` starts
+# it in the background, with no window of its own, and its page opens in the
+# browser; starting a setup there opens Windows Terminal or Windows
+# PowerShell with Codex in it). Windows PowerShell, hidden and minimized,
+# runs bin\um-codex.exe (the version `current` names; an update replaces it),
+# with PYTHONUTF8, and the icon is kept in icons\, beside bin\.
 $StartMenu = Join-Path $Env:APPDATA "Microsoft\Windows\Start Menu\Programs"
 $LinkName = "UM-Codex"
-# The icon comes with the package, and is copied beside bin\ so an update
-# that later removes this version's folder doesn't take it away.
-$Icons = Join-Path $Root "icons"
-$Icon = Join-Path $Icons "UM-Codex.ico"
-$PackagedIcon = Join-Path $Target "Lib\site-packages\umcodex\branding\UM-Codex.ico"
-if (Test-Path -LiteralPath $PackagedIcon -PathType Leaf) {
-    New-Item -ItemType Directory -Force -Path $Icons | Out-Null
-    Copy-Item -LiteralPath $PackagedIcon $Icon -Force
-}
-# The program folder, quoted for a single-quoted PowerShell string, so a
-# folder like C:\Users\o'brien works.
+# The program folder, quoted for a single-quoted PowerShell string (as in
+# C:\Users\o'brien), then "\": every UM-Codex shortcut's command line has it,
+# this one's and earlier installers' alike.
 $QuotedRoot = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Root)
-$Marker = "'$QuotedRoot\current'"
-# (No double quotes in it: it goes inside -Command "...". [string] makes an
-# empty or missing first line "", not $null.)
-$Launch = "`$v = ([string](Get-Content -LiteralPath $Marker -TotalCount 1)).Trim(); `$Env:PYTHONUTF8 = '1'; " +
-    "& ('$QuotedRoot\versions\' + `$v + '\Scripts\um-codex.exe') ui --detach"
-$LinkTarget = $WindowsPowerShell
-$LinkArguments = "-NoProfile -WindowStyle Hidden -Command `"$Launch`""
-$UserHome = [Environment]::GetFolderPath("UserProfile")
+$Marker = "'$QuotedRoot\"
 $Desktop = [Environment]::GetFolderPath("Desktop")
 $Links = @(Join-Path $StartMenu "$LinkName.lnk")
 if ($Desktop) {
     # A Desktop shortcut of that name is replaced only if it's UM-Codex's (it
-    # runs this program folder's current version); anything else there is
-    # the person's own.
+    # runs this program folder's UM-Codex); anything else there is the
+    # person's own. (An earlier installer's, in Windows Terminal, has each
+    # ";" written "\;".)
     $DesktopLink = Join-Path $Desktop "$LinkName.lnk"
     $Existing = if (Test-Path -LiteralPath $DesktopLink) { (New-Object -ComObject WScript.Shell).CreateShortcut($DesktopLink) } else { $null }
     if ($Existing -and "$($Existing.Arguments)".IndexOf($Marker, [StringComparison]::OrdinalIgnoreCase) -lt 0 -and
@@ -1941,15 +1929,10 @@ if ($Desktop) {
         $Links += $DesktopLink
     }
 }
-foreach ($path in $Links) {
-    $Shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($path)
-    $Shortcut.TargetPath = $LinkTarget
-    $Shortcut.Arguments = $LinkArguments
-    $Shortcut.WorkingDirectory = $UserHome
-    $Shortcut.Description = "UM-Codex: Codex on U-M GPT Toolkit, in a Docker container"
-    $Shortcut.WindowStyle = 7  # minimized: the hidden PowerShell window doesn't flash up
-    if (Test-Path -LiteralPath $Icon -PathType Leaf) { $Shortcut.IconLocation = "$Icon,0" }
-    $Shortcut.Save()
+& $UmCodex launchers --write @Links
+if ($LASTEXITCODE -ne 0) {
+    Stop-Install ("The Start menu shortcut couldn't be made (the messages above say why). Run the " +
+        "installer again; UM-Codex itself is installed (type um-codex in a new terminal).")
 }
 Good "Added $LinkName to the Start menu$(if ($Desktop) { ' and the Desktop' }) (it opens UM-Codex's window in your browser)."
 Remove-Item $ResumeFile -ErrorAction SilentlyContinue

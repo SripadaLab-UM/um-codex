@@ -977,42 +977,19 @@ else
   esac
 fi
 APP="$APPS/$NAME.app"
-# The icon comes with the package. The app keeps its own copy, so removing
-# this version's folder later doesn't take the icon with it.
-ICONFILE=""
-for found in "$TARGET"/lib/python*/site-packages/umcodex/branding/UM-Codex.icns; do
-  if [ -f "$found" ] && cp "$found" "$APP/Contents/Resources/UM-Codex.icns"; then ICONFILE="UM-Codex"; fi
-done
-cat > "$APP/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>CFBundleName</key><string>$NAME</string>
-  <key>CFBundleDisplayName</key><string>$NAME</string>
-  <key>CFBundleIdentifier</key><string>$BUNDLE</string>
-  <key>CFBundleExecutable</key><string>UM-Codex</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleIconFile</key><string>$ICONFILE</string>
-  <key>LSUIElement</key><true/>
-</dict></plist>
-PLIST
-# The app opens UM-Codex's launcher window (`um-codex ui --detach`): a page in
-# the browser, served by UM-Codex on this computer, where the person picks or
-# makes a setup. It runs in the background, so no Terminal window opens until
-# a setup is started (then the launcher opens one, with Codex in it), and the
-# app has no Dock icon of its own (LSUIElement in Info.plist).
-# The app runs bin/um-codex, never a version's own folder: that opens the
-# version `current` names, so the app (and the Desktop shortcut to it) keeps
-# working when another version is installed.
-# The path is single-quoted for the app's script ('\'' for a quote, as in
-# /Users/o'brien).
-QUOTED="$(printf '%s' "$UMCODEX" | sed "s/'/'\\\\''/g")"
-cat > "$APP/Contents/MacOS/UM-Codex" <<LAUNCH
-#!/bin/sh
-exec '$QUOTED' ui --detach
-LAUNCH
-chmod +x "$APP/Contents/MacOS/UM-Codex"
-touch "$APP" # so Finder picks up the icon
+# What the app contains comes from UM-Codex itself (umcodex/launchers.py),
+# which `um-codex update` also uses to bring it up to date, so the two never
+# differ: its Info.plist (bundle id, no Dock icon of its own), its own copy of
+# the icon, and a script that opens UM-Codex's launcher window (`um-codex ui
+# --detach`, a page in the browser; no Terminal window opens until a setup is
+# started). The script runs bin/um-codex, never a version's own folder: that
+# opens the version `current` names, so the app (and the Desktop shortcut to
+# it) keeps working when another version is installed.
+if ! "$UMCODEX" launchers --write "$APP"; then
+  echo "The app couldn't be made in $APPS (the message above says why). Run this"
+  echo "installer again (UM-Codex itself is installed: run $RUN_HOW)."
+  exit 1
+fi
 echo "Added $NAME to $APPS."
 # An earlier installer's copy in the other Applications folder would be a
 # second, stale "$NAME".

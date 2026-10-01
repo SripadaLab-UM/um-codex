@@ -22,6 +22,10 @@
    one-line file replaced whole). On Windows `bin\\um-codex.exe` becomes a
    copy of the new version's own launcher (the running one is renamed aside).
 6. **Prune** every other version folder.
+7. **Refresh the launchers** (the Mac app, the Windows shortcuts) with the new
+   version's own `um-codex launchers --refresh` (launchers.py): an older
+   installer's are rewritten as this version writes them. If one can't be,
+   the update still stands, and it says what to do.
 
 If any step fails, what it installed is removed and this version stays the
 one in use. It refuses while a launch is running (each holds a lock), and
@@ -463,6 +467,7 @@ class Updater:
                 self.say(str(failed))
                 return 1
             remember_check(self.data, None)
+            self.refresh_launchers(offer.release.version)
             self.say("")
             self.say(f"Updated to UM-Codex {offer.release.version}. The next launch uses it.")
             self.say(f"(UM-Codex {self.current} is kept: `um-codex update --rollback` goes back to it.)")
@@ -490,6 +495,7 @@ class Updater:
                 with contextlib.suppress(OSError):
                     self.layout.restore((current, previous))
                 return 1
+            self.refresh_launchers(previous)
             self.say(f"UM-Codex {previous} is the one in use now; {current} is kept.")
             self.say("(`um-codex update --rollback` again switches back.)")
             # Its images are usually still here; if not, they're pulled now.
@@ -679,6 +685,36 @@ class Updater:
         said = result.stdout.strip()
         if said != f"UM-Codex {version}":
             raise UpdateFailed(f"The installed UM-Codex says {said!r}, not {version}.")
+
+    def refresh_launchers(self, version: str) -> bool:
+        """The app or shortcuts, as `version` (now in use) writes them: its own
+        `um-codex launchers --refresh`. Never fails the update or rollback; if
+        they can't be rewritten, it says what to do."""
+        try:
+            done = self._run([str(self.layout.executable(version)), "launchers", "--refresh"], timeout=300)
+        except (OSError, subprocess.SubprocessError) as error:
+            done = subprocess.CompletedProcess([], 1, "", f"{type(error).__name__}: {error}")
+        for line in (done.stdout or "").strip().splitlines():
+            self.say(line)
+        if done.returncode == 0:
+            return True
+        app = "app" if self.platform == "darwin" else "Start menu and Desktop shortcuts"
+        if "launchers" in (done.stderr or "") and "invalid choice" in (done.stderr or ""):
+            # A version from before launchers.py (0.1.0-alpha.1).
+            self.say(
+                f"UM-Codex {version} can't rewrite the UM-Codex {app}, which may not open it. Open "
+                f"UM-Codex by running um-codex in a terminal instead, or install {version} again with "
+                "its installer."
+            )
+        else:
+            for line in (done.stderr or "").strip().splitlines()[-5:]:
+                self.say(f"  {line}")
+            self.say(
+                f"The UM-Codex {app} couldn't all be brought up to date (see above). UM-Codex "
+                f"{version} is installed and works: run um-codex launchers --refresh to try again, or "
+                "run the UM-Codex installer again."
+            )
+        return False
 
     def _pull(self, version: str) -> bool:
         """The version's own `um-codex pull`, its progress shown."""

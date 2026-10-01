@@ -26,6 +26,9 @@ class FakeTools:
         self.pull_code = 0
         self.says: str | None = None  # what --version says, if not the folder's version
         self.pip_code = 0
+        # What the new version's `um-codex launchers --refresh` does.
+        brought = "Brought /Applications/UM-Codex.app up to date.\n"
+        self.launchers = subprocess.CompletedProcess([], 0, brought, "")
 
     def __call__(
         self, command: Sequence[str], *, timeout: float, cwd: Path | None = None, capture: bool = True
@@ -47,6 +50,8 @@ class FakeTools:
             return self.done(out=f"UM-Codex {self.says or program.parent.parent.name}\n")
         if program.name.startswith("um-codex") and command[1:] == ["pull"]:
             return self.done(self.pull_code)
+        if program.name.startswith("um-codex") and command[1:] == ["launchers", "--refresh"]:
+            return self.launchers
         raise AssertionError(f"unexpected command {command}")
 
     @staticmethod
@@ -142,10 +147,13 @@ def test_an_update_installs_beside_pulls_switches_and_prunes(app, github, key, d
         "--default-index", "https://pypi.org/simple", "--link-mode", "copy",
         "--python", str(new / "bin" / "python"), "-r", "requirements.txt",
     ]  # fmt: skip
-    # The new version checks itself, then pulls its own images, showing Docker's progress.
-    [version, pull] = tools.ran("um-codex")
+    # The new version checks itself, then pulls its own images, showing Docker's
+    # progress; once it's the one in use, it brings the app up to date.
+    [version, pull, refresh] = tools.ran("um-codex")
     assert version == [str(new / "bin" / "um-codex"), "--version"]
     assert pull == [str(new / "bin" / "um-codex"), "pull"]
+    assert refresh == [str(new / "bin" / "um-codex"), "launchers", "--refresh"]
+    assert "Brought /Applications/UM-Codex.app up to date." in said
     assert [capture for c, _, capture in tools.commands if c[-1] == "pull"] == [False]
     assert "Updated to UM-Codex 0.1.0a3" in "\n".join(said)
     assert json.loads((data_folder / "update-check.json").read_text())["available"] is None
@@ -174,6 +182,56 @@ def test_windows_gets_a_copy_of_the_new_versions_launcher_in_bin(tmp_path, githu
     assert (root / "bin" / "um-codex.exe").read_text() == "launcher of 0.1.0a1"
     # The copy moved aside earlier is gone once nothing runs it.
     assert not aside.exists() and len(list((root / "bin").glob("um-codex.exe.old-*"))) == 1
+
+
+def test_the_launchers_are_refreshed_by_the_version_switched_to(app, github, key, data_folder):
+    private, public = key
+    github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
+    tools, said = FakeTools(), []
+    up = updater(app, github, public, tools, said, data_folder)
+
+    def switched_first(command, **kw):
+        if command[1:] == ["launchers", "--refresh"]:
+            assert pointer(app)[0] == Path(command[0]).parent.parent.name  # `current` names it already
+        return tools(command, **kw)
+
+    up._run = switched_first
+    assert up.update() == 0
+    assert up.rollback() == 0
+    refreshed = [c for c in tools.ran("um-codex") if c[1:] == ["launchers", "--refresh"]]
+    programs = [str(app / "versions" / v / "bin" / "um-codex") for v in ("0.1.0a3", "0.1.0a1")]
+    assert refreshed == [[program, "launchers", "--refresh"] for program in programs]
+
+
+def test_launchers_that_cant_be_refreshed_dont_fail_the_update(app, github, key, data_folder):
+    private, public = key
+    github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
+    tools, said = FakeTools(), []
+    tools.launchers = subprocess.CompletedProcess(
+        [], 1, "/Applications/UM-Codex.app couldn't be brought up to date (PermissionError: no).\n", ""
+    )
+    assert updater(app, github, public, tools, said, data_folder).update() == 0
+    assert pointer(app) == ("0.1.0a3", "0.1.0a1")
+    text = "\n".join(said)
+    assert "couldn't be brought up to date (PermissionError: no)" in text
+    assert "UM-Codex 0.1.0a3 is installed and works: run um-codex launchers --refresh" in text
+    assert "Updated to UM-Codex 0.1.0a3" in text
+
+
+def test_rolling_back_to_a_version_without_launchers_says_what_to_do(app, github, key, data_folder):
+    private, public = key
+    github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
+    tools, said = FakeTools(), []
+    up = updater(app, github, public, tools, said, data_folder)
+    assert up.update() == 0
+    tools.launchers = subprocess.CompletedProcess(
+        [], 2, "", "um-codex: error: argument command: invalid choice: 'launchers' (choose from ...)\n"
+    )
+    assert up.rollback() == 0
+    text = "\n".join(said)
+    assert "UM-Codex 0.1.0a1 can't rewrite the UM-Codex app, which may not open it." in text
+    assert "running um-codex in a terminal" in text
+    assert pointer(app) == ("0.1.0a1", "0.1.0a3")
 
 
 def test_rollback_switches_back_and_forth(app, github, key, data_folder):

@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from umcodex import launchers
+
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the macOS installer's shell")
 
 INSTALLER = Path(__file__).resolve().parents[1] / "installer" / "macos" / "install.sh"
@@ -47,6 +49,9 @@ case "$*" in
   uninstall*)
     if [ -t 0 ]; then echo "uninstall read a terminal" >> "$UMCODEX_TEST_LOG"; fi
     exit "${UMCODEX_TEST_UNINSTALL:-0}" ;;
+  launchers*)
+    # The real `um-codex launchers` (umcodex/launchers.py): what the app contains.
+    exec "$UMCODEX_TEST_PYTHON" -m umcodex "$@" ;;
 esac
 exit 0
 """
@@ -85,11 +90,7 @@ case "$1" in
     for last; do :; done
     mkdir -p "$last/bin"
     # A real Python: the installer's masked prompt runs in it.
-    ln -s "$UMCODEX_TEST_PYTHON" "$last/bin/python"
-    # The icon the package brings (umcodex/branding).
-    icons="$last/lib/python3.13/site-packages/umcodex/branding"
-    mkdir -p "$icons"
-    echo "the icon" > "$icons/UM-Codex.icns" ;;
+    ln -s "$UMCODEX_TEST_PYTHON" "$last/bin/python" ;;
   pip)
     here="$(basename "$(pwd)")"
     echo "pip $* (in $here) UV_INDEX_URL=${UV_INDEX_URL:-unset}" >> "$UMCODEX_TEST_UVLOG"
@@ -346,13 +347,17 @@ def test_it_installs_a_version_in_its_own_folder_then_pulls_the_images(machine):
         "--version",  # the new folder's own check
         "--version",  # through bin/um-codex, the launcher's command
         "pull",
+        f"launchers --write {machine['apps'] / 'UM-Codex.app'}",  # the app, as UM-Codex writes it
     ]
     launcher = machine["apps"] / "UM-Codex.app" / "Contents" / "MacOS" / "UM-Codex"
     text = launcher.read_text()
     # The launcher window, in the background: no Terminal window, no Dock icon.
-    assert text == f"#!/bin/sh\nexec '{app}/bin/um-codex' ui --detach\n"
+    assert text.endswith(f"\nexec '{app}/bin/um-codex' ui --detach\n")
+    assert text == launchers.mac_app_files(app, None)["Contents/MacOS/UM-Codex"].decode()
     plist = (machine["apps"] / "UM-Codex.app" / "Contents" / "Info.plist").read_text()
     assert "<key>LSUIElement</key><true/>" in plist
+    # The format it was written in, so a later version knows whether to rewrite it.
+    assert (app / "launchers").read_text() == f"{launchers.FORMAT}\n"
 
 
 def test_installing_a_newer_version_keeps_the_one_before(machine):
@@ -760,7 +765,8 @@ def test_the_app_goes_in_applications_with_its_icon_and_a_desktop_shortcut(machi
     plist = (app / "Contents" / "Info.plist").read_text()
     assert "<key>CFBundleIconFile</key><string>UM-Codex</string>" in plist
     assert "<key>CFBundleIdentifier</key><string>edu.umich.umcodex</string>" in plist
-    assert (app / "Contents" / "Resources" / "UM-Codex.icns").read_text() == "the icon\n"
+    # The icon UM-Codex brings, the app's own copy.
+    assert (app / "Contents" / "Resources" / "UM-Codex.icns").read_bytes() == launchers.mac_icon()
     link = machine["home"] / "Desktop" / "UM-Codex"
     assert link.is_symlink() and Path(os.readlink(link)) == app
     assert not (machine["home"] / "Applications").exists()
@@ -769,6 +775,20 @@ def test_the_app_goes_in_applications_with_its_icon_and_a_desktop_shortcut(machi
     assert f"Desktop shortcut:  {link}" in done.stdout
     assert f"Program files:     {root(machine)}" in done.stdout
     assert "Open UM-Codex now?" not in done.stdout and "Finder? [" not in done.stdout
+
+
+def test_an_alpha_1_app_is_rewritten_as_this_version_writes_it(machine):
+    # alpha.1's app: Terminal, `launch --from-app`, a Dock icon.
+    old = machine["apps"] / "UM-Codex.app" / "Contents"
+    (old / "MacOS").mkdir(parents=True)
+    (old / "Info.plist").write_text(
+        "<plist><dict><key>CFBundleIdentifier</key><string>edu.umich.umcodex</string></dict></plist>"
+    )
+    (old / "MacOS" / "UM-Codex").write_text("#!/bin/sh\nexec osascript - 'x' launch --from-app\n")
+    done = install(machine, "0.1.0a3")
+    assert done.returncode == 0, done.stdout + done.stderr
+    for name, content in launchers.mac_app_files(root(machine), launchers.mac_icon()).items():
+        assert (machine["apps"] / "UM-Codex.app" / name).read_bytes() == content, name
 
 
 def test_without_rights_to_applications_it_uses_your_own(machine):

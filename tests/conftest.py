@@ -62,6 +62,13 @@ def data_folder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return folder
 
 
+@pytest.fixture(autouse=True)
+def launcher_places(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """No test reaches the real /Applications, Start menu or Desktop (launchers.py)."""
+    for name in ("UMCODEX_SYSTEM_APPLICATIONS", "UMCODEX_START_MENU", "UMCODEX_DESKTOP"):
+        monkeypatch.setenv(name, str(tmp_path_factory.mktemp(name.lower())))
+
+
 @pytest.fixture
 def docker_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Docker Desktop's program on Windows, where UM-Codex opens it from
