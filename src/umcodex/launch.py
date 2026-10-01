@@ -281,6 +281,7 @@ def run(
         )
         say("Opening Codex. Quit it (Ctrl-C twice, or /quit) to end this launch.")
         say("")
+        sys.stdout.flush()
         with _codex_owns_ctrl_c():
             done = run_exec(command)
         return done.returncode

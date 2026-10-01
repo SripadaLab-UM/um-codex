@@ -301,7 +301,8 @@ def summary(setup: Setup, layout: folders.Layout) -> list[str]:
     if setup.internet:
         lines += [
             "Internet: ON. Codex can reach the whole internet, so it could send anything it",
-            "can read above to anywhere.",
+            "can read above to anywhere. It can also reach programs on this computer that",
+            "listen only locally (for example a local web app or database).",
         ]
     else:
         lines.append("Internet: off. Codex can reach only the model.")

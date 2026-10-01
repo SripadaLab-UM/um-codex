@@ -64,11 +64,33 @@ It follows ITS's "Codex Setup" articles for the model settings (the
       history is kept, so `codex resume` works next time.
 3. **Other commands:**
    - `um-codex setups` lists, edits and deletes setups.
-   - `um-codex key` replaces the key.
+   - `um-codex key` replaces the key (masked prompt; checked against the
+     Toolkit's `/models` when it can be reached).
    - `um-codex doctor` checks Docker, the key, the images and the Toolkit,
      and prints diagnostics with no secrets in them.
    - `um-codex update` installs signed releases (later: see the milestones).
    - `um-codex uninstall`.
+
+   The installers call some of these, so their names, flags and exit codes
+   are an interface:
+   - `um-codex key [--from-stdin]`: exit 0 saved, 1 refused or invalid,
+     2 cancelled. `--from-stdin` reads one line (the installer's own masked
+     prompt).
+   - `um-codex pull`: pulls every image in `images.json`; a local `:dev`
+     image that's already present is skipped. Nonzero on failure, and a plain
+     message when Docker isn't running.
+   - `um-codex doctor [--quiet] [--fix-docker]`: `--quiet` prints nothing but
+     one line on failure; `--fix-docker` opens Docker Desktop and, on
+     Windows, offers the logon-right fix (as the launch does).
+   - `um-codex uninstall [--delete-data|--keep-data] [--yes]`: removes, by
+     label only, UM-Codex's containers and networks (and, with
+     `--delete-data`, each setup's Codex home volume), the key, the images
+     (asked first; the gateway's nginx only if no container uses it) and,
+     with `--delete-data`, the data folder's contents. It never removes the
+     program files (`<data folder>/app`, which the installers own and their
+     uninstall scripts remove afterwards). From DataLab's `setup.uninstall`,
+     with the #36 fixes. `--yes` asks nothing: images go, and data stays
+     unless `--delete-data`.
 
 ## How it runs (one launch)
 
@@ -85,11 +107,16 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
                                          network umcodex-<id>-net (bridge)
 ```
 
-- **Relay:** a small asyncio HTTP relay in the `um-codex` process. It's
+- **Relay:** a small asyncio HTTP relay in the `um-codex` process (aiohttp's
+  server in a background thread, httpx to the Toolkit; both pinned). It's
   adapted from DataLab's `relay/` (with its retry and recovery, minus the
   data-session policy). It accepts only this launch's random token, swaps in
-  the Toolkit key and streams the reply. It's only ever bound to localhost,
-  and it ends when the launch ends.
+  the Toolkit key and streams the reply. It relays GET and POST under `/v1/`
+  only. If the Toolkit ever echoed the key, it's removed from the reply
+  before it reaches the container, even when split across chunks. It's only
+  ever bound to 127.0.0.1, on a free port, and it ends when the launch ends.
+  The gateway reaches it at `host.docker.internal` (with
+  `--add-host host.docker.internal:host-gateway`).
 - **Gateway:** DataLab's nginx container and config, minus `/mcp`. Codex's
   `base_url` is `http://gateway/v1`.
 - **Agent:** this repo's image, `ghcr.io/sripadalab-um/um-codex-agent`, pinned
@@ -100,6 +127,15 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
     no-DNS setting.
   - **Internet on:** it's on a normal bridge network too, with full internet.
     Model calls still go through the gateway.
+  - In both, its `host.docker.internal` points nowhere (`192.0.2.1`), so the
+    easy way to the computer's own localhost services is closed.
+    A known limit, found in the M1 live check: with the internet on, the
+    container can still reach programs that listen only on this computer's
+    localhost through Docker Desktop's host address (by IP). The relay there
+    still needs the launch token, and the key is never reachable, but other
+    local programs are; the summary screen says so. With the internet off,
+    the host address isn't reachable.
+  - Docker's default capabilities stay (so `sudo` works); nothing is added.
 - **Codex home is a named Docker volume per setup** (`umcodex-home-<setup>`),
   not a host folder. DataLab learned that Codex makes Linux symlinks there,
   and the Windows uninstaller then tripped on them (#36). A volume also keeps
@@ -115,16 +151,29 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
   - analytics, feedback and update checks off.
 
   Codex's other features stay at Codex's defaults: full power.
-- **AGENTS.md** in the image tells Codex where things are: the folders, what's
-  read-only, and whether the internet is on.
+- **AGENTS.md** in the image tells Codex to read `/etc/um-codex/launch.md`
+  first. That's a plain-text note written by the host for each launch and
+  mounted read-only as one file: the setup's name, `/work` and each
+  `/mnt/write/*` and `/mnt/read/*` with its folder on the computer, internet
+  on or off, and the approval policy.
+- **The launch's files** (`config.toml`, `launch.md`, `gateway.conf`, and the
+  env file with the token, deleted once the agent has started) are in
+  `launches/<id>/` in UM-Codex's data folder, never in a folder the agent can
+  write. The folder is removed when the launch ends.
 - **The terminal:**
-  - The container starts with `sleep infinity`, then
-    `docker exec -it <agent> codex` runs in the foreground with the person's
-    terminal size. On Windows, the same works in Windows Terminal and
+  - The container starts with the image's command (copy AGENTS.md into
+    Codex home, then sleep), then `docker exec -it -w /work -e TERM=…
+    <agent> codex` runs in the foreground with the person's terminal size.
+    `um-codex launch -- <args>` passes arguments to `codex` (for example
+    `resume`). On Windows, the same works in Windows Terminal and
     PowerShell.
   - Ctrl-C belongs to Codex.
   - When `docker exec` ends, `um-codex` removes the containers and network.
     If `um-codex` itself is killed, the next launch removes leftovers by label.
+    Each launch holds an OS file lock (`launches/<id>/lock`) while it runs, so
+    cleanup tells a leftover from a launch that's still going; labels also
+    carry the data folder (`umcodex.instance`), so one data folder never
+    removes another's launches.
 - **Two launches at once** each get their own containers, network and token.
   Two launches of the *same* setup share its Codex home volume, which Codex
   handles: sessions are separate files.
@@ -170,6 +219,7 @@ um-codex/
     setups.py               saved setups (TOML in the data folder), prompts, validation
     folders.py              folder rules (from DataLab mounts/inputs)
     launch.py               one launch: relay, network, gateway, agent, exec, cleanup
+    paths.py                the data folder per OS (from DataLab config.py), and the program files' folder
     relay.py                (from DataLab relay/__init__ + recovery, policy trimmed)
     containers.py           docker commands, labels, cleanup (from DataLab containers.py)
     codex_config.py         config.toml (from DataLab)
@@ -179,6 +229,7 @@ um-codex/
     windows_vm.py           (from DataLab: DockerDoctor, the logon-right fix, the restart)
     doctor.py               checks and diagnostics
     toolkit.py              model list, key check
+    uninstall.py            `um-codex uninstall` (from DataLab setup.uninstall and storage.size_of)
     gateway.conf            (from DataLab, /mcp removed)
     images.json             pinned image digests (written by the release)
   images/agent/             Dockerfile, AGENTS.md (from DataLab's image: Codex, Node, Python, R; DataLab skills removed; build tools added)
@@ -210,6 +261,15 @@ modes, rigor, and the frontend.
    - `uv run um-codex`: setup prompts, relay, gateway, agent image built
      locally, Codex opens, internet on and off both work, cleanup.
    - Tests for folder rules, config, the relay token and cleanup.
+   - Done on branch `m1-core` (2026-10-01). The live check ran real launches
+     on a Mac against a local stub instead of the Toolkit
+     (`UMCODEX_UPSTREAM`), with internet off and on: networks, mounts and
+     flags as above; `curl https://example.com` failed with the internet off
+     and worked with it on; the stub received Codex's requests with the key
+     swapped in; the key wasn't in `docker inspect`, the container's
+     environment or any file in it (`grep -r /`); `codex exec` answered
+     through the relay; everything but the setup's volume was removed
+     afterwards. Codex's interactive TUI itself was not driven.
 2. **M2, installers and CI:**
    - the Mac and Windows installers (Docker step, uv, key, launcher, icon);
    - uninstallers;
