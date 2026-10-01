@@ -367,13 +367,15 @@ modes, rigor, and the frontend.
    - **The question.** Only when the internet is on: "Browser tool on?
      (Codex can open websites in a fresh browser inside the sandbox; it has
      none of your logins.) [y/N]" (default off), then, when it's on,
-     "Approve each browser action? [Y/n]" (default yes). Both are saved with
+     "Approve each browser action (opening pages, clicking, typing)? [Y/n]"
+     (default yes). Both are saved with
      the setup (`browser`, `browser_asks`); setups saved before M2b have
      neither, which means off. Turning the internet off turns the browser
      tool off. The summary screen says "Browser tool: ON. Codex can open
      websites in a fresh browser inside the sandbox; it has none of your
-     logins." and whether it asks before each browser action (or "Browser
-     tool: off." with the internet on). launch.md says the same to Codex,
+     logins." and whether it asks before each browser action ("opening
+     pages, clicking, typing; reading a page doesn't ask"), or "Browser
+     tool: off." with the internet on. launch.md says the same to Codex,
      and the image's AGENTS.md has a short section on the tool.
    - **The image.** `@playwright/mcp` 0.0.83 (pinned; its Playwright is
      1.64.0-alpha-1790635538000), installed with Codex in the Node stage
@@ -401,7 +403,7 @@ modes, rigor, and the frontend.
      env = { PLAYWRIGHT_BROWSERS_PATH = "/opt/ms-playwright" }
      startup_timeout_sec = 60
      tool_timeout_sec = 180
-     default_tools_approval_mode = "prompt"   # "approve" when the person said no
+     default_tools_approval_mode = "writes"   # "approve" when the person said no
      ```
      - It runs inside the agent container over stdio, as `agent`, with no
        display. `--browser chromium` is Playwright's Chromium (the default
@@ -409,10 +411,16 @@ modes, rigor, and the frontend.
        build); Playwright runs it without Chrome's own sandbox, as it does
        for this build on Linux. `--isolated` keeps the profile in memory:
        a fresh browser each launch, nothing kept.
+     - The residual risk of that unsandboxed Chromium: a page that exploits
+       it gets only what the `agent` user already has in this container (the
+       chosen folders, the internet, `sudo` inside the container), nothing
+       on the host.
      - Files the server names itself (page snapshots, unnamed screenshots)
        go to `/tmp/um-codex-browser` in the container and go with it. A
        screenshot Codex saves under a file name is saved relative to `/work`
-       (the server's working folder), so only when the person asks for one.
+       (the server's working folder); Codex is told (AGENTS.md, launch.md)
+       to save one only when the person asks. Taking a screenshot is marked
+       read-only, so it doesn't ask.
      - `env`: Codex starts MCP servers with only a few variables (HOME,
        PATH, LANG and the like; `rmcp-client`'s `DEFAULT_ENV_VARS`), so the
        browsers' folder is passed on. The launch token isn't.
@@ -425,10 +433,35 @@ modes, rigor, and the frontend.
        without asking but wants each browser action approved, the policy is
        `approval_policy = { granular = { sandbox_approval = false, rules =
        false, mcp_elicitations = true, request_permissions = false,
-       skill_approval = false } }`: command and rule prompts are turned down
-       without asking, as under "never" (with full access, no command needs
-       one), and browser actions are asked about. With "ask me before
-       commands" (`on-request`) the policy stays as it is.
+       skill_approval = false } }`. Checked against the `rust-v0.157.1`
+       source (and by an independent review), it's the same as "never" for
+       commands, patches, permissions and network (with full access, no
+       command needs a prompt, and command and rule prompts are turned
+       down without asking), and browser actions are asked about. The
+       other differences from "never":
+       - installing a skill's MCP dependencies asks "Install MCP servers?"
+         (`mcp_skill_dependencies.rs`) instead of skipping them;
+       - MCP elicitations with an empty form are shown instead of accepted
+         (`session/mcp.rs`);
+       - the model's permissions instructions describe the granular policy;
+       - Codex's status line shows it in place of "never";
+       - hooks see `permission_mode` "default".
+
+       With "ask me before commands" (`on-request`) the policy stays as it
+       is.
+     - **Which actions ask:** `writes` asks before every tool the server
+       doesn't mark read-only. In `@playwright/mcp` 0.0.83's `tools/list`
+       the read-only ones (`readOnlyHint: true`) are `browser_snapshot`,
+       `browser_take_screenshot`, `browser_find`, `browser_console_messages`,
+       `browser_network_requests`, `browser_network_request` and
+       `browser_wait_for`; all the others are marked read-write and
+       destructive, among them `browser_navigate`, `browser_navigate_back`,
+       `browser_click`, `browser_type`, `browser_fill_form`,
+       `browser_press_key`, `browser_select_option`, `browser_hover`,
+       `browser_evaluate`, `browser_run_code_unsafe`, `browser_file_upload`,
+       `browser_tabs` and `browser_close`. `prompt` would ask before every
+       call, snapshots too, and Codex's "remember for this session" doesn't
+       apply to `prompt` or `writes`.
    - **Live check** (this Mac, arm64, Docker Desktop; `um-codex-agent:dev`
      rebuilt from this branch; containers, networks and volume made from
      `LaunchSpec` as a launch makes them, then removed; the model was a stub
@@ -447,7 +480,11 @@ modes, rigor, and the frontend.
        page back to the model (`codex exec` always runs with approval
        "never", so it never asks).
      - Codex's terminal interface, driven in a pseudo-terminal inside the
-       container, with the stub asking for `browser_navigate`:
+       container. With `writes`, the stub asking for `browser_snapshot` and
+       then `browser_navigate`: the snapshot ran without asking and the
+       navigate asked (then ran after Enter), under both the granular
+       policy and "ask me before commands"; with `approve`, neither asked.
+       Earlier, with `prompt` and the stub asking for `browser_navigate`:
        - "approve each action" with "runs commands without asking" (the
          granular policy): Codex showed `Allow the browser MCP server to
          run tool "browser_navigate"? url: https://example.com` with

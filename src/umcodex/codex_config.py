@@ -44,9 +44,14 @@ BROWSER_ENV = {"PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright"}
 # Codex 0.157.1 auto-approves every MCP tool call when `approval_policy` is
 # "never" with full access (codex-mcp's mcp_permission_prompt_is_auto_approved),
 # and turns down MCP approval prompts under "never". So when the person wants
-# to approve each browser action but lets Codex run commands without asking,
-# the policy is "granular": command (sandbox) and rule prompts are turned down
-# without asking, exactly as under "never", and MCP approval prompts are shown.
+# to approve browser actions but lets Codex run commands without asking, the
+# policy is "granular": the same as "never" for commands, patches, permissions
+# and network, with MCP approval prompts shown. The other differences from
+# "never" (checked in the rust-v0.157.1 source): installing a skill's MCP
+# dependencies asks "Install MCP servers?" (mcp_skill_dependencies.rs); MCP
+# elicitations with an empty form are shown instead of accepted (session/mcp.rs);
+# the model's permissions instructions describe "granular"; Codex's status line
+# shows it; and hooks see permission_mode "default".
 GRANULAR_NEVER_BUT_MCP = (
     "{ granular = { sandbox_approval = false, rules = false, mcp_elicitations = true, "
     "request_permissions = false, skill_approval = false } }"
@@ -112,8 +117,10 @@ def render(
             # The first start launches Chromium; a slow page can take a while.
             "startup_timeout_sec = 60",
             "tool_timeout_sec = 180",
-            # "prompt": the person approves every browser action. "approve":
-            # none are asked about.
-            f'default_tools_approval_mode = "{"prompt" if browser_asks else "approve"}"',
+            # "writes": the person approves each browser action (opening a
+            # page, clicking, typing); tools the server marks read-only
+            # (snapshot, screenshot, find, console and network lists, wait)
+            # run unasked. "approve": none are asked about.
+            f'default_tools_approval_mode = "{"writes" if browser_asks else "approve"}"',
         ]
     return "\n".join(lines) + "\n"

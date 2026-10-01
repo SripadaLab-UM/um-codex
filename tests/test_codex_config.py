@@ -98,7 +98,7 @@ def test_the_browser_tool_runs_in_the_container_over_stdio():
         (
             "never",
             True,
-            "prompt",
+            "writes",
             {
                 "granular": {
                     "sandbox_approval": False,
@@ -110,7 +110,7 @@ def test_the_browser_tool_runs_in_the_container_over_stdio():
             },
         ),
         ("never", False, "approve", "never"),
-        ("on-request", True, "prompt", "on-request"),
+        ("on-request", True, "writes", "on-request"),
         ("on-request", False, "approve", "on-request"),
     ],
 )

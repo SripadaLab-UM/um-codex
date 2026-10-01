@@ -24,6 +24,10 @@ const server = spawn(command[0], command.slice(1), { stdio: ["pipe", "pipe", "pi
 let stderr = "";
 server.stderr.on("data", (chunk) => (stderr += chunk));
 server.on("error", (error) => fail(`couldn't start ${command[0]}: ${error.message}`));
+let finishing = false;
+server.on("exit", (code, signal) => {
+  if (!finishing) fail(`the server exited early (${signal || `code ${code}`})`);
+});
 
 const waiting = new Map();
 let buffered = "";
@@ -95,6 +99,7 @@ async function main() {
   }
   console.log(`ok    browser_snapshot: found ${expected}`);
   await request("tools/call", { name: "browser_close", arguments: {} }, 30000).catch(() => {});
+  finishing = true;
   server.stdin.end();
   setTimeout(() => process.exit(0), 2000).unref();
   server.on("exit", () => process.exit(0));

@@ -184,7 +184,7 @@ def test_internet_on_connects_the_bridge_network(folders, data_folder):
 def test_the_browser_tool_is_in_the_launchs_config(folders, data_folder):
     _, fake, _, _ = run_launch(folders, data_folder, internet=True, browser=True)
     config = tomllib.loads(fake.files["config.toml"])
-    assert config["mcp_servers"]["browser"]["default_tools_approval_mode"] == "prompt"
+    assert config["mcp_servers"]["browser"]["default_tools_approval_mode"] == "writes"
     assert "browser" in fake.files["launch.md"].split("## Browser tool")[1]
     _, fake, _, _ = run_launch(folders, data_folder, internet=True)
     assert "mcp_servers" not in tomllib.loads(fake.files["config.toml"])

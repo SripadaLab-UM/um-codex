@@ -187,7 +187,7 @@ def resolved(setup: Setup, layout: folders.Layout) -> Setup:
 
 BROWSER_PLAIN = "Codex can open websites in a fresh browser inside the sandbox; it has none of your logins."
 BROWSER_QUESTION = f"Browser tool on? ({BROWSER_PLAIN})"
-BROWSER_ASKS_QUESTION = "Approve each browser action?"
+BROWSER_ASKS_QUESTION = "Approve each browser action (opening pages, clicking, typing)?"
 
 
 def yes(ask: Ask, question: str, default: bool = True) -> bool:
@@ -386,7 +386,8 @@ def summary(setup: Setup, layout: folders.Layout) -> list[str]:
     if setup.internet and setup.browser:
         lines.append(f"Browser tool: ON. {BROWSER_PLAIN}")
         lines.append(
-            "  It asks you before each browser action."
+            "  It asks you before each browser action (opening pages, clicking, typing);"
+            " reading a page doesn't ask."
             if setup.browser_asks
             else "  It doesn't ask you before browser actions."
         )

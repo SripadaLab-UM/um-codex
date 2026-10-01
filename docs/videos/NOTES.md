@@ -66,17 +66,20 @@ Later, when built: "On this computer" mode (M4).
 - **The browser tool** (only offered when the internet is on; off unless
   you turn it on). The questions, exactly: "Browser tool on? (Codex can
   open websites in a fresh browser inside the sandbox; it has none of your
-  logins.) [y/N]", then "Approve each browser action? [Y/n]". The summary
-  says "Browser tool: ON. Codex can open websites in a fresh browser inside
-  the sandbox; it has none of your logins." and "It asks you before each
-  browser action." With it on, Codex can open pages, click, fill in forms,
-  read pages and take screenshots, in a browser with no window that runs
-  inside the sealed environment. It's a fresh browser every time: none of
-  your logins, cookies or bookmarks, and it can't see or control your own
-  browser or desktop. By default Codex stops and asks before each browser
-  action; you approve or decline it in Codex's screen. Screenshots are saved
-  in your working folder only when you ask for one. With the internet off
-  there's no browser tool (the question isn't asked).
+  logins.) [y/N]", then "Approve each browser action (opening pages,
+  clicking, typing)? [Y/n]". The summary says "Browser tool: ON. Codex can
+  open websites in a fresh browser inside the sandbox; it has none of your
+  logins." and "It asks you before each browser action (opening pages,
+  clicking, typing); reading a page doesn't ask." With it on, Codex can
+  open pages, click, fill in forms, read pages and take screenshots, in a
+  browser with no window that runs inside the sealed environment. It's a
+  fresh browser every time: none of your logins, cookies or bookmarks, and
+  it can't see or control your own browser or desktop. By default Codex
+  stops and asks before each action that opens a page, clicks or types; you
+  approve ("Allow") or decline ("Cancel") it in Codex's screen. Reading the
+  page that's open (its text, a screenshot) doesn't ask. Codex is told to
+  save a screenshot in your working folder only when you ask for one. With
+  the internet off there's no browser tool (the question isn't asked).
 - **Inside the environment** Codex has Python, R, Node, git and build tools,
   and can install more with `sudo` when the internet is on. Installed
   things last only for that session; files in your folders stay.

@@ -306,10 +306,13 @@ def test_the_browser_tool_on_with_approvals(project):
         "Browser tool on? (Codex can open websites in a fresh browser inside the sandbox;"
         " it has none of your logins.)"
     )
-    assert BROWSER_ASKS_QUESTION == "Approve each browser action?"
+    assert BROWSER_ASKS_QUESTION == "Approve each browser action (opening pages, clicking, typing)?"
     assert "Browser tool: ON. Codex can open websites in a fresh browser inside the sandbox;" in script.text
     assert "it has none of your logins." in script.text
-    assert "It asks you before each browser action." in script.text
+    assert (
+        "It asks you before each browser action (opening pages, clicking, typing);"
+        " reading a page doesn't ask." in script.text
+    )
     assert SetupStore().last_used() == setup
 
 

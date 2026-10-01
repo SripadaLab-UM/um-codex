@@ -216,11 +216,13 @@ def browser_note(setup: Setup) -> list[str]:
         "On: the `browser` MCP tools (Playwright) drive a headless Chromium inside this",
         "container, with a fresh profile and none of the person's logins.",
         (
-            "The person approves each browser action."
+            "The person approves each browser action (opening pages, clicking, typing);"
+            " reading the page (snapshot, screenshot, find) runs without asking."
             if setup.browser_asks
             else "Browser actions run without asking the person."
         ),
-        "Screenshots saved with a file name go in /work; unnamed ones go in /tmp/um-codex-browser.",
+        "Take a screenshot into /work (with a file name) only when the person asks for one;",
+        "unnamed screenshots and page snapshots go in /tmp/um-codex-browser.",
     ]
 
 

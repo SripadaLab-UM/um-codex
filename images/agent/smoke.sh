@@ -42,6 +42,7 @@ check "Chromium in the shared folder" sh -c 'ls -d "$PLAYWRIGHT_BROWSERS_PATH"/c
 check "browser tool opens a page headless" um-codex-browser-check \
     'data:text/html,<title>smoke</title><h1>UM-Codex browser smoke</h1>' 'heading "UM-Codex browser smoke"' \
     -- /usr/local/bin/playwright-mcp --headless --browser chromium --isolated --output-dir /tmp/um-codex-browser
+rm -rf /tmp/um-codex-browser
 
 check "python is the venv" test "$(command -v python)" = /opt/venv/bin/python
 check "pip in the venv" python -m pip --version
