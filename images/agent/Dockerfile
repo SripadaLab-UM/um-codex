@@ -11,8 +11,10 @@
 #   /work                  the working folder (read/write), Codex's cwd
 #   /mnt/write/<name>      more read/write folders
 #   /mnt/read/<name>       read-only folders
-#   /codex-home            the setup's Codex home volume (CODEX_HOME), with
-#                          config.toml mounted read-only over it
+#   /codex-home            the setup's Codex home volume (CODEX_HOME); its
+#                          config.toml is the person's own, Codex writes it
+#   /etc/codex             Codex's enforced settings and model catalog
+#                          (read-only; src/umcodex/codex_config.py)
 #   /etc/um-codex/launch.md  this launch's folders and internet (read-only)
 # and runs Codex with `docker exec -it <agent> codex`.
 #

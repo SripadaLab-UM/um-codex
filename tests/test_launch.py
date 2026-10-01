@@ -3,6 +3,7 @@ and that everything goes afterwards."""
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tomllib
@@ -12,7 +13,7 @@ import httpx
 import pytest
 
 from tests.conftest import FAKE_KEY
-from umcodex import launch
+from umcodex import credentials, launch
 from umcodex.containers import Docker
 from umcodex.folders import plan
 from umcodex.launch import LaunchLock, launch_is_live, launch_note
@@ -74,14 +75,29 @@ def test_a_live_launch_holds_its_lock(data_folder):
     assert not launch_is_live(data_folder, "never-was")
 
 
+# `codex debug models --bundled` in the agent image (shortened; see test_codex_config.py).
+BUNDLED = (Path(__file__).parent / "data" / "codex-0.157.1-bundled-models.json").read_text()
+IMAGE_ID = "ab" * 32
+CODEX_FILES = ("codex/requirements.toml", "codex/managed_config.toml", "codex/models.json")
+
+
+@pytest.fixture(autouse=True)
+def toolkit_models(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The Toolkit's model list, as the launch asks for it (never the real Toolkit)."""
+    served = ["gpt-4o", "gpt-5.4", "gpt-5.6-terra", "gpt-6-sol"]
+    monkeypatch.setattr(launch.toolkit, "list_models", lambda key, timeout=15: list(served))
+    return served
+
+
 class FakeDocker:
     """subprocess.run for `docker`: everything exists and runs, and every
     command is kept, with the files the launch folder held at that moment."""
 
-    def __init__(self, data_folder: Path) -> None:
+    def __init__(self, data_folder: Path, bundled: str | None = BUNDLED) -> None:
         self.calls: list[list[str]] = []
         self.files: dict[str, str] = {}
         self.data_folder = data_folder
+        self.bundled = bundled
 
     def __call__(self, command, **options):
         self.calls.append(command)
@@ -89,16 +105,23 @@ class FakeDocker:
         if args[0] == "run" and "--env-file" in args:
             env_file = Path(args[args.index("--env-file") + 1])
             self.files["agent.env"] = env_file.read_text()
-            for name in ("config.toml", "launch.md", "gateway.conf"):
-                self.files[name] = (env_file.parent / name).read_text()
+            for name in ("launch.md", "gateway.conf", *CODEX_FILES):
+                path = env_file.parent / name
+                if path.exists():
+                    self.files[name] = path.read_text()
+        if args[-3:] == ["debug", "models", "--bundled"]:
+            ok = self.bundled is not None
+            return subprocess.CompletedProcess(command, 0 if ok else 125, self.bundled or "", "")
+        if args[:2] == ["image", "inspect"] and "{{.Id}}" in args:
+            return subprocess.CompletedProcess(command, 0, f"sha256:{IMAGE_ID}\n", "")
         out = "true\n" if args[:2] == ["inspect", "-f"] else ""
         code = 1 if args[:2] == ["volume", "inspect"] else 0  # a new setup: no volume yet
         return subprocess.CompletedProcess(command, code, out, "")
 
 
-def run_launch(folders: Path, data_folder: Path, exec_result=None, **changes):
+def run_launch(folders: Path, data_folder: Path, exec_result=None, bundled: str | None = BUNDLED, **changes):
     setup, layout = make_setup(folders, **changes)
-    fake = FakeDocker(data_folder)
+    fake = FakeDocker(data_folder, bundled)
     seen: dict[str, object] = {}
 
     def run_exec(command):
@@ -139,7 +162,8 @@ def test_a_launch_end_to_end(folders, data_folder):
     assert "agent.env" not in seen["launch_files"]
     assert fake.files["agent.env"].startswith("UMCODEX_TOKEN=umc_")
     assert "UMCODEX_INTERNET=off" in fake.files["agent.env"]
-    assert 'base_url = "http://gateway/v1"' in fake.files["config.toml"]
+    assert 'base_url = "http://gateway/v1"' in fake.files["codex/requirements.toml"]
+    assert 'model = "gpt-5.6-terra"' in fake.files["codex/managed_config.toml"]
     assert "Setup: thesis" in fake.files["launch.md"]
     # The launch folder is gone afterwards, and so is the relay.
     assert list((data_folder / "launches").iterdir()) == []
@@ -167,6 +191,65 @@ def test_launch_md_is_mounted_read_only_as_one_file(folders, data_folder):
     )
 
 
+def test_codexs_settings_are_a_read_only_folder_at_etc_codex(folders, data_folder):
+    _, fake, seen, _ = run_launch(folders, data_folder)
+    [agent_run] = [c for c in fake.calls if c[1] == "run" and "--env-file" in c]
+    mounts = [agent_run[i + 1] for i, a in enumerate(agent_run) if a == "--mount"]
+    [codex] = [m for m in mounts if "target=/etc/codex" in m]
+    assert codex.endswith(f"{os.sep}codex,target=/etc/codex,readonly")
+    # Nothing over the person's own config.toml in the setup's volume.
+    assert not any("/codex-home/" in m for m in mounts)
+    assert "codex" in seen["launch_files"]
+
+
+def test_the_model_catalog_is_the_toolkits_models_codex_knows(folders, data_folder):
+    _, fake, _, _ = run_launch(folders, data_folder, model="gpt-6-sol")
+    catalog = json.loads(fake.files["codex/models.json"])["models"]
+    assert [m["slug"] for m in catalog] == ["gpt-6-sol", "gpt-5.6-terra", "gpt-5.4"]
+    assert all(m["upgrade"] is None for m in catalog)
+    required = tomllib.loads(fake.files["codex/requirements.toml"])
+    assert required["model_catalog_json"] == "/etc/codex/models.json"
+    assert tomllib.loads(fake.files["codex/managed_config.toml"])["model"] == "gpt-6-sol"
+    # Codex's own list came from a throwaway container with no network.
+    [listing] = [c for c in fake.calls if c[-3:] == ["debug", "models", "--bundled"]]
+    assert listing[1:3] == ["run", "--rm"] and listing[listing.index("--network") + 1] == "none"
+
+
+def test_codexs_model_list_is_kept_per_image(folders, data_folder):
+    _, fake, _, _ = run_launch(folders, data_folder)
+    assert (data_folder / "codex-models" / f"{IMAGE_ID}.json").read_text() == BUNDLED
+    assert any(c[-3:] == ["debug", "models", "--bundled"] for c in fake.calls)
+    _, fake, _, _ = run_launch(folders, data_folder)
+    assert not any(c[-3:] == ["debug", "models", "--bundled"] for c in fake.calls)
+    assert json.loads(fake.files["codex/models.json"])["models"]
+    # The throwaway container is removed with the launch's others.
+    [removal] = [c for c in fake.calls if c[1:3] == ["rm", "-f"]]
+    assert removal[-1].endswith("-agent-models")
+
+
+def test_an_unreadable_model_list_isnt_kept(folders, data_folder):
+    run_launch(folders, data_folder, bundled="not json")
+    assert not (data_folder / "codex-models").exists()
+
+
+def test_a_launch_without_codexs_model_list_runs_without_a_catalog(folders, data_folder):
+    code, fake, _, _ = run_launch(folders, data_folder, bundled=None)
+    assert code == 0
+    assert "codex/models.json" not in fake.files
+    assert "model_catalog_json" not in tomllib.loads(fake.files["codex/requirements.toml"])
+
+
+def test_a_launch_without_a_saved_key_still_has_a_catalog(folders, data_folder, monkeypatch):
+    def no_key() -> str:
+        raise credentials.MissingCredential("no key")
+
+    setup, layout = make_setup(folders)
+    fake = FakeDocker(data_folder)
+    launch.run(setup, layout, say=lambda _: None, docker=Docker(fake), tty=True,  # type: ignore[arg-type]
+               run_exec=lambda c: subprocess.CompletedProcess(c, 0), api_key=no_key)  # fmt: skip
+    assert [m["slug"] for m in json.loads(fake.files["codex/models.json"])["models"]] == ["gpt-5.6-terra"]
+
+
 def test_everything_is_removed_even_when_codex_fails(folders, data_folder):
     with pytest.raises(OSError):
         run_launch(folders, data_folder, exec_result=OSError("terminal gone"))
@@ -183,11 +266,11 @@ def test_internet_on_connects_the_bridge_network(folders, data_folder):
 
 def test_the_browser_tool_is_in_the_launchs_config(folders, data_folder):
     _, fake, _, _ = run_launch(folders, data_folder, internet=True, browser=True)
-    config = tomllib.loads(fake.files["config.toml"])
+    config = tomllib.loads(fake.files["codex/managed_config.toml"])
     assert config["mcp_servers"]["browser"]["default_tools_approval_mode"] == "writes"
     assert "browser" in fake.files["launch.md"].split("## Browser tool")[1]
     _, fake, _, _ = run_launch(folders, data_folder, internet=True)
-    assert "mcp_servers" not in tomllib.loads(fake.files["config.toml"])
+    assert "mcp_servers" not in tomllib.loads(fake.files["codex/managed_config.toml"])
 
 
 def test_a_missing_agent_image_stops_before_anything_starts(folders, data_folder):

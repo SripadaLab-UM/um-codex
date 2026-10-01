@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
+from umcodex.codex_config import CODEX_ETC
+
 APP_LABEL = "umcodex.app"
 APP = "um-codex"
 LAUNCH_LABEL = "umcodex.launch"
@@ -118,7 +120,7 @@ class LaunchSpec:
     gateway_image: str
     internet: bool
     folders: tuple[BindMount, ...]  # /work, /mnt/write/*, /mnt/read/*
-    config_file: Path  # config.toml, mounted read-only
+    codex_etc: Path  # Codex's enforced settings (codex_config.py), mounted read-only at /etc/codex
     launch_note: Path  # launch.md, mounted read-only
     gateway_conf: Path
     env_file: Path
@@ -149,6 +151,11 @@ class LaunchSpec:
     @property
     def agent(self) -> str:
         return f"{self.prefix}-agent"
+
+    @property
+    def models_container(self) -> str:
+        """The throwaway container that prints Codex's model list."""
+        return f"{self.agent}-models"
 
     @property
     def volume(self) -> str:
@@ -209,7 +216,9 @@ class LaunchSpec:
             mounts += mount.args()
         mounts += [
             "--mount", f"type=volume,source={self.volume},target={CODEX_HOME}",
-            *BindMount(self.config_file, f"{CODEX_HOME}/config.toml", readonly=True).args(),
+            # Not over $CODEX_HOME/config.toml: that's the person's own,
+            # where Codex saves its preferences (codex_config.py).
+            *BindMount(self.codex_etc, CODEX_ETC, readonly=True).args(),
             *BindMount(self.launch_note, LAUNCH_NOTE, readonly=True).args(),
         ]  # fmt: skip
         dns = [] if self.internet else ["--dns", NO_DNS]
@@ -234,10 +243,19 @@ class LaunchSpec:
             commands.append(["network", "connect", self.internet_network, self.agent])
         return commands
 
+    def bundled_models_command(self) -> list[str]:
+        """`docker run` printing the agent image's Codex model list (the
+        catalog's source, codex_config.model_catalog). No network, removed
+        when done."""
+        return _guarded([
+            "run", "--rm", "--name", self.models_container, *self.labels(), "--network", "none",
+            self.agent_image, "codex", "debug", "models", "--bundled",
+        ])  # fmt: skip
+
     def remove_commands(self) -> list[list[str]]:
         networks = [self.internal_network, self.gateway_network]
         networks += [self.internet_network] if self.internet else []
-        return [["rm", "-f", self.agent, self.gateway], ["network", "rm", *networks]]
+        return [["rm", "-f", self.agent, self.gateway, self.models_container], ["network", "rm", *networks]]
 
 
 def exec_command(agent: str, *, tty: bool, term: str, args: Sequence[str] = ()) -> list[str]:

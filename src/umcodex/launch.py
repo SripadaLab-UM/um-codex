@@ -3,8 +3,9 @@
 1. Leftovers from a launch whose `um-codex` was killed are removed (by label).
 2. The relay starts on 127.0.0.1, on a free port, with a new token.
 3. The launch's files are written in its own folder in UM-Codex's data
-   folder: gateway.conf, config.toml, launch.md (all mounted read-only) and a
-   private env file with the token (deleted as soon as the agent has started).
+   folder: gateway.conf, launch.md, Codex's enforced settings in codex/ (all
+   mounted read-only; see codex_config.py) and a private env file with the
+   token (deleted as soon as the agent has started).
 4. The networks, the gateway and the agent start.
 5. `docker exec -it <agent> codex` runs in the person's terminal.
 6. When it ends (or anything fails), the containers, networks, launch folder
@@ -20,6 +21,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -291,6 +293,67 @@ def _write(path: Path, text: str, mode: int = 0o644) -> None:
         file.write(text)
 
 
+def write_codex_settings(docker: Docker, spec: LaunchSpec, setup: Setup, api_key: Callable[[], str]) -> None:
+    """Codex's enforced settings and model catalog (codex_config.py), in the
+    folder mounted read-only at /etc/codex."""
+    spec.codex_etc.mkdir()
+    bundled = bundled_models(docker, spec)
+    catalog = codex_config.model_catalog(bundled, served_models(api_key), setup.model)
+    if catalog is None:
+        log.warning("launch %s: no model catalog (Codex's model list couldn't be read)", spec.launch_id)
+    else:
+        _write(spec.codex_etc / codex_config.CATALOG_FILE, catalog)
+    _write(
+        spec.codex_etc / codex_config.REQUIREMENTS_FILE,
+        codex_config.render_requirements(internet=setup.internet, catalog=catalog is not None),
+    )
+    _write(
+        spec.codex_etc / codex_config.MANAGED_CONFIG_FILE,
+        codex_config.render(
+            model=setup.model,
+            approvals=setup.approvals,
+            internet=setup.internet,
+            browser=setup.browser,
+            browser_asks=setup.browser_asks,
+        ),
+    )
+
+
+_IMAGE_ID = re.compile(r"sha256:([0-9a-f]{64})")
+
+
+def bundled_models(docker: Docker, spec: LaunchSpec) -> str:
+    """The agent image's Codex model list (`codex debug models --bundled`), ""
+    if it can't be read. Kept in the data folder per image ID, so it's run
+    once per image."""
+    code, out, _ = docker.status("image", "inspect", "--format", "{{.Id}}", spec.agent_image)
+    image_id = _IMAGE_ID.fullmatch(out.strip()) if code == 0 else None
+    cache = data_dir() / "codex-models" / f"{image_id.group(1)}.json" if image_id else None
+    if cache is not None and cache.is_file():
+        with contextlib.suppress(OSError):
+            return cache.read_text(encoding="utf-8")
+    try:
+        code, out, _ = docker.status(*spec.bundled_models_command(), timeout=120)
+    except DockerError:
+        return ""
+    if code != 0:
+        return ""
+    if cache is not None and codex_config.model_catalog(out, (), "") is not None:
+        with contextlib.suppress(OSError):
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            _write(cache, out)
+    return out
+
+
+def served_models(api_key: Callable[[], str]) -> list[str]:
+    """The Toolkit's models, for the catalog; [] if it can't say."""
+    try:
+        key = api_key()
+    except credentials.MissingCredential:
+        return []
+    return toolkit.list_models(key, timeout=10)
+
+
 def folder_mounts(layout: Layout) -> tuple[BindMount, ...]:
     mounts = [BindMount(layout.working, "/work", readonly=False)]
     mounts += [BindMount(host, target, readonly=False) for host, target in layout.writes]
@@ -363,7 +426,7 @@ def run(
             gateway_image=gateway_image,
             internet=setup.internet,
             folders=folder_mounts(layout),
-            config_file=folder / "config.toml",
+            codex_etc=folder / "codex",
             launch_note=folder / "launch.md",
             gateway_conf=folder / "gateway.conf",
             env_file=folder / "agent.env",
@@ -371,16 +434,7 @@ def run(
         )
         # Files the Linux containers read get Unix line ends, on Windows too.
         _write(spec.gateway_conf, render_gateway_conf(port))
-        _write(
-            spec.config_file,
-            codex_config.render(
-                model=setup.model,
-                approvals=setup.approvals,
-                internet=setup.internet,
-                browser=setup.browser,
-                browser_asks=setup.browser_asks,
-            ),
-        )
+        write_codex_settings(docker, spec, setup, api_key)
         _write(spec.launch_note, launch_note(setup, layout))
         say("Starting the container...")
         if not docker.exists("volume", spec.volume):

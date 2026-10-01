@@ -107,6 +107,12 @@ Later, when built: "On this computer" mode (M4).
   things last only for that session; files in your folders stay.
 - **History:** quitting removes the environment but keeps Codex's history
   for that setup, so `codex resume` picks up where you left off.
+- **The model inside Codex.** Codex opens on the setup's model. `/model`
+  lists the Toolkit's models that Codex knows; picking one changes it for
+  that session (Codex says the saved choice is overridden: the next launch
+  uses the setup's model again; edit the setup to change it for good).
+  Codex never offers to switch to another model by itself. Codex's own
+  preferences (reasoning level, its screen settings) are kept for the setup.
 - **Two things UM-Codex refuses to share:** your whole home folder or a
   whole drive, and private places like your keychain, `.ssh` and cloud
   credentials. It explains why in plain words.

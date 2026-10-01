@@ -36,7 +36,7 @@ def spec(tmp_path: Path, *, internet: bool) -> LaunchSpec:
             BindMount(tmp_path / "out, final", "/mnt/write/out, final", readonly=False),
             BindMount(tmp_path / "raw", "/mnt/read/raw", readonly=True),
         ),
-        config_file=folder / "config.toml",
+        codex_etc=folder / "codex",
         launch_note=folder / "launch.md",
         gateway_conf=folder / "gateway.conf",
         env_file=folder / "agent.env",
@@ -112,7 +112,10 @@ def test_agent_mounts(tmp_path):
     assert f'type=bind,"source={tmp_path / "out, final"}","target=/mnt/write/out, final"' in mounts
     assert f"type=bind,source={tmp_path / 'raw'},target=/mnt/read/raw,readonly" in mounts
     assert "type=volume,source=umcodex-home-thesis-a1b2c3,target=/codex-home" in mounts
-    assert f"type=bind,source={s.config_file},target=/codex-home/config.toml,readonly" in mounts
+    # Codex's enforced settings: a read-only folder at /etc/codex. Nothing is
+    # mounted over the person's own config.toml, where Codex saves preferences.
+    assert f"type=bind,source={s.codex_etc},target=/etc/codex,readonly" in mounts
+    assert not any("config.toml" in m for m in mounts)
     assert f"type=bind,source={s.launch_note},target=/etc/um-codex/launch.md,readonly" in mounts
     # Read-write folders are never marked read-only, and nothing else is mounted.
     assert not any(m.endswith("readonly") for m in mounts if "/work" in m or "/mnt/write" in m)
@@ -141,7 +144,7 @@ def test_a_privileged_or_socket_mount_is_refused(tmp_path):
 
 def test_removal(tmp_path):
     assert spec(tmp_path, internet=True).remove_commands() == [
-        ["rm", "-f", "umcodex-1a2b3c4d-agent", "umcodex-1a2b3c4d-gateway"],
+        ["rm", "-f", "umcodex-1a2b3c4d-agent", "umcodex-1a2b3c4d-gateway", "umcodex-1a2b3c4d-agent-models"],
         ["network", "rm", "umcodex-1a2b3c4d-int", "umcodex-1a2b3c4d-gw", "umcodex-1a2b3c4d-net"],
     ]
 
@@ -281,3 +284,12 @@ def test_the_watchdog_ends_when_the_relay_is_gone(tmp_path):
     )
     assert done.returncode == 0
     assert done.stdout.strip() == "watchdog: launch gone, ending"  # in `docker logs`, for the launch's log
+
+
+def test_the_bundled_model_list_comes_from_a_throwaway_container(tmp_path):
+    run = spec(tmp_path, internet=True).bundled_models_command()
+    assert run[:4] == ["run", "--rm", "--name", "umcodex-1a2b3c4d-agent-models"]
+    assert labels_of(run) == EXPECTED_LABELS
+    assert run[run.index("--network") + 1] == "none"
+    assert "--mount" not in run and "--env-file" not in run
+    assert run[-5:] == ["um-codex-agent:dev", "codex", "debug", "models", "--bundled"]
