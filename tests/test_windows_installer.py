@@ -352,7 +352,7 @@ def test_the_admin_part_installs_windows_pieces_and_nothing_of_umcodex():
     admin = admin_part(INSTALL)
     for command in ("um-codex", "$Uv", "pull", "--from-stdin"):
         assert command not in code(admin), command
-    for command in ("& $UmCodex pull", "& $UmCodex key --from-stdin", "Install-PinnedUv"):
+    for command in ("& $UmCodex pull", "Send-Key $UmCodex $Key", "Install-PinnedUv"):
         assert command in person_part(INSTALL), command
 
 
@@ -419,9 +419,23 @@ def test_versions_side_by_side_and_a_stable_command_on_the_user_path():
     assert '$StateDir = Join-Path $Env:LOCALAPPDATA "UM-Codex"' in INSTALL
     assert '$Target = Join-Path $Root "versions\\$Version"' in four
     assert '"UM-Codex $Version"' in four  # um-codex --version says so
-    assert "set PYTHONUTF8=1" in four
-    assert '"%~dp0..\\versions\\%UMCODEX_VERSION%\\Scripts\\um-codex.exe" %*' in four
-    assert '($Shim -replace "`r?`n", "`r`n")' in four  # CRLF for cmd.exe
+    # `current` and `previous` written whole, then moved into place; read
+    # without failing on an empty file.
+    assert "Write-Atomically $CurrentFile $Version" in four
+    assert 'Write-Atomically (Join-Path $Root "previous") $Old' in four
+    atomic = function(INSTALL, "Write-Atomically")
+    assert 'Set-Content -LiteralPath "$file.tmp"' in atomic
+    assert 'Move-Item -LiteralPath "$file.tmp" -Destination $file -Force' in atomic
+    assert '"$(Get-Content -LiteralPath $CurrentFile -TotalCount 1)".Trim()' in four
+    unsafe = r"Set-Content -LiteralPath \$CurrentFile|\(Get-Content [^)]*\)\.Trim\(\)"
+    assert not re.search(unsafe, code(INSTALL))
+    # The command is a copy of the version's own launcher (no .cmd shim, whose
+    # cmd.exe asks "Terminate batch job (Y/N)?"), swapped by renaming aside.
+    assert '$UmCodex = Join-Path $Bin "um-codex.exe"' in four
+    assert 'Install-Launcher (Join-Path $Target "Scripts\\um-codex.exe") $UmCodex' in four
+    launcher = function(INSTALL, "Install-Launcher")
+    assert launcher.index("Rename-Item") < launcher.index("Copy-Item")
+    assert "um-codex.cmd" not in code(INSTALL).replace('(Join-Path $Bin "um-codex.cmd") -Force', "")
     assert "Add-UserPath $Bin" in four
     add = function(INSTALL, "Add-UserPath")
     assert "-PropertyType $path.Kind" in add and "Send-EnvironmentChanged" in add
@@ -442,7 +456,12 @@ def test_a_running_umcodex_is_waited_for_never_stopped():
 def test_the_key_goes_from_the_masked_prompt_to_um_codex_key_on_stdin():
     six = step(6)
     assert 'Read-MaskedKey "Toolkit API key"' in six
-    assert "$Key | & $UmCodex key --from-stdin" in six
+    assert "$code = Send-Key $UmCodex $Key" in six
+    # Written to its standard input as UTF-8 without a BOM, then closed.
+    send = function(INSTALL, "Send-Key")
+    assert '"key --from-stdin"' in send and "RedirectStandardInput = $true" in send
+    assert "UTF8Encoding($false)" in send and "StandardInput.BaseStream.Write" in send
+    assert "StandardInput.Close()" in send
     # um-codex key: 0 saved, 1 invalid (ask again), 2 cancelled.
     assert "if ($code -eq 0) {" in six and "if ($code -eq 2) {" in six and "$attempt -le 3" in six
     assert "$Key = $null" in six
@@ -453,20 +472,28 @@ def test_the_key_goes_from_the_masked_prompt_to_um_codex_key_on_stdin():
     for line in code(INSTALL).splitlines():
         if re.search(r"\$Key\b", line):
             assert "Env:" not in line and "Set-Content" not in line and "Write-" not in line, line
-            allowed = r"Read-MaskedKey|\$Key = \$null|if \(-not \$Key\)|\$Key \| & \$UmCodex key --from-stdin"
+            allowed = r"Read-MaskedKey|\$Key = \$null|if \(-not \$Key\)|Send-Key \$UmCodex \$Key"
             assert re.search(allowed, line), line
 
 
 def test_the_masked_prompt_shows_stars_and_handles_ctrl_c_and_pastes():
     prompt = function(INSTALL, "Read-MaskedKey")
-    assert "[Console]::ReadKey($true)" in prompt
+    assert "try { $key = [Console]::ReadKey($true) }" in prompt
+    assert "return (Read-HiddenKey $prompt)" in prompt  # no console after all
     assert "[Console]::TreatControlCAsInput = $true" in prompt
     assert "[Console]::TreatControlCAsInput = $before" in prompt.split("} finally {")[-1]
     assert "if ($char -eq 3) { $cancelled = $true; break }" in prompt
-    assert '"*" * [Math]::Min($typed.Length, 64)' in prompt
+    assert '"*" * [Math]::Min($typed.Length, 40)' in prompt
     assert "That was more than one line." in prompt
     assert "Got $($trimmed.Length) characters." in prompt
-    assert 'Read-Host "   $prompt" -AsSecureString' in prompt  # off a console
+    assert 'Read-Host "   $prompt" -AsSecureString' in function(INSTALL, "Read-HiddenKey")
+
+
+def test_the_installer_needs_a_console_host():
+    person = person_part(INSTALL)
+    check = person.index('if ($Host.Name -ne "ConsoleHost") {')
+    assert check < person.index("$SetupLock = ")
+    assert "Open Windows" in person[check : check + 400] and "Stop-Run 1" in person[check : check + 400]
 
 
 # --- Launchers -------------------------------------------------------------------
@@ -487,6 +514,12 @@ def test_the_start_menu_and_desktop_shortcuts_open_a_terminal_running_um_codex()
     assert "$Marker = \"'$QuotedRoot\\current'\"" in seven
     assert "\\Scripts\\um-codex.exe')" in seven and "um-codex.cmd" not in code(seven)
     assert '$PowerShellArguments = "-NoProfile -NoExit -Command `"$Launch`""' in seven
+    # From the app, um-codex asks for the working folder (home is refused).
+    assert "\\Scripts\\um-codex.exe') launch --from-app\"" in seven
+    launch = re.search(r"(?s)\$Launch = (.*?)\n\$PowerShellArguments", seven).group(1)
+    assert '`"' not in launch  # no double quotes inside -Command "..."
+    assert "([string](Get-Content -LiteralPath $Marker -TotalCount 1)).Trim()" in launch
+    assert '-d `"$UserHome`" -- `"$WindowsPowerShell`"' in seven  # "--" ends wt's options
     # Someone else's Desktop shortcut of that name is left alone, and it says so.
     assert ".IndexOf($Marker, [StringComparison]::OrdinalIgnoreCase) -lt 0" in seven
     assert "that isn't UM-Codex's; it was left alone." in seven
@@ -522,11 +555,29 @@ def test_nothing_is_asked_after_done_so_ctrl_c_just_ends():
 
 def test_the_uninstaller_runs_um_codex_uninstall_first_and_stops_if_it_refuses():
     body = code(UNINSTALL)
-    run = body.index("& $Shim uninstall @choice")
+    run = body.index("& $Program uninstall @choice")
+    # Nothing of UM-Codex's own files goes before it has succeeded (uv and the
+    # installer's folders included).
+    assert run < body.index('foreach ($name in "installer", "install", "uv")')
     assert run < body.index('foreach ($name in "versions", "bin", "icons", "downloads")')
-    assert "if ($LASTEXITCODE -ne 0) {" in body[run : run + 200]
+    assert "if ($code -ne 0) {" in body[run : run + 400]
     assert '$choice += "--delete-data"' in body and '$choice += "--keep-data"' in body
     assert '$choice += "--yes"' in body
+    both = body.index("if ($DeleteData -and $KeepData) {")
+    assert "Stop-Run 2" in body[both : both + 200] and both < body.index("Unregister-ScheduledTask")
+
+
+@pytest.mark.parametrize("name", SCRIPTS)
+def test_iex_runs_ignore_the_persons_session_settings_and_leave_no_variables(name):
+    text = SCRIPTS[name]
+    block = text[text.index("= {\nparam(") :]
+    top = block[: block.index("function Stop-Run")]
+    assert "Set-StrictMode -Off" in top and "$PSDefaultParameterValues = @{}" in top
+    params = re.findall(r"\[(?:string|switch)\]\$(\w+)", text[: text.index("= {\nparam(")])
+    runner = text[text.rindex("} finally {") :]
+    assert "Remove-Variable -Scope Local" in runner
+    for param in params:
+        assert re.search(rf"\b{param}\b", runner), param
 
 
 def test_the_uninstaller_removes_only_what_the_installer_put_in_the_app_folder():

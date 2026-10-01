@@ -6,6 +6,8 @@
 #
 # Two ways to run it, both fine with the default execution policy:
 #
+#   (Before `irm`, turn on TLS 1.2 for the window: Windows PowerShell 5.1 may not
+#   offer it, and GitHub refuses older versions. docs/INSTALLING.md has the line.)
 #   irm <release>/install-windows.ps1 | iex
 #   & ([scriptblock]::Create((irm <release>/install-windows.ps1))) -ReplaceKey
 #
@@ -80,6 +82,10 @@ param(
     [string]$WorkDir = ""
 )
 $ErrorActionPreference = "Stop"
+# With `irm | iex` this runs under the person's own profile settings: no
+# strict mode, and no default parameter values of theirs.
+Set-StrictMode -Off
+$PSDefaultParameterValues = @{}
 # Ends the installer with an exit code. Run from a file (or as the
 # administrator part, or after a restart), that's `exit`. Run with `irm | iex`,
 # `exit` would close the person's own PowerShell window before they could read
@@ -1106,6 +1112,14 @@ if ($Prepare) {
 # ---------------------------------------------------------------------------
 # The installer, run as the person installing.
 # ---------------------------------------------------------------------------
+# The prompts (the masked key, the questions) need a real console: not the
+# PowerShell ISE, VS Code's integrated host or another program's.
+if ($Host.Name -ne "ConsoleHost") {
+    Write-Host ""
+    Write-Host "   This window ($($Host.Name)) can't show the installer's questions. Open Windows" -ForegroundColor Red
+    Write-Host "   PowerShell or Windows Terminal (Start menu), then run the installer there." -ForegroundColor Red
+    Stop-Run 1
+}
 $MySid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 # Per account, so two people installing on one computer don't share it.
 $ResumeTask = "UM-Codex setup for $MySid (continue after restart)"
@@ -1204,16 +1218,18 @@ function Install-PinnedUv {
 }
 
 # What of UM-Codex is running, in words, or "" if nothing: a process started
-# from one of the versions installed side by side under $root.
+# from one of the versions installed side by side under $root, or the command.
 function Get-RunningUmCodex($root) {
     $found = @()
-    $place = Join-Path $root "versions"
+    $places = @((Join-Path $root "versions"), (Join-Path $root "bin"))
     foreach ($process in @(Get-Process -ErrorAction SilentlyContinue)) {
         $path = $null
         try { $path = $process.Path } catch { Write-Verbose "No path for process $($process.Id)" }
         if (-not $path) { continue }
-        if ($path.StartsWith($place + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-            $found += "process $($process.Id)"
+        foreach ($place in $places) {
+            if ($path.StartsWith($place + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+                $found += "process $($process.Id)"
+            }
         }
     }
     return (@($found | Select-Object -Unique) -join ", ")
@@ -1253,20 +1269,58 @@ function Add-UserPath($folder) {
     if (-not (@($Env:Path -split ";") | Where-Object { Test-SamePath $_ $folder })) { $Env:Path = "$Env:Path;$folder" }
 }
 
+# Writes a one-line text file whole: into "<file>.tmp", then moved over the file.
+function Write-Atomically($file, $value) {
+    Set-Content -LiteralPath "$file.tmp" -Value $value -Encoding ASCII
+    Move-Item -LiteralPath "$file.tmp" -Destination $file -Force
+}
+
+# Puts a version's launcher at $destination. A running um-codex.exe can't be
+# overwritten, but it can be renamed: the one there is moved aside first, and
+# copies moved aside earlier are removed once nothing runs them.
+function Install-Launcher($source, $destination) {
+    $folder = Split-Path $destination -Parent
+    $name = Split-Path $destination -Leaf
+    foreach ($old in @(Get-ChildItem -LiteralPath $folder -File -Filter "$name.old-*" -Force -ErrorAction SilentlyContinue)) {
+        Remove-Item -LiteralPath $old.FullName -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $destination) {
+        Rename-Item -LiteralPath $destination -NewName ("$name.old-" + [guid]::NewGuid().ToString("N"))
+    }
+    Copy-Item -LiteralPath $source -Destination $destination
+}
+
+# Runs um-codex with the key on its standard input, written as UTF-8 (no BOM)
+# and then closed: never on a command line, in an environment variable or in a
+# file. Its messages go to this window. Returns its exit code.
+function Send-Key($program, $key) {
+    $info = New-Object System.Diagnostics.ProcessStartInfo $program, "key --from-stdin"
+    $info.UseShellExecute = $false
+    $info.RedirectStandardInput = $true
+    $info.EnvironmentVariables["PYTHONUTF8"] = "1"
+    $process = [System.Diagnostics.Process]::Start($info)
+    $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes("$key`n")
+    $process.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+    $process.StandardInput.Close()
+    $process.WaitForExit()
+    return $process.ExitCode
+}
+
 # Reads the Toolkit key, showing one * per character typed or pasted (at most
-# 64, then "..."), with Backspace, Ctrl-U (clear) and Enter; Ctrl-C cancels
+# 40, then "..."), with Backspace, Ctrl-U (clear) and Enter; Ctrl-C cancels
 # ($null). A paste of more than one line is refused and asked again. Only the
-# number of characters is ever shown, never any of them. Off a console it
-# falls back to Read-Host -AsSecureString.
+# number of characters is ever shown, never any of them. Where the console
+# can't be read a key at a time, it falls back to Read-Host -AsSecureString.
+function Read-HiddenKey($prompt) {
+    $secure = Read-Host "   $prompt" -AsSecureString
+    $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try { return ([Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)).Trim() }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
+}
 function Read-MaskedKey($prompt) {
     $console = $true
     try { $console = -not [Console]::IsInputRedirected } catch { $console = $false }
-    if (-not $console) {
-        $secure = Read-Host "   $prompt" -AsSecureString
-        $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-        try { return ([Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)).Trim() }
-        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
-    }
+    if (-not $console) { return (Read-HiddenKey $prompt) }
     while ($true) {
         Write-Host -NoNewline "   ${prompt}: "
         $typed = New-Object System.Text.StringBuilder
@@ -1276,7 +1330,12 @@ function Read-MaskedKey($prompt) {
         [Console]::TreatControlCAsInput = $true
         try {
             while ($true) {
-                $key = [Console]::ReadKey($true)
+                try { $key = [Console]::ReadKey($true) }
+                catch {
+                    # No console to read a key at a time from, after all.
+                    Write-Host ""
+                    return (Read-HiddenKey $prompt)
+                }
                 $char = [int]$key.KeyChar
                 if ($key.Key -eq [ConsoleKey]::Enter) { break }
                 if ($char -eq 3) { $cancelled = $true; break }  # Ctrl-C
@@ -1287,8 +1346,8 @@ function Read-MaskedKey($prompt) {
                 } elseif ($char -ge 32) {
                     $null = $typed.Append($key.KeyChar)
                 } else { continue }
-                $mask = ("*" * [Math]::Min($typed.Length, 64))
-                if ($typed.Length -gt 64) { $mask += "..." }
+                $mask = ("*" * [Math]::Min($typed.Length, 40))
+                if ($typed.Length -gt 40) { $mask += "..." }
                 Write-Host -NoNewline (("`b `b" * $shown) + $mask)
                 $shown = $mask.Length
             }
@@ -1701,7 +1760,7 @@ Install-PinnedUv
 & $Uv --version
 
 Step "Step 4 of 7: Installing UM-Codex"
-# In UM-Codex's folder: app\versions\<version>\, current, previous, bin\um-codex.cmd.
+# In UM-Codex's folder: app\versions\<version>\, current, previous, bin\um-codex.exe.
 $Root = Join-Path $StateDir "app"
 # A UM-Codex that's running holds its files open, and an update of the
 # version it runs couldn't replace them. So it's closed first, never stopped
@@ -1771,27 +1830,24 @@ if ((Test-Path -LiteralPath $Complete) -and ((Get-Content -LiteralPath $Complete
         -Value "{`"version`": `"$Version`", `"wheel_sha256`": `"$Sha256`", `"installed_at`": `"$Stamp`"}"
 }
 Remove-Tree $Stage
-# The `um-codex` command (bin\um-codex.cmd, on the user PATH) runs whichever
-# version `current` names: an update switches that, and keeps `previous`.
+# `current` names the version the launchers run (an update switches it, and
+# keeps `previous`). Each is written whole, then moved into place, so a
+# reader never sees half a file.
+$CurrentFile = Join-Path $Root "current"
+$Old = if (Test-Path -LiteralPath $CurrentFile) { "$(Get-Content -LiteralPath $CurrentFile -TotalCount 1)".Trim() } else { "" }
+if ($Old -and $Old -ne $Version) { Write-Atomically (Join-Path $Root "previous") $Old }
+Write-Atomically $CurrentFile $Version
+# The `um-codex` command: bin\um-codex.exe, on the user PATH, a copy of this
+# version's own launcher (uv's, which names this version's python.exe by its
+# full path), so it runs the version `current` names. A real .exe, not a .cmd
+# shim: cmd.exe asks "Terminate batch job (Y/N)?" after every Ctrl-C. (So no
+# um-codex.cmd: PATHEXT prefers .exe, and one beside it would never run; an
+# earlier one is removed.)
 $Bin = Join-Path $Root "bin"
 New-Item -ItemType Directory -Force -Path $Bin | Out-Null
-$Shim = @'
-@echo off
-rem Runs the UM-Codex version named in ..\current (written by the installer).
-setlocal
-rem UTF-8 for Python's own text files and console, whatever the code page.
-set PYTHONUTF8=1
-set /p UMCODEX_VERSION=<"%~dp0..\current"
-"%~dp0..\versions\%UMCODEX_VERSION%\Scripts\um-codex.exe" %*
-exit /b %ERRORLEVEL%
-'@
-# CRLF, as cmd.exe expects (this file itself is stored with LF).
-Set-Content -LiteralPath (Join-Path $Bin "um-codex.cmd") -Value ($Shim -replace "`r?`n", "`r`n") -Encoding ASCII
-$CurrentFile = Join-Path $Root "current"
-$Old = if (Test-Path -LiteralPath $CurrentFile) { (Get-Content -LiteralPath $CurrentFile -TotalCount 1).Trim() } else { "" }
-if ($Old -and $Old -ne $Version) { Set-Content -LiteralPath (Join-Path $Root "previous") -Value $Old -Encoding ASCII }
-Set-Content -LiteralPath $CurrentFile -Value $Version -Encoding ASCII
-$UmCodex = Join-Path $Bin "um-codex.cmd"
+$UmCodex = Join-Path $Bin "um-codex.exe"
+Install-Launcher (Join-Path $Target "Scripts\um-codex.exe") $UmCodex
+Remove-Item -LiteralPath (Join-Path $Bin "um-codex.cmd") -Force -ErrorAction SilentlyContinue
 & $UmCodex --version
 Add-UserPath $Bin
 
@@ -1822,10 +1878,7 @@ if ($HasKey -and -not $ReplaceKey) {
             Say "Skipped. Add it later with: um-codex key"
             break
         }
-        # Handed to um-codex on its standard input: never on a command line,
-        # in an environment variable or in a file.
-        $Key | & $UmCodex key --from-stdin
-        $code = $LASTEXITCODE
+        $code = Send-Key $UmCodex $Key
         $Key = $null
         if ($code -eq 0) { $KeyState = "saved"; break }
         if ($code -eq 2) { Say "Skipped. Add it later with: um-codex key"; break }
@@ -1837,9 +1890,10 @@ if ($HasKey -and -not $ReplaceKey) {
 Step "Step 7 of 7: Adding UM-Codex to the Start menu and the Desktop"
 # UM-Codex runs in a terminal: Windows Terminal if it's installed, otherwise
 # Windows PowerShell. The window runs the version `current` names (what an
-# update switches) directly, not through bin\um-codex.cmd: cmd.exe would ask
-# "Terminate batch job (Y/N)?" after a Ctrl-C. The window stays open
-# afterwards (-NoExit), to read what it said or run um-codex again.
+# update switches), with PYTHONUTF8, as `um-codex launch --from-app`: started
+# from the app, it asks for the working folder (the terminal's own folder, the
+# home folder, isn't one Codex may have). The window stays open afterwards
+# (-NoExit), to read what it said or run um-codex again.
 $StartMenu = Join-Path $Env:APPDATA "Microsoft\Windows\Start Menu\Programs"
 $LinkName = "UM-Codex"
 # The icon comes with the package, and is copied beside bin\ so an update
@@ -1855,9 +1909,11 @@ if (Test-Path -LiteralPath $PackagedIcon -PathType Leaf) {
 # folder like C:\Users\o'brien works.
 $QuotedRoot = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Root)
 $Marker = "'$QuotedRoot\current'"
+# (No double quotes in it: it goes inside -Command "...". [string] makes an
+# empty or missing first line "", not $null.)
 $Launch = "`$Host.UI.RawUI.WindowTitle = 'UM-Codex'; " +
-    "`$v = (Get-Content -LiteralPath $Marker -TotalCount 1).Trim(); `$Env:PYTHONUTF8 = '1'; " +
-    "& ('$QuotedRoot\versions\' + `$v + '\Scripts\um-codex.exe')"
+    "`$v = ([string](Get-Content -LiteralPath $Marker -TotalCount 1)).Trim(); `$Env:PYTHONUTF8 = '1'; " +
+    "& ('$QuotedRoot\versions\' + `$v + '\Scripts\um-codex.exe') launch --from-app"
 $PowerShellArguments = "-NoProfile -NoExit -Command `"$Launch`""
 # Windows Terminal, by its own command (an app execution alias), if it's there.
 $Terminal = Join-Path $Env:LOCALAPPDATA "Microsoft\WindowsApps\wt.exe"
@@ -1865,8 +1921,8 @@ $UserHome = [Environment]::GetFolderPath("UserProfile")
 if (Test-Path -LiteralPath $Terminal) {
     $LinkTarget = $Terminal
     # Windows Terminal splits its command line at each ";" (its own command
-    # separator) unless it's written "\;".
-    $LinkArguments = ("-w new new-tab --title UM-Codex -d `"$UserHome`" `"$WindowsPowerShell`" $PowerShellArguments").Replace(";", "\;")
+    # separator) unless it's written "\;"; "--" ends its own options.
+    $LinkArguments = ("-w new new-tab --title UM-Codex -d `"$UserHome`" -- `"$WindowsPowerShell`" $PowerShellArguments").Replace(";", "\;")
     $TerminalName = "Windows Terminal"
 } else {
     $LinkTarget = $WindowsPowerShell
@@ -1941,6 +1997,10 @@ try {
     if ("$($_.Exception.Message)" -ne "UM-Codex installer stopped") { throw }
 } finally {
     if (-not $UmCodexFromFile) {
-        Remove-Variable UmCodexInstaller, UmCodexFromFile, UmCodexScriptFolder, UmCodexArguments -ErrorAction SilentlyContinue
+        # With `irm | iex` these (and the param block's) are now variables of
+        # the person's session: take them out again.
+        Remove-Variable -Scope Local -ErrorAction SilentlyContinue -Name UmCodexInstaller, UmCodexFromFile,
+            UmCodexScriptFolder, UmCodexArguments, Package, Requirements, ReplaceKey, AdminAccessUrl, Yes,
+            Resume, Prepare, ForUserSid, WorkDir
     }
 }

@@ -11,6 +11,19 @@ You need a U-M GPT Toolkit API key for Codex (see ITS's "Codex Setup"
 articles for how to get one). The key is kept in your computer's keychain and
 never goes into the container.
 
+## Install on Windows
+
+Once releases are published (M3), in Windows PowerShell (Start menu >
+Windows PowerShell), paste:
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/SripadaLab-UM/um-codex/releases/latest/download/install-windows.ps1 | iex
+```
+
+It sets up Docker Desktop (with one administrator step and a restart, if
+needed), UM-Codex and your key, then adds UM-Codex to the Start menu and the
+Desktop. Details: [docs/INSTALLING.md](docs/INSTALLING.md).
+
 ## Run from source (M1, a Mac with Docker Desktop)
 
 You need [uv](https://docs.astral.sh/uv/), Docker Desktop (running), and git.

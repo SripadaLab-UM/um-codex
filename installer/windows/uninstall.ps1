@@ -19,6 +19,10 @@ param([switch]$DeleteData, [switch]$KeepData, [switch]$Yes)
 $UmCodexUninstaller = {
 param([switch]$DeleteData, [switch]$KeepData, [switch]$Yes)
 $ErrorActionPreference = "Stop"
+# With `irm | iex` this runs under the person's own profile settings: no
+# strict mode, and no default parameter values of theirs.
+Set-StrictMode -Off
+$PSDefaultParameterValues = @{}
 # Ends the uninstaller with an exit code: `exit` from a file, but with
 # `irm | iex` only the uninstaller (see install.ps1's Stop-Run).
 $StopMarker = "UM-Codex uninstaller stopped"
@@ -30,7 +34,10 @@ function Stop-Run([int]$code) {
 $StateDir = Join-Path $Env:LOCALAPPDATA "UM-Codex"
 $Root = Join-Path $StateDir "app"
 $Bin = Join-Path $Root "bin"
-$Shim = Join-Path $Bin "um-codex.cmd"
+if ($DeleteData -and $KeepData) {
+    Write-Host "Choose one: -DeleteData or -KeepData (or neither, to be asked)."
+    Stop-Run 2
+}
 
 # The installer's leftovers, first, so an install waiting for a restart can't
 # start again after this. The names and checks match install.ps1.
@@ -251,14 +258,11 @@ function Send-EnvironmentChanged {
 # --- End of the part shared by install.ps1 and uninstall.ps1 ---------------
 
 Remove-RecordedAdminFolder $MySid
-foreach ($name in "installer", "install", "uv") { Remove-Tree (Join-Path $StateDir $name) }
-foreach ($folder in @(Get-ChildItem -LiteralPath $StateDir -Directory -Filter "uv-download-*" -Force -ErrorAction SilentlyContinue)) {
-    Remove-Tree $folder.FullName
-}
 
 # UM-Codex's own uninstall: containers, networks, images, the key, and (if
-# asked) the data. It refuses while UM-Codex is running, and then nothing
-# else is removed either.
+# asked) the data. It refuses while UM-Codex is running, and then none of
+# UM-Codex's files are removed either. It's run as the version `current`
+# names, from that version's own folder.
 $choice = @()
 if ($DeleteData) { $choice += "--delete-data" } elseif ($KeepData) { $choice += "--keep-data" }
 if ($Yes) { $choice += "--yes" }
@@ -266,13 +270,17 @@ $Version = ""
 $CurrentFile = Join-Path $Root "current"
 if (Test-Path -LiteralPath $CurrentFile -PathType Leaf) { $Version = "$(Get-Content -LiteralPath $CurrentFile -TotalCount 1)".Trim() }
 $NotDone = @()
-if ($Version -and (Test-Path -LiteralPath $Shim -PathType Leaf) -and
-    (Test-Path -LiteralPath (Join-Path $Root "versions\$Version\Scripts\um-codex.exe") -PathType Leaf)) {
-    & $Shim uninstall @choice
-    if ($LASTEXITCODE -ne 0) {
+$Program = Join-Path $Root "versions\$Version\Scripts\um-codex.exe"
+if ($Version -and (Test-Path -LiteralPath $Program -PathType Leaf)) {
+    $before = $Env:PYTHONUTF8
+    $Env:PYTHONUTF8 = "1"
+    try { & $Program uninstall @choice; $code = $LASTEXITCODE }
+    finally { if ($null -eq $before) { Remove-Item Env:PYTHONUTF8 -ErrorAction SilentlyContinue } else { $Env:PYTHONUTF8 = $before } }
+    if ($code -ne 0) {
         Write-Host ""
-        Write-Host "Nothing else was removed. Once that's sorted out, run the uninstaller again." -ForegroundColor Yellow
-        Stop-Run $LASTEXITCODE
+        Write-Host "UM-Codex's program files were left as they were. Once that's sorted out, run the" -ForegroundColor Yellow
+        Write-Host "uninstaller again." -ForegroundColor Yellow
+        Stop-Run $code
     }
 } else {
     Write-Host "UM-Codex's program wasn't found (or is incomplete), so `"um-codex uninstall`" couldn't run."
@@ -280,6 +288,12 @@ if ($Version -and (Test-Path -LiteralPath $Shim -PathType Leaf) -and
     $NotDone += "  remove them in Docker Desktop (Containers, Images, Volumes)."
     $NotDone += "The Toolkit key, if one was saved: Control Panel > Credential Manager >"
     $NotDone += "  Windows Credentials > UM-Codex > Remove."
+}
+
+# The installer's own folders: its saved copy, its staging folder and uv.
+foreach ($name in "installer", "install", "uv") { Remove-Tree (Join-Path $StateDir $name) }
+foreach ($folder in @(Get-ChildItem -LiteralPath $StateDir -Directory -Filter "uv-download-*" -Force -ErrorAction SilentlyContinue)) {
+    Remove-Tree $folder.FullName
 }
 
 # The program files: only what install.ps1 and the updater put there
@@ -384,6 +398,9 @@ try {
     if ("$($_.Exception.Message)" -ne "UM-Codex uninstaller stopped") { throw }
 } finally {
     if (-not $UmCodexFromFile) {
-        Remove-Variable UmCodexUninstaller, UmCodexFromFile, UmCodexArguments -ErrorAction SilentlyContinue
+        # With `irm | iex` these (and the param block's) are now variables of
+        # the person's session: take them out again.
+        Remove-Variable -Scope Local -ErrorAction SilentlyContinue -Name UmCodexUninstaller, UmCodexFromFile,
+            UmCodexArguments, DeleteData, KeepData, Yes
     }
 }

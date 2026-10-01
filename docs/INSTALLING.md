@@ -9,26 +9,34 @@ the README has the commands; docs/DESIGN.md has the overall plan.
 DataLab's at `6b6fdca`. They run from a file or straight from the web:
 
 ```powershell
-irm <release>/install-windows.ps1 | iex
-& ([scriptblock]::Create((irm <release>/install-windows.ps1))) -ReplaceKey   # with options
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm <release>/install-windows.ps1 | iex
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; & ([scriptblock]::Create((irm <release>/install-windows.ps1))) -ReplaceKey   # with options
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Package <whl or https URL>] [-Requirements <file or URL>] [-ReplaceKey] [-AdminAccessUrl <https page>] [-Yes]
 ```
+
+The first part turns on TLS 1.2 (3072) for that window: Windows PowerShell
+5.1 may not offer it by itself, and GitHub refuses older versions, so a bare
+`irm` can fail before the installer has even started (which turns it on for
+its own downloads).
 
 Steps: (1) WSL and Docker Desktop, behind one administrator step, then a
 restart that resumes by itself; (2) start Docker Desktop, fixing the VM logon
 right if a policy took it; (3) the pinned uv; (4) UM-Codex in
 `%LOCALAPPDATA%\UM-Codex\app\versions\<version>`, with `current`/`previous`,
-`bin\um-codex.cmd` and `bin` on the user PATH; (5) `um-codex pull`; (6) the
+`bin\um-codex.exe` and `bin` on the user PATH; (5) `um-codex pull`; (6) the
 Toolkit key, read masked and piped to `um-codex key --from-stdin` (0 saved,
 1 invalid: asked again up to 3 times, 2 cancelled), kept if one is saved
 unless `-ReplaceKey`, skipped under `-Yes`; (7) "UM-Codex" in the Start menu
 and on the Desktop with `UM-Codex.ico`, opening Windows Terminal if it's
-installed, else Windows PowerShell, running `um-codex`. Then "All done!" with
+installed, else Windows PowerShell, running `um-codex launch --from-app`
+(which asks for the working folder: the terminal starts in the home folder,
+which Codex may not have). Then "All done!" with
 a summary.
 
-`uninstall.ps1 [-DeleteData | -KeepData] [-Yes]` runs `um-codex uninstall`
-(containers, networks, images, the key, and the data if asked), then removes
-the program files (`versions`, `bin`, `icons`, `downloads`, `current`,
+`uninstall.ps1 [-DeleteData | -KeepData] [-Yes]` (both data options at once:
+refused, exit 2) runs `um-codex uninstall` (containers, networks, images, the
+key, and the data if asked). Only once that has succeeded does it remove uv,
+the installer's folders and the program files (`versions`, `bin`, `icons`, `downloads`, `current`,
 `previous`), the shortcuts, the PATH entry and the installer's leftovers, and
 lists anything it couldn't remove.
 
@@ -97,12 +105,12 @@ uv and the package
 - A bare package file name is resolved first, so `requirements.txt` beside it is found. (7d8ec23)
 - Without `-Package`, the one package beside the installer is used (none or two: refused, saying why). (1f40c2f)
 - The version in the package name must end in a letter or digit. (0ed6270)
-- Each version in its own folder, `current` and `previous`, a `.complete` marker with the wheel's SHA-256; launchers never run a version's folder directly. (40a455f, 1f40c2f)
-- `bin\um-codex.cmd` sets `PYTHONUTF8=1` (cp1252 errors on Windows). (0ed6270)
+- Each version in its own folder, `current` and `previous`, a `.complete` marker with the wheel's SHA-256; launchers always go through `current`, never a version named in the launcher itself, so an update or rollback takes effect. (40a455f, 1f40c2f)
+- `PYTHONUTF8=1` for UM-Codex's Python (cp1252 errors on Windows): set by the shortcut and the installer's and uninstaller's own calls; DataLab set it in its `.cmd` shim, which UM-Codex doesn't have (see below), so the typed `um-codex` relies on UM-Codex opening its files as UTF-8 and on Python's UTF-16 console (PEP 528). (0ed6270)
 - A running UM-Codex is waited for, never stopped; `-Yes` stops instead. (1f40c2f)
 
 The key, the launchers, the end
-- The key prompt shows one `*` per character (at most 64, then `...`), with Backspace, Ctrl-U and Enter; Ctrl-C cancels; it says how many characters arrived, trims the ends, and refuses a paste of more than one line. (b603c25)
+- The key prompt shows one `*` per character (at most 40, then `...`), with Backspace, Ctrl-U and Enter; Ctrl-C cancels; it says how many characters arrived, trims the ends, and refuses a paste of more than one line. (b603c25)
 - A failed key or image step stops the installer instead of reaching "All done!". (7e7a41d, b32dec6)
 - Start menu entry and Desktop shortcut, both with the `.ico` copied to `<app>\icons` (an update removes version folders); a Desktop shortcut of that name that isn't UM-Codex's is left alone, and it says so. (627383c, 86efba7)
 - The program folder in the launcher is escaped with `EscapeSingleQuotedStringContent` (`C:\Users\o'brien`). (0ed6270)
@@ -121,9 +129,12 @@ Uninstalling
 - `irm | iex` and `& ([scriptblock]::Create((irm ...))) -Options`: the installer is one script block (`$UmCodexInstaller`), so the administrator part and the after-restart copy use its exact text however it was started; a stop ends only the installer (`Stop-Run` throws to the runner instead of `exit`, which would close the person's window); the environment and window title it changes are put back. CI checks both.
 - The after-restart run uses a saved copy of the installer (`%LOCALAPPDATA%\UM-Codex\installer\install.ps1`).
 - The `um-codex` command: `bin` is added to the user PATH as stored (REG_EXPAND_SZ entries kept unexpanded), announced with WM_SETTINGCHANGE, and removed on uninstall.
-- The launcher runs the current version's `um-codex.exe` directly, not through `um-codex.cmd`, so cmd.exe never asks "Terminate batch job (Y/N)?"; in Windows Terminal, `;` is escaped as `\;`.
-- `bin\um-codex.cmd` is written with CRLF.
-- The key is never on a command line or in the environment: it's piped to `um-codex key --from-stdin`.
+- No `.cmd` shim: cmd.exe asks "Terminate batch job (Y/N)?" after every Ctrl-C. The typed `um-codex` is `bin\um-codex.exe`, a copy of the current version's own uv launcher (which names that version's `python.exe` by full path), recopied on every switch; a running copy is renamed aside rather than overwritten, and old copies removed later. The shortcut runs the version `current` names directly. A `.cmd` beside the `.exe` would never run (PATHEXT prefers `.exe`), so an earlier one is removed.
+- In Windows Terminal, `;` is escaped as `\;` and `--` ends wt's own options.
+- `current` and `previous` are written to `<file>.tmp` and moved into place (`Move-Item -Force`), and read as `"$(Get-Content -TotalCount 1)".Trim()`, so an empty or half-written file never breaks a launch.
+- The key is never on a command line, in the environment or in a file: the installer writes it to `um-codex key --from-stdin`'s standard input itself (`Process.StandardInput`, UTF-8 without a BOM), not through PowerShell's pipe (`$OutputEncoding`).
+- A host other than the console (PowerShell ISE, an editor's) stops at once and says to open Windows PowerShell or Windows Terminal; if a key can't be read a key at a time, the prompt falls back to `Read-Host -AsSecureString`.
+- `Set-StrictMode -Off` and an empty `$PSDefaultParameterValues` inside each script block, so an `iex` run isn't changed by the person's profile; afterwards the runner removes the variables an `iex` run left in the person's session (the param block's too).
 - Shared state in a hashtable (`$State`), because `$script:` inside the script block means the file's scope, or the person's session.
 
 ### Not verified without Windows
