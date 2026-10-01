@@ -316,7 +316,10 @@ modes, rigor, and the frontend.
      swapped in; the key wasn't in `docker inspect`, the container's
      environment or any file in it (`grep -r /`); `codex exec` answered
      through the relay; everything but the setup's volume was removed
-     afterwards. Codex's interactive TUI itself was not driven.
+     afterwards. Codex's interactive TUI itself was not driven. After the
+     review fixes: with `um-codex` killed (SIGKILL) mid-launch, the watchdog
+     ended the agent container in about a minute, and the next launch's
+     cleanup removed the gateway and networks.
 2. **M2, installers and CI:**
    - the Mac and Windows installers (Docker step, uv, key, launcher, icon);
    - uninstallers;
