@@ -430,11 +430,22 @@ def test_versions_side_by_side_and_a_stable_command_on_the_user_path():
     unsafe = r"Set-Content -LiteralPath \$CurrentFile|\(Get-Content [^)]*\)\.Trim\(\)"
     assert not re.search(unsafe, code(INSTALL))
     # The command is a copy of the version's own launcher (no .cmd shim, whose
-    # cmd.exe asks "Terminate batch job (Y/N)?"), swapped by renaming aside.
+    # cmd.exe asks "Terminate batch job (Y/N)?"): copied beside it first, then
+    # the one there renamed aside and the copy moved into place; and before
+    # `current` names the new version.
     assert '$UmCodex = Join-Path $Bin "um-codex.exe"' in four
     assert 'Install-Launcher (Join-Path $Target "Scripts\\um-codex.exe") $UmCodex' in four
+    assert four.index("Install-Launcher (Join-Path $Target") < four.index(
+        "Write-Atomically $CurrentFile $Version"
+    )
     launcher = function(INSTALL, "Install-Launcher")
-    assert launcher.index("Rename-Item") < launcher.index("Copy-Item")
+    assert '$fresh = Join-Path $folder ".$name.new"' in launcher
+    assert launcher.index("Copy-Item -LiteralPath $source -Destination $fresh") < launcher.index(
+        "Rename-Item"
+    )
+    assert launcher.index("Rename-Item") < launcher.index(
+        "Move-Item -LiteralPath $fresh -Destination $destination"
+    )
     assert "um-codex.cmd" not in code(INSTALL).replace('(Join-Path $Bin "um-codex.cmd") -Force', "")
     assert "Add-UserPath $Bin" in four
     add = function(INSTALL, "Add-UserPath")

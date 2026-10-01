@@ -563,3 +563,80 @@ def test_the_cli_update_command_in_a_development_copy(capsys, monkeypatch):
     monkeypatch.setattr(release_keys, "RELEASE_KEYS", ())
     assert cli.main(["update"]) == 1
     assert "Updates aren't set up" in capsys.readouterr().out
+
+
+def test_a_reused_version_that_doesnt_run_is_installed_afresh(app, github, key, data_folder):
+    private, public = key
+    release = make_release("v0.1.0-alpha.3", "0.1.0a3", private)
+    github.releases = [release]
+    folder = installed(app, "0.1.0a3")
+    wheel = release.files["umcodex-0.1.0a3-py3-none-any.whl"]
+    (folder / ".complete").write_text(json.dumps({"version": "0.1.0a3", "wheel_sha256": sha256(wheel)}))
+    tools, said = FakeTools(), []
+    first = [True]
+    real = tools.__call__
+
+    def broken_once(command, **kw):
+        if command[1:] == ["--version"] and first[0]:
+            first[0] = False
+            return FakeTools.done(1, err="bad interpreter")
+        return real(command, **kw)
+
+    up = updater(app, github, public, tools, said, data_folder)
+    up._run = broken_once  # type: ignore[assignment]
+    assert up.update() == 0, said
+    assert [c[1] for c in tools.ran("uv")] == ["venv", "pip"]
+    assert pointer(app) == ("0.1.0a3", "0.1.0a1")
+    assert json.loads((folder / ".complete").read_text())["wheel_sha256"] == sha256(wheel)
+
+
+def test_pruning_unmarks_a_version_before_removing_it(app, monkeypatch):
+    import shutil
+
+    monkeypatch.setattr(shutil, "rmtree", lambda *a, **k: None)  # a removal that stops part way
+    layout = Layout(app, windows=False, prefix=app / "versions" / "0.1.0a1")
+    assert layout.prune({"0.1.0a1"}) == []
+    assert (app / "versions" / "0.0.9").is_dir() and not layout.complete("0.0.9")
+    assert layout.complete("0.1.0a1")
+
+
+def test_on_windows_a_failed_copy_leaves_the_command_and_current_as_they_were(tmp_path):
+    root = tmp_path / "app"
+    installed(root, "0.1.0a1", windows=True)
+    folder = installed(root, "0.1.0a3", windows=True)
+    (root / "current").write_text("0.1.0a1\n")
+    (root / "bin").mkdir()
+    (root / "bin" / "um-codex.exe").write_text("launcher of 0.1.0a1")
+    (folder / "Scripts" / "um-codex.exe").unlink()  # nothing to copy
+    layout = Layout(root, windows=True, prefix=root / "versions" / "0.1.0a1")
+    with pytest.raises(OSError):
+        layout.switch("0.1.0a3", previous="0.1.0a1")
+    assert (root / "current").read_text() == "0.1.0a1\n" and not (root / "previous").exists()
+    assert (root / "bin" / "um-codex.exe").read_text() == "launcher of 0.1.0a1"
+    (folder / "Scripts" / "um-codex.exe").write_text("launcher of 0.1.0a3")
+    layout.switch("0.1.0a3", previous="0.1.0a1")
+    assert (root / "bin" / "um-codex.exe").read_text() == "launcher of 0.1.0a3"
+    assert not (root / "bin" / ".um-codex.exe.new").exists()
+
+
+def test_uv_from_the_installer_comes_first(tmp_path, monkeypatch):
+    from umcodex import update
+
+    home = tmp_path / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(update.Path, "home", lambda: home)
+    monkeypatch.setattr(update.shutil, "which", lambda name: "/elsewhere/uv")
+    assert update.find_uv("darwin") == "/elsewhere/uv"
+    (home / ".local" / "bin" / "uv").write_text("")
+    assert update.find_uv("darwin") == str(home / ".local" / "bin" / "uv")
+
+
+def test_the_notice_can_never_stop_a_launch(monkeypatch, capsys):
+    from umcodex import cli, update
+
+    def broken(*_a, **_k):
+        raise RuntimeError("anything at all")
+
+    monkeypatch.setattr(update, "launch_notice", broken)
+    cli._update_notice()  # doesn't raise
+    assert capsys.readouterr().out == ""

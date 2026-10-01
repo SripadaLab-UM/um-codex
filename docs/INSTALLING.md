@@ -221,9 +221,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Package <whl o
 ```
 
 A release's `install-windows.ps1` has `$ReleaseBase` and `$ReleaseWheel`
-filled in by `scripts/build-release.sh`, so with no `-Package` (and no
-package beside it) it installs its own release's package and
-`requirements.txt`; CI checks that path. The first part turns on TLS 1.2
+filled in by `scripts/build-release.sh`, so with no `-Package` it installs
+its own release's package and `requirements.txt`: from beside it only if
+that's exactly `$ReleaseWheel`, otherwise from the release. CI checks both. The first part turns on TLS 1.2
 (3072) for that window: Windows PowerShell
 5.1 may not offer it by itself, and GitHub refuses older versions, so a bare
 `irm` can fail before the installer has even started (which turns it on for
@@ -339,7 +339,7 @@ Uninstalling
 - `irm | iex` and `& ([scriptblock]::Create((irm ...))) -Options`: the installer is one script block (`$UmCodexInstaller`), so the administrator part and the after-restart copy use its exact text however it was started; a stop ends only the installer (`Stop-Run` throws to the runner instead of `exit`, which would close the person's window); the environment and window title it changes are put back. CI checks both.
 - The after-restart run uses a saved copy of the installer (`%LOCALAPPDATA%\UM-Codex\installer\install.ps1`).
 - The `um-codex` command: `bin` is added to the user PATH as stored (REG_EXPAND_SZ entries kept unexpanded), announced with WM_SETTINGCHANGE, and removed on uninstall.
-- No `.cmd` shim: cmd.exe asks "Terminate batch job (Y/N)?" after every Ctrl-C. The typed `um-codex` is `bin\um-codex.exe`, a copy of the current version's own uv launcher (which names that version's `python.exe` by full path), recopied on every switch; a running copy is renamed aside rather than overwritten, and old copies removed later. The shortcut runs the version `current` names directly. A `.cmd` beside the `.exe` would never run (PATHEXT prefers `.exe`), so an earlier one is removed.
+- No `.cmd` shim: cmd.exe asks "Terminate batch job (Y/N)?" after every Ctrl-C. The typed `um-codex` is `bin\um-codex.exe`, a copy of the current version's own uv launcher (which names that version's `python.exe` by full path), recopied on every switch, before `current` is written: copied beside it as `.um-codex.exe.new`, then a running copy is renamed aside rather than overwritten and the new one moved into place; old copies are removed later. `um-codex update` does the same. The shortcut runs the version `current` names directly. A `.cmd` beside the `.exe` would never run (PATHEXT prefers `.exe`), so an earlier one is removed.
 - In Windows Terminal, `;` is escaped as `\;` and `--` ends wt's own options.
 - `current` and `previous` are written to `<file>.tmp` and moved into place (`Move-Item -Force`), and read as `"$(Get-Content -TotalCount 1)".Trim()`, so an empty or half-written file never breaks a launch.
 - The key is never on a command line, in the environment or in a file: the installer writes it to `um-codex key --from-stdin`'s standard input itself (`Process.StandardInput`, UTF-8 without a BOM), not through PowerShell's pipe (`$OutputEncoding`).

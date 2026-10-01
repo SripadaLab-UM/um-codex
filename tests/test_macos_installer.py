@@ -249,6 +249,17 @@ def waiting_after_trace(text: bytes) -> bool:
     return all(line.startswith(b"+ ") for line in rest.split(b"\n") if line)
 
 
+def wait_until_waiting(pid: int, seconds: float = 20) -> None:
+    """Until the process is asleep (blocked reading its terminal), seen three
+    times in a row, however busy this computer is; at most `seconds`."""
+    asleep = 0
+    deadline = time.monotonic() + seconds
+    while asleep < 3 and time.monotonic() < deadline:
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout
+        asleep = asleep + 1 if state.strip()[:1] in ("S", "I") else 0
+        time.sleep(0.05)
+
+
 def in_terminal(
     command: list[str], env: dict[str, str], answers: list[str], timeout: float = 60
 ) -> subprocess.CompletedProcess[str]:
@@ -271,7 +282,15 @@ def in_terminal(
 
     def answer() -> None:
         nonlocal mark
-        os.write(fd, ((pending.pop(0) if pending else "") + "\n").encode())
+        typed = pending.pop(0) if pending else ""
+        if typed.endswith("\x03"):
+            # Ctrl-C only once the installer is waiting in `read`: sh (bash 3.2)
+            # can lose a SIGINT that arrives between printing the question and
+            # starting to read. And on its own, as a person presses it: no Return.
+            wait_until_waiting(pid)
+            os.write(fd, typed.encode())
+        else:
+            os.write(fd, (typed + "\n").encode())
         mark = len(out)
 
     deadline = time.monotonic() + timeout
@@ -1068,7 +1087,10 @@ cat "$UMCODEX_TEST_CLOCK" 2>/dev/null || echo 1000
     '[ -z "${UMCODEX_TEST_MDFIND:-}" ] || printf \'%s\\n\' "$UMCODEX_TEST_MDFIND"\n',
     "ditto": """#!/bin/sh
 case "${UMCODEX_TEST_DITTO:-}" in
-  interrupt) mkdir -p "$2/Contents"; echo half > "$2/Contents/half"; kill -INT "$PPID"; exit 1 ;;
+  # Ctrl-C reaches the whole foreground process group, this copy included,
+  # which dies of it. (Signalling only the installer while the copy then exits
+  # normally is something else: sh may take it that the copy dealt with it.)
+  interrupt) mkdir -p "$2/Contents"; echo half > "$2/Contents/half"; kill -INT 0; exit 1 ;;
   not-permitted) echo "ditto: $2: Operation not permitted" >&2; exit 1 ;;
   fails) echo "ditto: $2: No space left on device" >&2; exit 1 ;;
   tamper) cp -R "$1" "$2" && echo "Other (ABCDE12345)" > "$2/Contents/fake-signer" ;;

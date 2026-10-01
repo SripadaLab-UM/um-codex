@@ -17,8 +17,8 @@ jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           enable-cache: true
       - run: uv sync
@@ -35,8 +35,8 @@ jobs:
     # through a real terminal.
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           enable-cache: true
       - run: uv sync
@@ -58,7 +58,7 @@ jobs:
     # removal must do what they say.
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: The scripts parse (Windows PowerShell 5.1, as people run them)
         shell: powershell
         run: |
@@ -136,7 +136,12 @@ jobs:
           $release = Run-Case "release" @() $base
           if ($release.Code -ne 0 -or $release.Out -notmatch [regex]::Escape("PACKAGE=$base/umcodex-9.9.9-py3-none-any.whl") -or
               $release.Out -notmatch [regex]::Escape("REQUIREMENTS=$base/requirements.txt")) { Write-Host $release.Out; exit 1 }
-          Write-Host "One package: used. None, or two: refused, saying why. None with a release: the release's."
+          # A release's installer takes only its own package from beside it.
+          $other = Run-Case "release-other" @("umcodex-0.0.1-py3-none-any.whl") $base
+          if ($other.Code -ne 0 -or $other.Out -notmatch [regex]::Escape("PACKAGE=$base/umcodex-9.9.9-py3-none-any.whl")) { Write-Host $other.Out; exit 1 }
+          $own = Run-Case "release-own" @("umcodex-9.9.9-py3-none-any.whl", "umcodex-0.0.1-py3-none-any.whl") $base
+          if ($own.Code -ne 0 -or $own.Out -notmatch [regex]::Escape("PACKAGE=" + (Join-Path $own.Dir "umcodex-9.9.9-py3-none-any.whl"))) { Write-Host $own.Out; exit 1 }
+          Write-Host "One package: used. None, or two: refused, saying why. None with a release: the release's. A release's installer takes only its own package from beside it."
           exit 0  # (not the last case's exit code)
       - name: Only package names with a version are accepted
         shell: powershell
@@ -227,6 +232,7 @@ jobs:
           $running = Start-Process $copy -ArgumentList "download", "--no-deps", "-d", $Env:RUNNER_TEMP, "pip==24.0" -PassThru -WindowStyle Hidden
           Install-Launcher (Join-Path $venv "Scripts\pip.exe") $copy
           if (-not (Test-Path $copy)) { Fail "no launcher after the swap" }
+          if (Test-Path (Join-Path $bin ".pip.exe.new")) { Fail "the new copy was left beside it" }
           $running.WaitForExit()
           $file = Join-Path $Env:RUNNER_TEMP "launcher\current"
           Write-Atomically $file "1.0"

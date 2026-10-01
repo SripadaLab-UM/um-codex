@@ -20,8 +20,13 @@ name: Release
 #    fresh runner that runs no build and no Docker (job `sign`, the only job
 #    in that environment; tests/test_release.py checks it stays so). It
 #    refuses a key the package doesn't pin;
-# 4. create the GitHub Release with all of them (job `publish`).
-#    `um-codex update` refuses a release without a valid signature.
+# 4. create the GitHub Release with all of them (job `publish`), always as a
+#    normal release, and the latest only if its version is the newest
+#    (scripts/release-latest.py). `um-codex update` refuses a release
+#    without a valid signature.
+#
+# Every action is pinned by its full commit (tests/test_release.py checks);
+# the uv used by the jobs that sign or build is pinned and runs uncached.
 #
 # If signing fails (or is never approved), nothing is published, but the
 # agent image from step 1 stays pushed to the registry. That's harmless:
@@ -38,8 +43,15 @@ on:
 permissions:
   contents: read
 
+# One release at a time, and a queued one is never cancelled.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 env:
   IMAGE: ghcr.io/sripadalab-um/um-codex-agent
+  # The uv the installers pin (installer/*): the same here.
+  UMCODEX_UV_VERSION: "0.12.19"
 
 jobs:
   checks:
@@ -53,47 +65,69 @@ jobs:
     # key could never check its next update.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: ${{ env.UMCODEX_UV_VERSION }}
+          enable-cache: false
       - name: Check the tag matches the package version
         # Pre-releases included: v0.1.0-alpha.2 is version 0.1.0a2 (PEP 440).
         run: sh scripts/release-version.sh "$GITHUB_REF_NAME"
       - name: Check the package pins a release key
         run: |
           uv sync --locked --no-dev --no-install-project
-          PYTHONPATH=src uv run --no-sync python scripts/sign-release.py --check-pinned
+          PYTHONPATH=src .venv/bin/python scripts/sign-release.py --check-pinned
 
   reuse:
     # The agent image depends only on images/agent, so it's keyed by that
     # folder's git tree id. If an image for this tree is in the registry
-    # already, the release uses it as it is.
+    # already, the release uses it as it is, but only if it holds both
+    # platforms and its provenance says this repository's release.yml built
+    # it (the image and manifest jobs attest that). Otherwise it's rebuilt.
     needs: [checks, version]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
+      attestations: read
     outputs:
       tree: ${{ steps.find.outputs.tree }}
       image: ${{ steps.find.outputs.image }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Look for an image built from this images/agent
         id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           tree=$(git rev-parse HEAD:images/agent)
           echo "tree=$tree" >> "$GITHUB_OUTPUT"
-          if digest=$(docker buildx imagetools inspect "$IMAGE:tree-$tree" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"') && [ -n "$digest" ]; then
-            echo "image=$IMAGE@$digest" >> "$GITHUB_OUTPUT"
-            echo "Reusing $IMAGE@$digest (images/agent unchanged, tree $tree)."
-          else
+          if ! digest=$(docker buildx imagetools inspect "$IMAGE:tree-$tree" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"') || [ -z "$digest" ]; then
             echo "No image for tree $tree yet: building one."
+            exit 0
           fi
+          platforms=$(docker buildx imagetools inspect --raw "$IMAGE@$digest" | jq -r '[.manifests[]?.platform | "\(.os)/\(.architecture)"] | join(" ")')
+          case " $platforms " in
+            *" linux/amd64 "*" linux/arm64 "* | *" linux/arm64 "*" linux/amd64 "*) ;;
+            *) echo "$IMAGE@$digest lists '$platforms', not both linux/amd64 and linux/arm64: building a new one."; exit 0 ;;
+          esac
+          if ! gh attestation verify "oci://$IMAGE@$digest" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"; then
+            echo "$IMAGE@$digest has no provenance from this repository's release.yml: building a new one."
+            exit 0
+          fi
+          echo "image=$IMAGE@$digest" >> "$GITHUB_OUTPUT"
+          echo "Reusing $IMAGE@$digest (images/agent unchanged, tree $tree; both platforms; provenance checked)."
 
   image:
     needs: [checks, version, reuse]
@@ -109,30 +143,40 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push (by digest)
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: images/agent
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+      - name: Attest its provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
       - name: Remember the digest
         run: |
           mkdir -p /tmp/digests
           touch "/tmp/digests/${DIGEST#sha256:}"
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: digest-${{ strategy.job-index }}
           path: /tmp/digests/*
@@ -145,39 +189,60 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     outputs:
       image: ${{ steps.pin.outputs.image }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: needs.reuse.outputs.image == ''
         with:
           pattern: digest-*
           path: /tmp/digests
           merge-multiple: true
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Combine both platforms under the version and tree tags
+      - name: Combine both platforms under the tree tag
         if: needs.reuse.outputs.image == ''
         env:
           TREE: ${{ needs.reuse.outputs.tree }}
         run: |
           test "$(ls /tmp/digests | wc -l)" -eq 2 || { echo "Expected two platforms' digests."; exit 1; }
-          docker buildx imagetools create -t "$IMAGE:${GITHUB_REF_NAME}" -t "$IMAGE:tree-$TREE" \
+          docker buildx imagetools create -t "$IMAGE:tree-$TREE" \
             $(printf "$IMAGE@sha256:%s " $(ls /tmp/digests))
-      - name: Tag the reused image with this version
-        if: needs.reuse.outputs.image != ''
-        env:
-          REUSED: ${{ needs.reuse.outputs.image }}
-        run: docker buildx imagetools create -t "$IMAGE:${GITHUB_REF_NAME}" "$REUSED"
-      - name: Pin the combined image by digest
+      - name: Pin the image by digest, check both platforms, tag it with this version
         id: pin
+        env:
+          TREE: ${{ needs.reuse.outputs.tree }}
+          REUSED: ${{ needs.reuse.outputs.image }}
         run: |
-          digest=$(docker buildx imagetools inspect "$IMAGE:${GITHUB_REF_NAME}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          # The digest comes from what this run built (tree-$TREE) or checked
+          # (REUSED), never from the version tag, which another run could move.
+          if [ -n "$REUSED" ]; then
+            digest="${REUSED#"$IMAGE@"}"
+          else
+            digest=$(docker buildx imagetools inspect "$IMAGE:tree-$TREE" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          fi
+          case "$digest" in sha256:*) ;; *) echo "No digest: '$digest'"; exit 1 ;; esac
+          platforms=$(docker buildx imagetools inspect --raw "$IMAGE@$digest" | jq -r '[.manifests[]?.platform | "\(.os)/\(.architecture)"] | join(" ")')
+          case " $platforms " in
+            *" linux/amd64 "*" linux/arm64 "* | *" linux/arm64 "*" linux/amd64 "*) ;;
+            *) echo "$IMAGE@$digest lists '$platforms', not both linux/amd64 and linux/arm64."; exit 1 ;;
+          esac
+          docker buildx imagetools create -t "$IMAGE:${GITHUB_REF_NAME}" "$IMAGE@$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "image=$IMAGE@$digest" >> "$GITHUB_OUTPUT"
+      - name: Attest the combined image's provenance
+        if: needs.reuse.outputs.image == ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.pin.outputs.digest }}
+          push-to-registry: true
 
   package:
     # Builds the package and gathers the release's files. It runs the build
@@ -189,8 +254,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: ${{ env.UMCODEX_UV_VERSION }}
+          enable-cache: false
       - name: Build the release's files
         env:
           AGENT_IMAGE: ${{ needs.manifest.outputs.image }}
@@ -221,12 +291,12 @@ jobs:
             echo "on Mac, or compare \`Get-FileHash <file>\` with it on Windows."
           } > notes.md
           mkdir -p notes && mv notes.md notes/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-assets
           path: assets/
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-notes
           path: notes/notes.md
@@ -246,13 +316,18 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: ${{ env.UMCODEX_UV_VERSION }}
+          enable-cache: false
       - name: Install the signing script's dependencies (locked)
         # Only the locked dependencies, by hash: the package itself isn't
         # built here (no build backend runs), it's read from the tag's source.
         run: uv sync --locked --no-dev --no-install-project
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-assets
           path: assets
@@ -261,13 +336,16 @@ jobs:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
           # What's signed is what's listed: every file must match first, and
-          # nothing may be there that isn't listed.
+          # the files there must be exactly those listed.
           (cd assets && sha256sum --strict -c SHA256SUMS)
-          test "$(ls assets | wc -l)" -eq "$(($(wc -l < assets/SHA256SUMS) + 1))"
-          # Refuses without the key, or when the tag's code doesn't pin its public key.
-          PYTHONPATH=src uv run --no-sync python scripts/sign-release.py assets/SHA256SUMS
+          listed=$( { sed -E 's/^[0-9a-f]{64} [ *]//' assets/SHA256SUMS; echo SHA256SUMS; } | LC_ALL=C sort)
+          present=$(ls -A assets | LC_ALL=C sort)
+          test "$listed" = "$present" || { echo "The files aren't exactly those SHA256SUMS lists:"; echo "$present"; exit 1; }
+          # Refuses without the key, or when the tag's code doesn't pin its
+          # public key. Run by the environment's own Python, so uv never sees the key.
+          PYTHONPATH=src .venv/bin/python scripts/sign-release.py assets/SHA256SUMS
           mkdir -p signature && mv assets/SHA256SUMS.sig signature/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-signature
           path: signature/SHA256SUMS.sig
@@ -280,15 +358,24 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: ${{ env.UMCODEX_UV_VERSION }}
+          enable-cache: false
+      - name: Install the locked dependencies (for scripts/release-latest.py)
+        run: uv sync --locked --no-dev --no-install-project
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-assets
           path: assets
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-signature
           path: assets
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-notes
           path: notes
@@ -296,18 +383,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # GitHub's releases/latest never points at a pre-release, and the
-          # install commands use releases/latest/download. So a pre-release
-          # version (a, b, rc) is marked a pre-release only once a full
-          # release exists; until then it's the latest release.
-          which="--latest"
-          case "$GITHUB_REF_NAME" in
-            *-*)
-              full=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
-                --limit 1 --json tagName --jq 'length')
-              if [ "$full" != "0" ]; then which="--prerelease"; fi ;;
-          esac
-          gh release create "$GITHUB_REF_NAME" $which \
+          # Always a normal release (GitHub's releases/latest never points at
+          # a pre-release, and the install commands download from it); the
+          # latest only if it's newer than every published release.
+          latest=$(.venv/bin/python scripts/release-latest.py "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY")
+          gh release create "$GITHUB_REF_NAME" "$latest" \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "UM-Codex $GITHUB_REF_NAME" \

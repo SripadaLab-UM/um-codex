@@ -382,9 +382,11 @@ modes, rigor, and the frontend.
      stamped, `requirements.txt` with hashes, the installers with the
      release's address written in, `images.json` and `SHA256SUMS`
      (`scripts/build-release.sh`); `SHA256SUMS.sig` made in the `sign` job,
-     the only one in the `release` environment; then the release. A
-     pre-release is marked so only once a full release exists, so
-     `releases/latest/download` works from the first alpha.
+     the only one in the `release` environment; then the release, always a
+     normal one (never a GitHub pre-release, so `releases/latest/download`
+     works from the first alpha), marked the latest only if its version is
+     the newest. Actions pinned by commit; a reused agent image must list
+     both platforms and carry this workflow's build provenance.
    - `um-codex update`: DataLab's rules for which release is offered and
      how it's checked (signed `SHA256SUMS`, GitHub's checksums, hashed
      requirements, images matching the package's), installed beside with
@@ -437,7 +439,11 @@ modes, rigor, and the frontend.
   mostly the installer.
 - An install site like DataLab's: later. Until then, the README has the two
   install commands.
-- Codex version: pinned in the image, and updated by a release.
+- Codex version: pinned in the image, and updated by a release. The image's
+  `npm install -g @openai/codex@<version>` pins the version but isn't
+  integrity-locked (no lockfile or hash for Codex's own npm dependencies), so
+  a rebuild can pick up different dependency files; the release's provenance
+  and digest pin what was actually built.
 - Controlling the person's own computer (desktop, apps, their browser): out
   of scope. The container can't reach the host by design. Codex's own
   `browser_use`, `in_app_browser` and `computer_use` features target its

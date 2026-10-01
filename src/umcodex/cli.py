@@ -192,12 +192,22 @@ def _setups() -> int:
     return 0
 
 
+def _update_notice() -> None:
+    """One line if a newer release is out (GitHub asked at most once a day, 3 s
+    at most). Nothing about it, not even importing it, may stop a launch."""
+    try:
+        from umcodex.update import launch_notice
+
+        launch_notice()
+    except Exception:
+        logging.getLogger(__name__).warning("the update check at launch failed", exc_info=True)
+
+
 def _launch(codex_args: list[str], *, from_app: bool = False) -> int:
     from umcodex import launch
-    from umcodex.update import launch_notice
 
     print(f"UM-Codex {__version__}")
-    launch_notice()  # one line if a newer release is out (GitHub asked at most once a day)
+    _update_notice()
     if sys.platform == "win32" and not codex_args and not (sys.stdin.isatty() and sys.stdout.isatty()):
         print("This window can't run Codex's screen (Git Bash and mintty can't).")
         print("Use Windows Terminal or PowerShell, then run um-codex again.")

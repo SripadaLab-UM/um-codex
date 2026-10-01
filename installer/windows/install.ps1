@@ -1276,18 +1276,23 @@ function Write-Atomically($file, $value) {
 }
 
 # Puts a version's launcher at $destination. A running um-codex.exe can't be
-# overwritten, but it can be renamed: the one there is moved aside first, and
-# copies moved aside earlier are removed once nothing runs them.
+# overwritten, but it can be renamed: the new copy is made beside it first
+# (".um-codex.exe.new", so a copy that fails part way never leaves bin without
+# a command), then the one there is moved aside and the new one moved into its
+# place. Copies moved aside earlier are removed once nothing runs them.
+# (um-codex update does the same: Layout.install_command in update.py.)
 function Install-Launcher($source, $destination) {
     $folder = Split-Path $destination -Parent
     $name = Split-Path $destination -Leaf
     foreach ($old in @(Get-ChildItem -LiteralPath $folder -File -Filter "$name.old-*" -Force -ErrorAction SilentlyContinue)) {
         Remove-Item -LiteralPath $old.FullName -Force -ErrorAction SilentlyContinue
     }
+    $fresh = Join-Path $folder ".$name.new"
+    Copy-Item -LiteralPath $source -Destination $fresh -Force
     if (Test-Path -LiteralPath $destination) {
         Rename-Item -LiteralPath $destination -NewName ("$name.old-" + [guid]::NewGuid().ToString("N"))
     }
-    Copy-Item -LiteralPath $source -Destination $destination
+    Move-Item -LiteralPath $fresh -Destination $destination
 }
 
 # Runs um-codex with the key on its standard input, written as UTF-8 (no BOM)
@@ -1416,6 +1421,8 @@ if (-not $Package) {
     if ($ScriptFolder) {
         $besideScript = @(Get-ChildItem -LiteralPath $ScriptFolder -File -Filter "umcodex-*-py3-none-any.whl" -ErrorAction SilentlyContinue)
     }
+    # A release's installer takes only its own release's package from beside it.
+    if ($ReleaseWheel) { $besideScript = @($besideScript | Where-Object { $_.Name -ceq $ReleaseWheel }) }
     if ($besideScript.Count -eq 1) { $Package = $besideScript[0].FullName }
     elseif ($besideScript.Count -gt 1) {
         Write-Host "There's more than one UM-Codex package in $ScriptFolder"
@@ -1830,13 +1837,6 @@ if ((Test-Path -LiteralPath $Complete) -and ((Get-Content -LiteralPath $Complete
         -Value "{`"version`": `"$Version`", `"wheel_sha256`": `"$Sha256`", `"installed_at`": `"$Stamp`"}"
 }
 Remove-Tree $Stage
-# `current` names the version the launchers run (an update switches it, and
-# keeps `previous`). Each is written whole, then moved into place, so a
-# reader never sees half a file.
-$CurrentFile = Join-Path $Root "current"
-$Old = if (Test-Path -LiteralPath $CurrentFile) { "$(Get-Content -LiteralPath $CurrentFile -TotalCount 1)".Trim() } else { "" }
-if ($Old -and $Old -ne $Version) { Write-Atomically (Join-Path $Root "previous") $Old }
-Write-Atomically $CurrentFile $Version
 # The `um-codex` command: bin\um-codex.exe, on the user PATH, a copy of this
 # version's own launcher (uv's, which names this version's python.exe by its
 # full path), so it runs the version `current` names. A real .exe, not a .cmd
@@ -1848,6 +1848,15 @@ New-Item -ItemType Directory -Force -Path $Bin | Out-Null
 $UmCodex = Join-Path $Bin "um-codex.exe"
 Install-Launcher (Join-Path $Target "Scripts\um-codex.exe") $UmCodex
 Remove-Item -LiteralPath (Join-Path $Bin "um-codex.cmd") -Force -ErrorAction SilentlyContinue
+# (The command is copied first: `current` then names a version whose
+# command is in place.)
+# `current` names the version the launchers run (an update switches it, and
+# keeps `previous`). Each is written whole, then moved into place, so a
+# reader never sees half a file.
+$CurrentFile = Join-Path $Root "current"
+$Old = if (Test-Path -LiteralPath $CurrentFile) { "$(Get-Content -LiteralPath $CurrentFile -TotalCount 1)".Trim() } else { "" }
+if ($Old -and $Old -ne $Version) { Write-Atomically (Join-Path $Root "previous") $Old }
+Write-Atomically $CurrentFile $Version
 & $UmCodex --version
 Add-UserPath $Bin
 

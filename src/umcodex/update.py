@@ -204,15 +204,16 @@ class Layout:
         return _read_line(self.root / "current"), _read_line(self.root / "previous")
 
     def switch(self, to: str, previous: str | None) -> None:
-        """Point the launchers at `to`. `previous` first, so a switch cut off
-        half way still names both."""
+        """Point the launchers at `to`. On Windows the command's copy comes
+        first (if it can't be made, nothing has changed), then `previous`, so
+        a switch cut off half way still names both, then `current`."""
         if not self.complete(to):
             raise UpdateFailed(f"UM-Codex {to} isn't installed completely.")
+        if self.windows:
+            self.install_command(to)
         if previous is not None:
             _write_line(self.root / "previous", previous)
         _write_line(self.root / "current", to)
-        if self.windows:
-            self.install_command(to)
 
     def restore(self, pointer: tuple[str | None, str | None]) -> None:
         current, previous = pointer
@@ -221,23 +222,27 @@ class Layout:
         else:
             _write_line(self.root / "previous", previous)
         if current is not None:
-            _write_line(self.root / "current", current)
             if self.windows and self.complete(current):
                 self.install_command(current)
+            _write_line(self.root / "current", current)
 
     def install_command(self, version: str) -> None:
         """Windows: `bin\\um-codex.exe`, a copy of `version`'s own launcher (as
         the installer's Install-Launcher). The one there may be running (it
         may be this very process), so it's renamed aside, not overwritten;
-        copies moved aside earlier are removed once nothing runs them."""
+        copies moved aside earlier are removed once nothing runs them. The new
+        copy is made beside it first (`.um-codex.exe.new`), so a copy that
+        fails part way never leaves `bin` without a command."""
         target = self.command
         target.parent.mkdir(parents=True, exist_ok=True)
         for old in target.parent.glob(f"{target.name}.old-*"):
             with contextlib.suppress(OSError):
                 old.unlink()
+        fresh = target.with_name(f".{target.name}.new")
+        shutil.copy2(self.executable(version), fresh)
         if target.exists():
             target.rename(target.with_name(f"{target.name}.old-{uuid.uuid4().hex}"))
-        shutil.copy2(self.executable(version), target)
+        os.replace(fresh, target)
 
     def prune(self, keep: set[str]) -> list[str]:
         """Remove installed versions other than `keep` (and this process's own)."""
@@ -252,6 +257,9 @@ class Layout:
             parsed = parse_version(name)
             if parsed is None or str(parsed) != name:
                 continue  # not one of ours
+            # Not a whole version any more, even if removing it stops part way.
+            with contextlib.suppress(OSError):
+                (folder / _COMPLETE).unlink(missing_ok=True)
             shutil.rmtree(folder, ignore_errors=True)
             if not folder.exists():
                 removed.append(name)
@@ -359,16 +367,16 @@ def check_images(images_json: bytes, wheel: Path) -> dict[str, str]:
 
 def find_uv(platform: str = sys.platform) -> str | None:
     """uv, as the installers left it: on Windows, the pinned one in UM-Codex's
-    own folder first (install.ps1); else one on PATH, or in ~/.local/bin."""
+    own folder (install.ps1); on a Mac, the one uv's installer puts in
+    ~/.local/bin (install.sh), ahead of any other on PATH; else one on PATH."""
     if platform == "win32":
         pinned = default_data_dir(platform) / "uv" / "uv.exe"
         if pinned.is_file():
             return str(pinned)
-    found = shutil.which("uv")
-    if found:
-        return found
     candidate = Path.home() / ".local" / "bin" / ("uv.exe" if platform == "win32" else "uv")
-    return str(candidate) if candidate.is_file() else None
+    if candidate.is_file():
+        return str(candidate)
+    return shutil.which("uv")
 
 
 def running_launch(data: Path) -> bool:
@@ -533,8 +541,14 @@ class Updater:
             )
             self.say(f"Installing UM-Codex {version} beside this one...")
             if reuse:
-                self._check_version(version)
-            else:
+                try:
+                    self._check_version(version)
+                except UpdateFailed:
+                    # Installed before, but it doesn't run now: installed afresh.
+                    (self.layout.folder(version) / _COMPLETE).unlink(missing_ok=True)
+                    shutil.rmtree(self.layout.folder(version), ignore_errors=True)
+                    reuse = False
+            if not reuse:
                 created = True
                 self._install_beside(staged)
             self.say("Downloading its container images...")

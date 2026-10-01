@@ -7,9 +7,16 @@ installed", "Where the app lives", "For the maintainer: releasing").
 
 ## Before the first release (once)
 
-Nothing is published until all of these are done: the release workflow
-stops at its `version` job while `src/umcodex/release_keys.py` pins no key,
-and at `sign` without the environment and its secret.
+Already set up on this repository:
+- the **`release` environment**, with required reviewer `ataxali` and a
+  deployment policy of tags matching `v*` only (a run from any other branch
+  or tag can't use it);
+- the **tag rulesets** (DataLab's two, copied here): only maintainers create
+  `v*` tags, and they can't be moved or deleted.
+
+Left for the maintainer. Nothing is published until all four are done: the
+release workflow stops at its `version` job while
+`src/umcodex/release_keys.py` pins no key, and at `sign` without the secret.
 
 1. **Make the release key, on your own computer.** In a checkout of this
    repository:
@@ -23,32 +30,24 @@ and at `sign` without the environment and its secret.
    commit it, paste it into an issue, a chat or a terminal session someone
    else records, or give it to a coding agent. UM-Codex's tools never make
    or see it.
-2. **Create the `release` environment** in the repository's Settings →
-   Environments:
-   - **Required reviewers:** the maintainers (each release waits for one of
-     them to approve the `sign` job). Tick "Prevent self-review" if there's
-     more than one maintainer.
-   - **Deployment branches and tags:** "Selected branches and tags", with
-     one rule: tags matching `v*`. A workflow run from any other branch or
-     tag can't use the environment.
-   - **Environment secret** `RELEASE_SIGNING_KEY`: the private key from step 1.
+2. **The secret:** in Settings → Environments → `release`, add the
+   environment secret `RELEASE_SIGNING_KEY`: the private key from step 1.
 3. **Pin the public key:** paste it into `RELEASE_KEYS` in
    `src/umcodex/release_keys.py` (replacing the TODO), with the date, and
    merge that through a pull request. A release signs only with a key its
    own package pins (`sign-release.py` refuses otherwise), so each version
    accepts the next one.
-4. **Immutable releases:** Settings → General → Releases, turn on
-   immutable releases, so a published release's files can't be
-   replaced or added to.
-5. **Protect the tags** (recommended): Settings → Rules → Rulesets, a tag
-   ruleset for `v*`: only maintainers may create these tags, and they can't
-   be updated or deleted.
-6. **After the first release: make the image public.** The first run pushes
-   `ghcr.io/sripadalab-um/um-codex-agent`, which GitHub creates as a private
-   package. In the organisation's Packages → `um-codex-agent` → Package
-   settings, set its visibility to **Public** (and connect it to this
-   repository), or installs can't pull it. The organisation must allow
-   public packages.
+4. **Immutable releases:** Settings → General → Releases, turn on immutable
+   releases, so a published release's files can't be replaced or added to.
+
+And once, during the first release run (below): **make the image public.**
+The first run pushes `ghcr.io/sripadalab-um/um-codex-agent`, which GitHub
+creates as a private package. Once the run's `manifest` job has finished,
+while `sign` waits for approval and before you approve it, open the
+organisation's Packages → `um-codex-agent` → Package settings, set its
+visibility to **Public** and connect it to this repository. A release whose
+image can't be pulled without signing in would fail every install. (The
+organisation must allow public packages.)
 
 ## Making a release
 
@@ -66,9 +65,11 @@ and at `sign` without the environment and its secret.
    `-beta.N` is `bN`, `-rc.N` is `rcN`. A tag that doesn't match
    `__version__` stops the release before anything is built
    (`scripts/release-version.sh`).
-3. In Actions, the **Release** run waits at `sign` for approval: check the
-   run is for the tag you pushed, then approve it. The release is published
-   a minute later.
+3. In Actions, the **Release** run waits at `sign` for approval. The first
+   time, make the image public now (above). Check the run is for the tag
+   you pushed, then approve it. The release is published a minute later.
+   Runs go one at a time (`concurrency: release`); a queued one is never
+   cancelled.
 
 ### What the workflow does (`.github/workflows/release.yml`)
 
@@ -77,10 +78,15 @@ and at `sign` without the environment and its secret.
   valid release key (`sign-release.py --check-pinned`).
 - `reuse`, `image`, `manifest`: the agent image
   `ghcr.io/sripadalab-um/um-codex-agent`, for `linux/amd64` and
-  `linux/arm64`, keyed by `images/agent`'s git tree id: when that folder is
-  unchanged since an image already in the registry (tag `tree-<id>`), that
-  image is reused, so installed copies have nothing new to pull. Either way
-  it's tagged with the release tag and pinned by digest.
+  `linux/arm64`, keyed by `images/agent`'s git tree id. `image` and
+  `manifest` attest the build's provenance (`actions/attest-build-provenance`,
+  pushed to the registry). When `images/agent` is unchanged since an image
+  already in the registry (tag `tree-<id>`), `reuse` takes that image only if
+  its index lists both platforms and `gh attestation verify` finds
+  provenance from this repository's `release.yml`; otherwise it's rebuilt.
+  `manifest` reads the digest from what this run built (`tree-<id>`) or
+  checked, checks both platforms again, tags it with the release tag and
+  passes it on by digest.
 - `package` (`scripts/build-release.sh`): builds the package from a copy of
   the source with `images.json` stamped (the agent image by digest, the
   gateway's nginx as pinned in `src/umcodex/images.json`), and gathers the
@@ -98,14 +104,22 @@ and at `sign` without the environment and its secret.
   It never sees the signing key.
 - `sign`: the only job in the `release` environment (a test keeps it so).
   On a fresh runner it installs only the locked Python dependencies (no
-  build, no Docker), checks every file against `SHA256SUMS` and that nothing
-  unlisted is there, and signs: `SHA256SUMS.sig`. It refuses a key the
-  package doesn't pin.
-- `publish`: `gh release create` with every file. GitHub's
-  `releases/latest` never points at a pre-release, and the install commands
-  use `releases/latest/download`, so a pre-release version (`a`, `b`, `rc`)
-  is marked a pre-release only once a full release exists; until then it's
-  the latest release.
+  build, no Docker), checks every file against `SHA256SUMS` and that the
+  files there are exactly those listed, and signs: `SHA256SUMS.sig`, with
+  the environment's own `.venv/bin/python`, so uv never sees the key. It
+  refuses a key the package doesn't pin.
+- `publish`: `gh release create` with every file, always as a normal
+  release (never a GitHub pre-release: `releases/latest` never points at
+  one, and the install commands download from `releases/latest/download`;
+  `um-codex update` tells pre-releases by their version). It's marked the
+  latest only when its version is newer (PEP 440) than every published
+  release's tag (`scripts/release-latest.py`), so a run approved late, or a
+  fix on an older line, never takes "latest" from a newer version.
+
+Every action is pinned by its full commit, with its version in a comment
+(a test rejects `@v...` references). The jobs that build or sign (`version`,
+`package`, `sign`, `publish`) use the uv the installers pin, with its cache
+off, and check out without keeping git credentials.
 
 If signing fails or isn't approved, nothing is published; the agent image
 stays in the registry, which is harmless (UM-Codex runs images only by the
@@ -170,13 +184,19 @@ but nothing checks that pair against the key).
    https://pypi.org/simple --link-mode copy -r requirements.txt`), with no
    `UV_*`, `PIP_*` or `PYTHON*` variables from the environment; check the
    new `um-codex --version`, then write `.complete` with the package's
-   checksum (as the installers do, so the same package is reused).
+   checksum (as the installers do, so the same package is reused; a reused
+   folder that no longer passes `--version` is removed and installed
+   afresh). uv is the installers' own: `%LOCALAPPDATA%\UM-Codex\uv\uv.exe`
+   on Windows, `~/.local/bin/uv` on a Mac, before any other on PATH.
 4. **Pull** the new version's images with its own `um-codex pull`.
-5. **Switch**: `previous` names the running version and `current` the new
-   one, each one-line file replaced whole. On Windows, `bin\um-codex.exe`
-   becomes a copy of the new version's launcher (the running one is renamed
-   aside, as the installer does).
-6. **Prune** every version but those two (only folders named as versions).
+5. **Switch**: on Windows first, `bin\um-codex.exe` becomes a copy of the
+   new version's launcher (copied beside it as `.um-codex.exe.new`, the
+   running one renamed aside, then moved into place, as the installer does);
+   then `previous` names the running version and `current` the new one, each
+   one-line file replaced whole.
+6. **Prune** every version but those two (only folders named as versions),
+   each unmarked (its `.complete` removed) before it's deleted, so one whose
+   removal stops part way never counts as installed.
 
 It refuses while any launch is running (each launch holds a lock), runs one
 at a time, and undoes what it installed if a step fails, so the running
