@@ -5,6 +5,7 @@ um-codex launch --from-app   the same, from the UM-Codex app or shortcut
 um-codex setups     list, edit and delete saved setups
 um-codex key        save or replace the Toolkit API key
 um-codex doctor     check Docker, the images, the key and the Toolkit
+um-codex update     install a newer signed release (--rollback: back to the one before)
 """
 
 from __future__ import annotations
@@ -52,6 +53,10 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument(
         "--fix-docker", action="store_true", help="open Docker Desktop; on Windows, offer the logon-right fix"
     )
+    update = commands.add_parser("update", help="install a newer signed release beside this one")
+    update.add_argument(
+        "--rollback", action="store_true", help="switch back to the version in use before the last update"
+    )
     remove = commands.add_parser("uninstall", help="remove UM-Codex's containers, key, images and data")
     data = remove.add_mutually_exclusive_group()
     data.add_argument("--delete-data", action="store_true", help="also delete saved setups and Codex history")
@@ -73,6 +78,11 @@ def main(argv: list[str] | None = None) -> int:
             if args.fix_docker:
                 return 0 if doctor.fix_docker() else 1
             return 0 if doctor.report(quiet=args.quiet) else 1
+        if args.command == "update":
+            from umcodex.update import Updater
+
+            updater = Updater()
+            return updater.rollback() if args.rollback else updater.update()
         if args.command == "uninstall":
             from umcodex.uninstall import uninstall
 
@@ -182,10 +192,22 @@ def _setups() -> int:
     return 0
 
 
+def _update_notice() -> None:
+    """One line if a newer release is out (GitHub asked at most once a day, 3 s
+    at most). Nothing about it, not even importing it, may stop a launch."""
+    try:
+        from umcodex.update import launch_notice
+
+        launch_notice()
+    except Exception:
+        logging.getLogger(__name__).warning("the update check at launch failed", exc_info=True)
+
+
 def _launch(codex_args: list[str], *, from_app: bool = False) -> int:
     from umcodex import launch
 
     print(f"UM-Codex {__version__}")
+    _update_notice()
     if sys.platform == "win32" and not codex_args and not (sys.stdin.isatty() and sys.stdout.isatty()):
         print("This window can't run Codex's screen (Git Bash and mintty can't).")
         print("Use Windows Terminal or PowerShell, then run um-codex again.")

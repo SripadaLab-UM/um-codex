@@ -15,11 +15,17 @@ files:
 sh install-macos.sh --package umcodex-<version>-py3-none-any.whl
 ```
 
-or straight from the web (the release's URLs):
+or straight from the web, with no arguments:
 
 ```sh
-curl -q -fsSL <url>/install-macos.sh | sh -s -- --package <url>/umcodex-<version>-py3-none-any.whl --requirements <url>/requirements.txt
+curl -q -fsSL https://github.com/SripadaLab-UM/um-codex/releases/latest/download/install-macos.sh | sh
 ```
+
+A release's `install-macos.sh` has `RELEASE_BASE` (that release's download
+address) and `RELEASE_WHEEL` (its package's name) filled in by
+`scripts/build-release.sh`, so without `--package` it installs its own
+release's package and `requirements.txt`. In the repository both are empty,
+and `--package` is needed. (Options go after `sh -s --`.)
 
 Options: `--requirements <file or URL>` (found automatically beside a local
 package), `--install-docker` (answers yes to installing Docker Desktop),
@@ -193,9 +199,9 @@ Commits are in github.com/SripadaLab-UM/ihs-datalab.
 Profiles (real/practice) and the second app and icon, the lab settings file,
 the database password, the GitHub sign-in and repos sync, the practice
 (Oracle) database, Git, and the removal of an older `uv tool install` copy.
-Pruning old versions belongs to `um-codex update` (M3), as it did to
-DataLab's updater; the installer keeps `current` and `previous` and doesn't
-remove others.
+Pruning old versions belongs to `um-codex update`, as it did to DataLab's
+updater (docs/RELEASING.md); the installer keeps `current` and `previous`
+and doesn't remove others.
 
 Not a DataLab installer finding: the quarantine flag. DataLab sets it on
 exported files (`exports.py`), not in its installer. The app here is written
@@ -214,7 +220,11 @@ DataLab's at `6b6fdca`. They run from a file or straight from the web:
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Package <whl or https URL>] [-Requirements <file or URL>] [-ReplaceKey] [-AdminAccessUrl <https page>] [-Yes]
 ```
 
-The first part turns on TLS 1.2 (3072) for that window: Windows PowerShell
+A release's `install-windows.ps1` has `$ReleaseBase` and `$ReleaseWheel`
+filled in by `scripts/build-release.sh`, so with no `-Package` it installs
+its own release's package and `requirements.txt`: from beside it only if
+that's exactly `$ReleaseWheel`, otherwise from the release. CI checks both. The first part turns on TLS 1.2
+(3072) for that window: Windows PowerShell
 5.1 may not offer it by itself, and GitHub refuses older versions, so a bare
 `irm` can fail before the installer has even started (which turns it on for
 its own downloads).
@@ -329,7 +339,7 @@ Uninstalling
 - `irm | iex` and `& ([scriptblock]::Create((irm ...))) -Options`: the installer is one script block (`$UmCodexInstaller`), so the administrator part and the after-restart copy use its exact text however it was started; a stop ends only the installer (`Stop-Run` throws to the runner instead of `exit`, which would close the person's window); the environment and window title it changes are put back. CI checks both.
 - The after-restart run uses a saved copy of the installer (`%LOCALAPPDATA%\UM-Codex\installer\install.ps1`).
 - The `um-codex` command: `bin` is added to the user PATH as stored (REG_EXPAND_SZ entries kept unexpanded), announced with WM_SETTINGCHANGE, and removed on uninstall.
-- No `.cmd` shim: cmd.exe asks "Terminate batch job (Y/N)?" after every Ctrl-C. The typed `um-codex` is `bin\um-codex.exe`, a copy of the current version's own uv launcher (which names that version's `python.exe` by full path), recopied on every switch; a running copy is renamed aside rather than overwritten, and old copies removed later. The shortcut runs the version `current` names directly. A `.cmd` beside the `.exe` would never run (PATHEXT prefers `.exe`), so an earlier one is removed.
+- No `.cmd` shim: cmd.exe asks "Terminate batch job (Y/N)?" after every Ctrl-C. The typed `um-codex` is `bin\um-codex.exe`, a copy of the current version's own uv launcher (which names that version's `python.exe` by full path), recopied on every switch, before `current` is written: copied beside it as `.um-codex.exe.new`, then a running copy is renamed aside rather than overwritten and the new one moved into place; old copies are removed later. `um-codex update` does the same. The shortcut runs the version `current` names directly. A `.cmd` beside the `.exe` would never run (PATHEXT prefers `.exe`), so an earlier one is removed.
 - In Windows Terminal, `;` is escaped as `\;` and `--` ends wt's own options.
 - `current` and `previous` are written to `<file>.tmp` and moved into place (`Move-Item -Force`), and read as `"$(Get-Content -TotalCount 1)".Trim()`, so an empty or half-written file never breaks a launch.
 - The key is never on a command line, in the environment or in a file: the installer writes it to `um-codex key --from-stdin`'s standard input itself (`Process.StandardInput`, UTF-8 without a BOM), not through PowerShell's pipe (`$OutputEncoding`).
@@ -344,5 +354,7 @@ job parses both under Windows PowerShell 5.1 and runs the parts that can run
 there. Still unverified until a Windows acceptance run: the full install and
 restart, the elevated part, the VM fix and Docker restart against a real
 Docker Desktop, the masked prompt in conhost and Windows Terminal, the
-Windows Terminal shortcut, the PATH change reaching new terminals, and the
-uninstaller with UM-Codex installed.
+Windows Terminal shortcut, the PATH change reaching new terminals, the
+uninstaller with UM-Codex installed, and `um-codex update` and `--rollback`
+(the copy of the new launcher into `bin`, renaming the running one aside),
+which are unit-tested only.

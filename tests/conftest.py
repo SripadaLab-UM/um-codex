@@ -55,6 +55,10 @@ def data_folder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("UMCODEX_DATA_DIR", str(folder))
     monkeypatch.delenv("UMCODEX_UPSTREAM", raising=False)
     monkeypatch.delenv("UMCODEX_AGENT_IMAGE", raising=False)
+    # No test asks GitHub for releases (tests/test_update.py turns this off for its own).
+    monkeypatch.setenv("UMCODEX_NO_UPDATE_CHECK", "1")
+    monkeypatch.delenv("UMCODEX_RELEASES_API", raising=False)
+    monkeypatch.delenv("UMCODEX_INSTALL_DIR", raising=False)
     return folder
 
 

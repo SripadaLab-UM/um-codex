@@ -27,9 +27,12 @@ It follows ITS's "Codex Setup" articles for the model settings (the
 
 ## The person's journey
 
-1. **Install:** one command, from the release (or a site later):
-   - Mac: `curl -fsSL …/install-macos.sh | sh`
-   - Windows: `irm …/install-windows.ps1 | iex`
+1. **Install:** one command, from the latest release (or a site later),
+   with no arguments (the release writes its own address into its
+   installers):
+   - Mac: `curl -q -fsSL https://github.com/SripadaLab-UM/um-codex/releases/latest/download/install-macos.sh | sh`
+   - Windows: `irm https://github.com/SripadaLab-UM/um-codex/releases/latest/download/install-windows.ps1 | iex`
+     (after turning on TLS 1.2; the README has the whole line)
 
    The installer:
    1. finds or installs Docker Desktop, and fixes the Windows VM logon right
@@ -74,7 +77,9 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      Toolkit's `/models` when it can be reached).
    - `um-codex doctor` checks Docker, the key, the images and the Toolkit,
      and prints diagnostics with no secrets in them.
-   - `um-codex update` installs signed releases (later: see the milestones).
+   - `um-codex update` installs the newest signed release beside this one,
+     pulls its images and switches to it; `--rollback` switches back
+     (docs/RELEASING.md). Once a day a launch says when one is out.
    - `um-codex uninstall`.
 
    The installers call some of these, so their names, flags and exit codes
@@ -93,6 +98,9 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      one line on failure (a Toolkit that can't be reached, off the VPN, is a
      note there, not a failure; a refused key is a failure); `--fix-docker` opens Docker Desktop and, on
      Windows, offers the logon-right fix (as the launch does).
+   - `um-codex update [--rollback]`: 0 updated (or already the newest),
+     1 refused or failed (a launch running, no pinned release key, a
+     development copy, a release that fails a check), with nothing changed.
    - `um-codex uninstall [--delete-data|--keep-data] [--yes]`: first asks
      "Uninstall UM-Codex? [y/N]" (no: nothing removed, exit 1). Then it removes, by
      label only, UM-Codex's containers and networks (and, with
@@ -291,12 +299,17 @@ um-codex/
     doctor.py               checks and diagnostics
     toolkit.py              model list, key check
     uninstall.py            `um-codex uninstall` (from DataLab setup.uninstall and storage.size_of)
+    signing.py              Ed25519 release signatures (from DataLab)
+    release_keys.py         the pinned release public keys (from DataLab; empty until the maintainer adds one)
+    releases.py             which GitHub release is offered, and its checks (from DataLab)
+    update.py               `um-codex update`, rollback, the daily notice (from DataLab's updater, simpler)
     gateway.conf            (from DataLab, /mcp removed)
-    images.json             pinned image digests (written by the release)
+    images.json             pinned image digests (stamped by the release)
   images/agent/             Dockerfile, AGENTS.md (from DataLab's image: Codex, Node, Python, R; DataLab skills removed; build tools added)
   installer/macos/          install.sh, uninstall.sh (from DataLab, trimmed)
   installer/windows/        install.ps1, uninstall.ps1 (from DataLab, trimmed)
   branding/                 build.py and the mark (from DataLab's "1b": Block M, spark, "codex" under it)
+  scripts/                  build-release.sh, sign-release.py, release-version.sh (from DataLab)
   tests/
   .github/workflows/        ci.yml, release.yml (from DataLab: tests, Windows tests, installer parse and run, signed release)
 ```
@@ -358,7 +371,33 @@ modes, rigor, and the frontend.
      tell me its heading" works after approval. With internet off, the
      question isn't offered.
 4. **M3, releases:** signed releases (Ed25519, the `release` environment,
-   the tag rules) and `um-codex update` with rollback.
+   the tag rules) and `um-codex update` with rollback. Built on branch
+   `m3-release` (2026-10-01); docs/RELEASING.md has the details and the
+   maintainer's one-time steps:
+   - `release.yml` on a `v*` tag: all of CI (`ci.yml` through
+     `workflow_call`), the tag checked against the version
+     (`v0.1.0-alpha.2` is `0.1.0a2`) and a pinned key required; the agent
+     image built for amd64 and arm64 (reused when `images/agent` is
+     unchanged) and pinned by digest; the package with `images.json`
+     stamped, `requirements.txt` with hashes, the installers with the
+     release's address written in, `images.json` and `SHA256SUMS`
+     (`scripts/build-release.sh`); `SHA256SUMS.sig` made in the `sign` job,
+     the only one in the `release` environment; then the release, always a
+     normal one (never a GitHub pre-release, so `releases/latest/download`
+     works from the first alpha), marked the latest only if its version is
+     the newest. Actions pinned by commit; a reused agent image must list
+     both platforms and carry this workflow's build provenance.
+   - `um-codex update`: DataLab's rules for which release is offered and
+     how it's checked (signed `SHA256SUMS`, GitHub's checksums, hashed
+     requirements, images matching the package's), installed beside with
+     the installers' uv flags, images pulled, `current`/`previous` switched,
+     older versions pruned; refused while a launch runs. `--rollback`. A
+     launch checks at most once a day, waits 3 s at most, and prints one
+     line when a newer release is out.
+   - Not yet: the key is the maintainer's to make and pin
+     (`release_keys.py` ships empty, so no release can be published and
+     no installed copy offers an update until then); no release has been
+     made; Windows update and rollback are unit-tested only.
 5. **M4, "On this computer" mode (asked for on 2026-10-01):**
    - The first launch question becomes "Where should Codex run? In a
      sandbox (container) / On this computer". It's saved with the setup.
@@ -400,7 +439,11 @@ modes, rigor, and the frontend.
   mostly the installer.
 - An install site like DataLab's: later. Until then, the README has the two
   install commands.
-- Codex version: pinned in the image, and updated by a release.
+- Codex version: pinned in the image, and updated by a release. The image's
+  `npm install -g @openai/codex@<version>` pins the version but isn't
+  integrity-locked (no lockfile or hash for Codex's own npm dependencies), so
+  a rebuild can pick up different dependency files; the release's provenance
+  and digest pin what was actually built.
 - Controlling the person's own computer (desktop, apps, their browser): out
   of scope. The container can't reach the host by design. Codex's own
   `browser_use`, `in_app_browser` and `computer_use` features target its
