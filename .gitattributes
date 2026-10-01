@@ -1,5 +1,18 @@
+# Text files are stored and checked out with LF line endings on every
+# platform, so a Windows checkout (core.autocrlf) matches the Mac one and the
+# tests that read files as text see the same bytes. PowerShell scripts stay
+# ASCII as well (Windows PowerShell 5.1 reads a file without a BOM as the
+# ANSI code page). From IHS DataLab's .gitattributes at 6b6fdca.
 * text=auto eol=lf
 *.ps1 text eol=lf
+
+# Windows' own script formats keep CRLF (none are committed today; the
+# installer writes bin\um-codex.cmd with CRLF itself).
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
 *.png binary
 *.ico binary
 *.icns binary
+*.whl binary
+*.zip binary
