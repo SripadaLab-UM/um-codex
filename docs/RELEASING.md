@@ -68,8 +68,11 @@ organisation must allow public packages.)
 3. In Actions, the **Release** run waits at `sign` for approval. The first
    time, make the image public now (above). Check the run is for the tag
    you pushed, then approve it. The release is published a minute later.
-   Runs go one at a time (`concurrency: release`); a queued one is never
-   cancelled.
+   Runs go one at a time (`concurrency: release`), and a running one is
+   never cancelled. But GitHub keeps only one *pending* run per group: a
+   second tag pushed while one run waits queues a run that cancels the first
+   pending one. So push release tags one at a time, and if a run was
+   cancelled, re-run it from Actions (Re-run all jobs).
 
 ### What the workflow does (`.github/workflows/release.yml`)
 
@@ -108,13 +111,17 @@ organisation must allow public packages.)
   files there are exactly those listed, and signs: `SHA256SUMS.sig`, with
   the environment's own `.venv/bin/python`, so uv never sees the key. It
   refuses a key the package doesn't pin.
-- `publish`: `gh release create` with every file, always as a normal
-  release (never a GitHub pre-release: `releases/latest` never points at
-  one, and the install commands download from `releases/latest/download`;
-  `um-codex update` tells pre-releases by their version). It's marked the
-  latest only when its version is newer (PEP 440) than every published
-  release's tag (`scripts/release-latest.py`), so a run approved late, or a
-  fix on an older line, never takes "latest" from a newer version.
+- `publish`: `gh release create` with every file, and the flags
+  `scripts/release-latest.py` gives. GitHub's `releases/latest` never points
+  at a GitHub pre-release, and the install commands download from
+  `releases/latest/download`, so until a full release exists every release
+  (alphas included) is a normal release; `um-codex update` tells
+  pre-releases by their version anyway. A release is marked the latest only
+  when its version is newer (PEP 440) than every published release's tag,
+  so a run approved late, or a fix on an older line, never takes "latest"
+  from a newer version. Once a full release exists, a pre-release version
+  (`v1.1.0-alpha.1` after `v1.0.0`) is marked a GitHub pre-release and never
+  the latest, so new installs keep getting the newest full release.
 
 Every action is pinned by its full commit, with its version in a comment
 (a test rejects `@v...` references). The jobs that build or sign (`version`,
@@ -123,9 +130,11 @@ off, and check out without keeping git credentials.
 
 If signing fails or isn't approved, nothing is published; the agent image
 stays in the registry, which is harmless (UM-Codex runs images only by the
-digests in a signed `images.json`). Fix the cause, delete the tag
-(`git push origin :v...`; a tag ruleset may need a bypass) and tag again, or
-release the next version.
+digests in a signed `images.json`). Release tags can't be deleted or moved
+(the tag ruleset has no bypass), so to recover: if the cause is outside the
+tagged code (an approval, a GitHub outage, the secret), fix it and use
+"Re-run failed jobs" on the same run; if the tagged code itself has to
+change, fix it on `main`, bump `__version__`, and tag the new version.
 
 Not automated: Authenticode-signing the Windows scripts (needs the lab's
 certificate), and an install, update and rollback on a real Windows machine.

@@ -382,10 +382,10 @@ modes, rigor, and the frontend.
      stamped, `requirements.txt` with hashes, the installers with the
      release's address written in, `images.json` and `SHA256SUMS`
      (`scripts/build-release.sh`); `SHA256SUMS.sig` made in the `sign` job,
-     the only one in the `release` environment; then the release, always a
-     normal one (never a GitHub pre-release, so `releases/latest/download`
-     works from the first alpha), marked the latest only if its version is
-     the newest. Actions pinned by commit; a reused agent image must list
+     the only one in the `release` environment; then the release, a normal one
+     until a full release exists (so `releases/latest/download` works from
+     the first alpha), marked the latest only if its version is the newest;
+     after a full release, pre-release versions are marked pre-releases. Actions pinned by commit; a reused agent image must list
      both platforms and carry this workflow's build provenance.
    - `um-codex update`: DataLab's rules for which release is offered and
      how it's checked (signed `SHA256SUMS`, GitHub's checksums, hashed

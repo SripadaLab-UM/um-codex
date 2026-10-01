@@ -21,7 +21,8 @@ name: Release
 #    in that environment; tests/test_release.py checks it stays so). It
 #    refuses a key the package doesn't pin;
 # 4. create the GitHub Release with all of them (job `publish`), always as a
-#    normal release, and the latest only if its version is the newest
+#    normal release, and the latest only if its version is the newest; a
+#    pre-release version once a full release exists is marked a pre-release
 #    (scripts/release-latest.py). `um-codex update` refuses a release
 #    without a valid signature.
 #
@@ -43,7 +44,10 @@ on:
 permissions:
   contents: read
 
-# One release at a time, and a queued one is never cancelled.
+# One release at a time; a running one is never cancelled. GitHub keeps only
+# one *pending* run per group, though: a second queued run cancels the first
+# pending one. So push release tags one at a time, and re-run any cancelled
+# run (docs/RELEASING.md).
 concurrency:
   group: release
   cancel-in-progress: false
@@ -77,7 +81,7 @@ jobs:
         run: sh scripts/release-version.sh "$GITHUB_REF_NAME"
       - name: Check the package pins a release key
         run: |
-          uv sync --locked --no-dev --no-install-project
+          uv sync --locked --no-build --no-dev --no-install-project
           PYTHONPATH=src .venv/bin/python scripts/sign-release.py --check-pinned
 
   reuse:
@@ -170,6 +174,7 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+          create-storage-record: false
       - name: Remember the digest
         run: |
           mkdir -p /tmp/digests
@@ -243,6 +248,7 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.pin.outputs.digest }}
           push-to-registry: true
+          create-storage-record: false
 
   package:
     # Builds the package and gathers the release's files. It runs the build
@@ -326,7 +332,7 @@ jobs:
       - name: Install the signing script's dependencies (locked)
         # Only the locked dependencies, by hash: the package itself isn't
         # built here (no build backend runs), it's read from the tag's source.
-        run: uv sync --locked --no-dev --no-install-project
+        run: uv sync --locked --no-build --no-dev --no-install-project
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-assets
@@ -366,7 +372,7 @@ jobs:
           version: ${{ env.UMCODEX_UV_VERSION }}
           enable-cache: false
       - name: Install the locked dependencies (for scripts/release-latest.py)
-        run: uv sync --locked --no-dev --no-install-project
+        run: uv sync --locked --no-build --no-dev --no-install-project
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-assets
@@ -383,11 +389,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Always a normal release (GitHub's releases/latest never points at
-          # a pre-release, and the install commands download from it); the
-          # latest only if it's newer than every published release.
-          latest=$(.venv/bin/python scripts/release-latest.py "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY")
-          gh release create "$GITHUB_REF_NAME" "$latest" \
+          # A normal release, the latest only if it's newer than every
+          # published release (GitHub's releases/latest never points at a
+          # pre-release, and the install commands download from it); once a
+          # full release exists, a pre-release version is marked one and is
+          # never the latest. Flags from scripts/release-latest.py.
+          flags=$(.venv/bin/python scripts/release-latest.py "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY")
+          # shellcheck disable=SC2086 # one or two flags, split on purpose
+          gh release create "$GITHUB_REF_NAME" $flags \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "UM-Codex $GITHUB_REF_NAME" \
