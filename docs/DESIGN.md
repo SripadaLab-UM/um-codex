@@ -219,9 +219,27 @@ modes, rigor, and the frontend.
    - uninstallers;
    - CI with Windows tests and the installer parse and run steps;
    - the agent image built and pushed to GHCR.
-3. **M3, releases:** signed releases (Ed25519, the `release` environment,
+3. **M2b, browser tool (asked for on 2026-10-01):**
+   - A launch question, offered only when the internet is on: "Browser
+     tool: on/off" (default off). It's saved with the setup.
+   - When it's on, Codex gets the Playwright MCP server as a tool. It runs
+     inside the agent container with headless Chromium, so the browser is a
+     fresh one with none of the person's logins. It can open pages, click,
+     fill in forms, read pages and take screenshots, and screenshots are
+     saved under /work if the person asks.
+   - Each browser action needs the person's approval by default (MCP
+     `default_tools_approval_mode = "prompt"`). The setup can change that to
+     "don't ask".
+   - The image gets Chromium and the pinned Playwright MCP package. Its size
+     cost is reported in the PR.
+   - It never controls the person's own computer, desktop or browser: the
+     container can't reach them (see the end of this document).
+   - Acceptance: with internet on and the tool on, "open example.com and
+     tell me its heading" works after approval. With internet off, the
+     question isn't offered.
+4. **M3, releases:** signed releases (Ed25519, the `release` environment,
    the tag rules) and `um-codex update` with rollback.
-4. **Acceptance, on a fresh Mac and a fresh Windows machine:**
+5. **Acceptance, on a fresh Mac and a fresh Windows machine:**
    1. install from the README in under 20 minutes;
    2. launch with internet off: Codex answers, `curl https://example.com`
       fails, and it can write in the working folder but not in a read-only
@@ -238,3 +256,10 @@ modes, rigor, and the frontend.
 - An install site like DataLab's: later. Until then, the README has the two
   install commands.
 - Codex version: pinned in the image, and updated by a release.
+- Controlling the person's own computer (desktop, apps, their browser): out
+  of scope. The container can't reach the host by design. Codex's own
+  `browser_use`, `in_app_browser` and `computer_use` features target its
+  desktop and IDE apps. Whether any of them works in the terminal Codex
+  inside the container is to be checked with the pinned version, and noted
+  here. A virtual desktop inside the container that the person watches
+  (noVNC) is a possible later option, if the group needs GUI apps.
