@@ -251,7 +251,7 @@ def current_user() -> str | None:
     size = ctypes.c_ulong(256)
     buffer = ctypes.create_unicode_buffer(size.value)
     secur32 = ctypes.windll.secur32  # type: ignore[attr-defined]
-    # NameSamCompatible (2): "UMHS\ataxali", the form tasklist's USERNAME filter takes.
+    # NameSamCompatible (2): "DOMAIN\name", the form tasklist's USERNAME filter takes.
     if not secur32.GetUserNameExW(2, buffer, ctypes.byref(size)):
         return None
     return buffer.value
