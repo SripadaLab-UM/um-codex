@@ -65,9 +65,18 @@ def render(
     internet: bool,
     browser: bool = False,
     browser_asks: bool = True,
+    token_command: str | None = None,
 ) -> str:
     """The config.toml text for one launch. The browser tool needs the
-    internet: with the internet off it's never added."""
+    internet: with the internet off it's never added.
+
+    `token_command` (the Codex desktop app test only): Codex gets the launch
+    token by running this command (a provider `auth.command`) instead of from
+    the UMCODEX_TOKEN variable, which ssh sessions don't have. It also sets
+    `forced_login_method = "api"`, so no ChatGPT sign-in is offered in the
+    container. Both checked against the rust-v0.157.1 source: `auth` can't be
+    combined with `env_key` (model-provider-info's validate), and
+    ForcedLoginMethod is "chatgpt" or "api"."""
     if approvals not in ("never", "on-request"):
         raise ValueError(f"unknown approval policy {approvals!r}")
     browser = browser and internet
@@ -85,6 +94,7 @@ def render(
         f"approval_policy = {approval_policy}",
         f'web_search = "{"live" if internet else "disabled"}"',
         "check_for_update_on_startup = false",
+        *(['forced_login_method = "api"'] if token_command else []),
         "",
         "[analytics]",
         "enabled = false",
@@ -98,7 +108,7 @@ def render(
         "[model_providers.toolkit]",
         'name = "U-M GPT Toolkit (through UM-Codex)"',
         f'base_url = "{GATEWAY_BASE_URL}"',
-        f'env_key = "{TOKEN_ENV}"',
+        *([] if token_command else [f'env_key = "{TOKEN_ENV}"']),
         'wire_api = "responses"',
         # The relay retries failed requests itself, honouring the server's
         # wait (relay.py); one more round from here at most.
@@ -106,6 +116,12 @@ def render(
         "stream_max_retries = 2",
         "stream_idle_timeout_ms = 300000",
     ]
+    if token_command:
+        lines += [
+            "",
+            "[model_providers.toolkit.auth]",
+            f"command = {json.dumps(token_command)}",
+        ]
     if browser:
         lines += [
             "",

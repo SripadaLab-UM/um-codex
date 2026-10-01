@@ -125,6 +125,9 @@ class LaunchSpec:
     # The agent image's own command (`Config.Cmd`), run under the watchdog
     # (see WATCHDOG). Empty: the image's command runs as it is, unwatched.
     image_cmd: tuple[str, ...] = ()
+    # More labels on the containers and networks (the app test's
+    # `umcodex.ssh`, which `um-codex ssh-proxy` finds the agent by).
+    extra_labels: tuple[tuple[str, str], ...] = ()
 
     @property
     def prefix(self) -> str:
@@ -159,6 +162,7 @@ class LaunchSpec:
             "--label", f"{APP_LABEL}={APP}",
             "--label", f"{INSTANCE_LABEL}={self.instance}",
             "--label", f"{LAUNCH_LABEL}={self.launch_id}",
+            *(arg for name, value in self.extra_labels for arg in ("--label", f"{name}={value}")),
         ]  # fmt: skip
 
     def network_commands(self) -> list[list[str]]:

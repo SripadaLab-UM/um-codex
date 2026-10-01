@@ -1,0 +1,6 @@
+#!/bin/sh
+# UM-Codex app test: the launch token for Codex's provider (`auth.command` in
+# config.toml). ssh sessions don't have the container's UMCODEX_TOKEN, so the
+# launch writes it here at start. It's the per-launch token, never the
+# Toolkit key, and works only through this launch's gateway.
+exec cat /run/um-codex/token

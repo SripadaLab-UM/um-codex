@@ -253,8 +253,17 @@ def run(
     tty: bool | None = None,
     run_exec: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     api_key: Callable[[], str] = credentials.api_key,
+    image: str | None = None,
+    labels: tuple[tuple[str, str], ...] = (),
+    token_command: str | None = None,
+    hold: Callable[[LaunchSpec, int, str], int] | None = None,
 ) -> int:
-    """Run one launch to the end. Returns Codex's exit code (or 1 if it couldn't start)."""
+    """Run one launch to the end. Returns Codex's exit code (or 1 if it couldn't start).
+
+    The Codex desktop app test (app_test.py, development only) passes its own
+    image, labels and `token_command` (codex_config.render), and `hold`: called
+    with the running launch, the relay's port and the launch token in place of
+    `docker exec codex`, and the launch ends when it returns."""
     docker = docker or Docker()
     data = data_dir()
     instance = instance_of(data)
@@ -262,7 +271,7 @@ def run(
         log.info("removed %d leftovers of earlier launches", removed)
     remove_stale_launch_folders(data)
 
-    image = agent_image()
+    image = image or agent_image()
     gateway_image = images()["gateway"]
     if not docker.exists("image", image):
         say(f"The agent image {image} isn't on this computer.")
@@ -309,6 +318,7 @@ def run(
             gateway_conf=folder / "gateway.conf",
             env_file=folder / "agent.env",
             image_cmd=image_command(docker, image),
+            extra_labels=labels,
         )
         # Files the Linux containers read get Unix line ends, on Windows too.
         _write(spec.gateway_conf, render_gateway_conf(port))
@@ -320,6 +330,7 @@ def run(
                 internet=setup.internet,
                 browser=setup.browser,
                 browser_asks=setup.browser_asks,
+                token_command=token_command,
             ),
         )
         _write(spec.launch_note, launch_note(setup, layout))
@@ -342,6 +353,8 @@ def run(
             spec.env_file.unlink(missing_ok=True)
         if not docker.wait_running(spec.agent) or not docker.wait_running(spec.gateway):
             raise DockerError("the container stopped as soon as it started")
+        if hold is not None:
+            return hold(spec, port, token)
         interactive = sys.stdin.isatty() and sys.stdout.isatty() if tty is None else tty
         command = exec_command(
             spec.agent, tty=interactive, term=os.environ.get("TERM") or "xterm-256color", args=codex_args

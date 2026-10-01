@@ -565,6 +565,65 @@ modes, rigor, and the frontend.
    5. quit, relaunch, and `codex resume` finds the last session;
    6. uninstall leaves nothing but the person's own folders.
 
+## Codex desktop app test (development only, branch `spike-codex-app`)
+
+A test, not part of any release: can the Codex desktop app ("ChatGPT.app",
+`com.openai.codex`) work inside a UM-Codex container through its SSH
+connections? Design source: the spike write-up of 2026-10-01 (the SSH path,
+with a `docker exec` ProxyCommand and no listener).
+
+- **Image:** `um-codex-agent:app-test` (`images/agent-app-test`), built FROM
+  `um-codex-agent:dev`. It adds `openssh-server` (with `sftp-server`),
+  `/run/sshd`, `/etc/um-codex/sshd_config`, `/etc/profile.d/um-codex.sh`
+  (`CODEX_HOME=/codex-home` and PATH for login shells) and
+  `/usr/local/bin/umcodex-token`. Codex stays 0.157.1 (the app's minimum for
+  a remote is 0.141.0). The package's host keys are removed; each container
+  makes its own.
+- **sshd** runs once per connection, never listening:
+  `ProxyCommand <um-codex> ssh-proxy app-test --docker <docker>` finds the
+  running agent by label (`umcodex.ssh=app-test`) and execs
+  `docker exec -i -u root <agent> /usr/sbin/sshd -i -f /etc/um-codex/sshd_config`.
+  Key-only, user `agent` only, no root, no PAM, no agent or X11 forwarding,
+  local TCP forwards only and only to the container's own localhost
+  (`PermitOpen`), no remote forwards. `SetEnv` gives non-login commands
+  `CODEX_HOME` and PATH too.
+- **The token:** ssh sessions don't get `docker run -e`, so the container's
+  `config.toml` uses `[model_providers.toolkit.auth] command =
+  "/usr/local/bin/umcodex-token"` (no `env_key`: Codex 0.157.1 refuses both),
+  which reads `/run/um-codex/token` (0640 root:agent, written from the
+  container's own environment at start), plus `forced_login_method = "api"`.
+- **`um-codex app-test start`** launches the fixed setup `app-test` as a
+  launch does (working folder `~/Documents/UM-Codex-app-test`, internet on,
+  `run()` with a `hold` step instead of `docker exec codex`), writes the key
+  pair and `~/.ssh/um-codex/config` (`Host umcodex-test`), puts
+  `Include ~/.ssh/um-codex/config` at the top of `~/.ssh/config` (backup:
+  `~/.ssh/config.um-codex-backup`), and opens a second, separate app copy as
+  the app's "Codex Demo" launcher does: `open -n --env CODEX_HOME=<data>/codex-app/codex-home
+  --env CODEX_ELECTRON_USER_DATA_PATH=<data>/codex-app/user-data <app> --args
+  --user-data-dir=… <link>`. The link
+  (`codex://settings/connections/ssh/add?name=umcodex-test&projectPath=/work&enabled=true`)
+  goes in the copy's arguments, which the app reads at start; `open <link>`
+  could reach the person's own copy instead. The copy's own `config.toml`
+  points its local side at the relay on 127.0.0.1 with the launch token, read
+  by `cat` from a 0600 file. The relay runs until Ctrl-C.
+- **`um-codex app-test stop`** removes the test's containers and networks (by
+  label), the Host file and the key pair; `--purge` also the history volume
+  and `<data>/codex-app`. The Include line stays until the person decides.
+- **Checked without the app (2026-10-01, this Mac):** the app's own commands,
+  replayed exactly (its login-shell wrapper, `command -v codex`,
+  `codex --version`, the `nohup … app-server --listen unix://` start, then
+  `ssh -T … exec codex app-server proxy` with a WebSocket handshake):
+  `initialize` answered with `codexHome` `/codex-home`, `account/read` with
+  `requiresOpenaiAuth: false`, and a turn in `/work` answered through the
+  relay with the real key. `codex exec` over ssh, `sftp` both ways, a local
+  forward to the container's localhost (one to example.com refused), remote
+  forwards, agent forwarding, root and keyless logins refused. The key wasn't
+  in the container's processes, `docker inspect`, its whole filesystem
+  (with `/codex-home` and `/work`) or the files written on the host.
+  Seen: Codex's model-list refresh fails to parse the Toolkit's `/models`
+  ("failed to decode models response"), so the app's picker may show
+  defaults.
+
 ## Open questions (with defaults)
 
 - Linux hosts: not in v0. The articles cover Linux, and adding it later is

@@ -64,7 +64,22 @@ def main(argv: list[str] | None = None) -> int:
     remove.add_argument(
         "--yes", action="store_true", help="don't ask (images are removed; data is kept unless --delete-data)"
     )
+    # Development only, for the Codex desktop app test (app_test.py): not in the help.
+    app_test = commands.add_parser("app-test")
+    app_test.add_argument("action", choices=["start", "stop"])
+    app_test.add_argument("--no-app", action="store_true", help="start: don't open the Codex app copy")
+    app_test.add_argument(
+        "--purge", action="store_true", help="stop: also remove the test's history and app data"
+    )
+    proxy = commands.add_parser("ssh-proxy")
+    proxy.add_argument("setup")
+    proxy.add_argument("--docker", default="docker")
     args = parser.parse_args(argv)
+    if args.command == "ssh-proxy":
+        # ssh's ProxyCommand: stdout is the ssh connection, so no log setup or prints.
+        from umcodex.app_test import ssh_proxy
+
+        return ssh_proxy(args.setup, args.docker)
     if args.command != "uninstall":  # it may delete the data folder the log is in
         _log_to_file()
     try:
@@ -83,6 +98,12 @@ def main(argv: list[str] | None = None) -> int:
 
             updater = Updater()
             return updater.rollback() if args.rollback else updater.update()
+        if args.command == "app-test":
+            from umcodex import app_test as test
+
+            if args.action == "start":
+                return test.start(open_app=not args.no_app)
+            return test.stop(purge=args.purge)
         if args.command == "uninstall":
             from umcodex.uninstall import uninstall
 
