@@ -194,3 +194,64 @@ def test_a_saved_folder_that_now_leads_elsewhere_needs_an_explicit_yes(project, 
     chosen = choose(store, script.ask, script.say, start_folder=project)
     assert chosen is not None
     assert chosen[0].writes == (os.path.realpath(elsewhere),)  # what was approved is saved
+
+
+# --- Opened from the app (`um-codex launch --from-app`) ---------------------
+
+NEW_SETUP_REST = ("", "", "", "", "", "", "")  # name, writes, reads, internet, model, approvals, Start
+
+
+def test_from_the_app_a_new_setup_offers_documents_um_codex_and_makes_it(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    script = Script("", *NEW_SETUP_REST)  # Enter at the working folder
+    chosen = choose(SetupStore(), script.ask, script.say, start_folder=None)
+    assert chosen is not None
+    folder = home / "Documents" / "UM-Codex"
+    assert folder.is_dir()
+    assert chosen[0].working == os.path.realpath(folder) and chosen[0].name == "UM-Codex"
+    assert script.asked[0] == "Drag a folder here, or press Enter for ~/Documents/UM-Codex: "
+
+
+def test_from_the_app_the_documents_folder_isnt_made_unless_chosen(tmp_path, monkeypatch, project):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    script = Script(str(project), *NEW_SETUP_REST)
+    chosen = choose(SetupStore(), script.ask, script.say, start_folder=None)
+    assert chosen is not None and chosen[0].working == str(project)
+    assert not (home / "Documents" / "UM-Codex").exists()
+
+
+def test_from_the_app_a_new_setup_offers_the_last_setups_folder(project, tmp_path):
+    store = SetupStore()
+    store.save(make(project), used=True)
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    script = Script(
+        "n",  # Use "thesis" again? no
+        "n",  # a new setup
+        "",  # working folder: the last setup's
+        "fresh",  # name
+        *NEW_SETUP_REST[1:],
+    )
+    chosen = choose(store, script.ask, script.say, start_folder=None)
+    assert chosen is not None and chosen[0].working == str(project) and chosen[0].name == "fresh"
+    assert f"press Enter for {project}: " in script.asked[2]
+
+
+def test_the_current_folder_is_offered_from_a_terminal(project):
+    script = Script("", *NEW_SETUP_REST)
+    chosen = choose(SetupStore(), script.ask, script.say, start_folder=project)
+    assert chosen is not None and chosen[0].working == str(project)
+    assert script.asked[0] == f"Drag a folder here, or press Enter for {project}: "
+
+
+def test_enter_with_no_folder_to_offer_says_what_to_do(project):
+    # Started in the home folder, which can't be shared: nothing is offered.
+    script = Script("", str(project), *NEW_SETUP_REST)
+    chosen = choose(SetupStore(), script.ask, script.say, start_folder=Path.home())
+    assert chosen is not None and chosen[0].working == str(project)
+    assert script.asked[0] == "Drag a folder here, or type its path: "
+    assert "Drag a folder from Finder or File Explorer into this window" in script.text
