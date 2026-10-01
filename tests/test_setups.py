@@ -8,7 +8,16 @@ from pathlib import Path
 import pytest
 
 from umcodex.folders import plan
-from umcodex.setups import Setup, SetupStore, choose, manage, new_id, summary
+from umcodex.setups import (
+    BROWSER_ASKS_QUESTION,
+    BROWSER_QUESTION,
+    Setup,
+    SetupStore,
+    choose,
+    manage,
+    new_id,
+    summary,
+)
 
 
 class Script:
@@ -82,6 +91,7 @@ def test_a_new_setup_from_scratch(project):
         str(project / "raw"),  # a read-only folder
         "",  # done
         "y",  # internet on
+        "",  # browser tool: default (off)
         "",  # model: default
         "",  # approvals: default (never)
         "",  # Start? yes
@@ -95,6 +105,8 @@ def test_a_new_setup_from_scratch(project):
     assert setup.writes == (str(project.parent / "outputs"),)
     assert setup.reads == (str(project / "raw"),)
     assert setup.internet and setup.model == "gpt-5.6-terra" and setup.approvals == "never"
+    assert not setup.browser
+    assert "Browser tool: off." in script.text
     assert layout.reads == ((project / "raw", "/mnt/read/raw"),)
     assert "DELETE" in script.text and "Internet: ON" in script.text
     assert "could send anything" in script.text
@@ -255,3 +267,138 @@ def test_enter_with_no_folder_to_offer_says_what_to_do(project):
     assert chosen is not None and chosen[0].working == str(project)
     assert script.asked[0] == "Drag a folder here, or type its path: "
     assert "Drag a folder from Finder or File Explorer into this window" in script.text
+
+
+# --- The browser tool (M2b) -----------------------------------------------------
+
+
+def new_setup_answers(internet: str, *browser: str) -> list[str]:
+    return [
+        "",  # working folder: the default
+        "",  # name
+        "",  # no write folders
+        "",  # no read-only folders
+        internet,
+        *browser,
+        "",  # model
+        "",  # approvals: never
+        "",  # Start
+    ]
+
+
+def test_the_browser_question_is_asked_only_with_the_internet_on(project):
+    script = Script(*new_setup_answers(""))  # internet off: no browser question
+    chosen = choose(SetupStore(), script.ask, script.say, start_folder=project)
+    assert chosen is not None and not chosen[0].browser
+    assert not any("Browser tool" in q or "browser action" in q for q in script.asked)
+    assert "Browser tool" not in script.text
+
+
+def test_the_browser_tool_on_with_approvals(project):
+    script = Script(*new_setup_answers("y", "y", ""))  # browser on; approve each action: default yes
+    chosen = choose(SetupStore(), script.ask, script.say, start_folder=project)
+    assert chosen is not None
+    setup = chosen[0]
+    assert setup.browser and setup.browser_asks
+    assert any(q.startswith(BROWSER_QUESTION) and q.endswith("[y/N] ") for q in script.asked)
+    assert any(q == f"{BROWSER_ASKS_QUESTION} [Y/n] " for q in script.asked)
+    assert BROWSER_QUESTION == (
+        "Browser tool on? (Codex can open websites in a fresh browser inside the sandbox;"
+        " it has none of your logins.)"
+    )
+    assert BROWSER_ASKS_QUESTION == "Approve each browser action (opening pages, clicking, typing)?"
+    assert "Browser tool: ON. Codex can open websites in a fresh browser inside the sandbox;" in script.text
+    assert "it has none of your logins." in script.text
+    assert (
+        "It asks you before each browser action (opening pages, clicking, typing);"
+        " reading a page doesn't ask." in script.text
+    )
+    assert SetupStore().last_used() == setup
+
+
+def test_the_browser_tool_on_without_approvals(project):
+    script = Script(*new_setup_answers("y", "y", "n"))
+    chosen = choose(SetupStore(), script.ask, script.say, start_folder=project)
+    assert chosen is not None
+    assert chosen[0].browser and not chosen[0].browser_asks
+    assert "It doesn't ask you before browser actions." in script.text
+
+
+def test_the_browser_tool_is_saved_with_the_setup(project):
+    store = SetupStore()
+    setup = make(project, internet=True, browser=True, browser_asks=False)
+    store.save(setup, used=True)
+    raw = store.path.read_text()
+    assert "browser = true" in raw and "browser_asks = false" in raw
+    assert SetupStore().get(setup.id) == setup
+
+
+def test_setups_saved_before_the_browser_tool_have_it_off(project):
+    store = SetupStore()
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    store.path.write_text(
+        'last_used = "old-1"\n\n[[setup]]\nid = "old-1"\nname = "old"\n'
+        f'working = "{project}"\nwrites = []\nreads = []\ninternet = true\n'
+        'model = "gpt-5.6-terra"\napprovals = "never"\n',
+        encoding="utf-8",
+    )
+    old = store.get("old-1")
+    assert old is not None and old.internet and not old.browser and old.browser_asks
+    script = Script("", "")  # use it again; Start
+    chosen = choose(store, script.ask, script.say, start_folder=project)
+    assert chosen is not None and not chosen[0].browser
+    assert "Browser tool: off." in script.text
+
+
+def test_a_saved_browser_tool_without_the_internet_is_off(project):
+    store = SetupStore()
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    store.path.write_text(
+        f'[[setup]]\nid = "odd-1"\nname = "odd"\nworking = "{project}"\ninternet = false\nbrowser = true\n',
+        encoding="utf-8",
+    )
+    loaded = store.get("odd-1")
+    assert loaded is not None and not loaded.browser
+
+
+def test_editing_keeps_the_browser_answers_as_defaults(project):
+    store = SetupStore()
+    setup = make(project, internet=True, browser=True, browser_asks=False)
+    store.save(setup, used=True)
+    script = Script(
+        "",  # use it again
+        "e",  # change it
+        "",  # working folder (kept)
+        "",  # name (kept)
+        "",  # write folders: none
+        "",  # read-only folders: none
+        "",  # internet (kept: on)
+        "",  # browser tool (kept: on)
+        "",  # approve each action (kept: no)
+        "",  # model
+        "",  # approvals
+        "",  # Start
+    )
+    chosen = choose(store, script.ask, script.say, start_folder=project)
+    assert chosen is not None
+    assert chosen[0].browser and not chosen[0].browser_asks
+    assert any(q.startswith(BROWSER_QUESTION) and q.endswith("[Y/n] ") for q in script.asked)
+    assert f"{BROWSER_ASKS_QUESTION} [y/N] " in script.asked
+
+
+def test_turning_the_internet_off_turns_the_browser_tool_off(project):
+    store = SetupStore()
+    setup = make(project, internet=True, browser=True)
+    store.save(setup, used=True)
+    script = Script("", "e", "", "", "", "", "n", "", "", "")  # ... internet: no; model; approvals; Start
+    chosen = choose(store, script.ask, script.say, start_folder=project)
+    assert chosen is not None
+    assert not chosen[0].internet and not chosen[0].browser
+    assert "Browser tool" not in "\n".join(summary(chosen[0], chosen[1]))
+
+
+def test_summary_with_the_browser_tool(project):
+    setup = make(project, internet=True, browser=True)
+    text = "\n".join(summary(setup, plan(project, [], [])))
+    assert "Browser tool: ON." in text and "none of your logins" in text
+    assert "asks you before each browser action" in text

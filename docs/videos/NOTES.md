@@ -6,8 +6,9 @@ and shorter. Kept up to date as features land. **Check each claim against
 the code and docs/DESIGN.md at the commit you record from**, and mark
 anything still in "Not built yet" as left out.
 
-Last updated: 2026-10-01 (M1 launcher, M2 installers and M3 releases and
-updates built; no release published yet, so record installs once one is).
+Last updated: 2026-10-01 (M1 launcher, M2 installers, M2b browser tool and
+M3 releases and updates built; no release published yet, so record installs
+once one is).
 
 ## Who it's for
 
@@ -31,10 +32,14 @@ plain; no product pitch. These are separate from DataLab's users.
    quitting, launching again with "use last setup".
 5. **Folders and internet, in practice** (about 2 min): read-only vs write
    folders, internet on vs off, what each means (see "What to say" below).
+6. **The browser tool** (about 2 min): turning it on in a setup, the summary
+   line, asking Codex to open a page and tell you what's on it, approving
+   the browser action, and a screenshot saved in the working folder when
+   asked.
 
-Later, when built: the browser tool (M2b) and "On this computer" mode (M4).
+Later, when built: "On this computer" mode (M4).
 
-## What to say (true now, in the M1 code)
+## What to say (true now, in the code)
 
 - **The key.** You enter your U-M GPT Toolkit API key once; it's kept in
   your computer's secure keychain (macOS Keychain, Windows Credential
@@ -44,7 +49,8 @@ Later, when built: the browser tool (M2b) and "On this computer" mode (M4).
   a difference from ITS's setup articles, which put the key in a file.)
 - **The setup questions, in order:** a name; the working folder (Codex
   starts there; it can read, change and delete in it); more folders Codex
-  can change; folders it can only read; internet on or off; the model
+  can change; folders it can only read; internet on or off; with the
+  internet on, the browser tool (see below); the model
   (default `gpt-5.6-terra`); approvals ("runs commands without asking", the
   default, or "ask me before commands"). Then a summary in plain words and
   "Start? [Y/n]". Setups are saved; next time it offers the last one.
@@ -57,6 +63,23 @@ Later, when built: the browser tool (M2b) and "On this computer" mode (M4).
 - **Internet on:** the whole internet. Known limit, decided on purpose:
   with internet on, Codex can also reach services on your own computer and
   your local network or VPN. The launch screen says so.
+- **The browser tool** (only offered when the internet is on; off unless
+  you turn it on). The questions, exactly: "Browser tool on? (Codex can
+  open websites in a fresh browser inside the sandbox; it has none of your
+  logins.) [y/N]", then "Approve each browser action (opening pages,
+  clicking, typing)? [Y/n]". The summary says "Browser tool: ON. Codex can
+  open websites in a fresh browser inside the sandbox; it has none of your
+  logins." and "It asks you before each browser action (opening pages,
+  clicking, typing); reading a page doesn't ask." With it on, Codex can
+  open pages, click, fill in forms, read pages and take screenshots, in a
+  browser with no window that runs inside the sealed environment. It's a
+  fresh browser every time: none of your logins, cookies or bookmarks, and
+  it can't see or control your own browser or desktop. By default Codex
+  stops and asks before each action that opens a page, clicks or types; you
+  approve ("Allow") or decline ("Cancel") it in Codex's screen. Reading the
+  page that's open (its text, a screenshot) doesn't ask. Codex is told to
+  save a screenshot in your working folder only when you ask for one. With
+  the internet off there's no browser tool (the question isn't asked).
 - **Inside the environment** Codex has Python, R, Node, git and build tools,
   and can install more with `sudo` when the internet is on. Installed
   things last only for that session; files in your folders stay.
@@ -86,7 +109,9 @@ Later, when built: the browser tool (M2b) and "On this computer" mode (M4).
   (the voice reads it as letters); the screen can show "U-M GPT Toolkit".
 - Don't call it "safe" or "secure" without saying what from: the key is
   protected; your chosen folders are exactly what Codex can touch.
-- Don't promise browser or computer control yet (see below).
+- The browser tool is a separate browser inside the sealed environment,
+  not the person's own: don't say Codex "uses your browser". Don't promise
+  control of the person's own browser or computer yet (see below).
 
 ## Recording
 
@@ -99,7 +124,6 @@ Later, when built: the browser tool (M2b) and "On this computer" mode (M4).
 
 ## Not built yet (leave out until it is)
 
-- The browser tool inside the environment (M2b).
 - "On this computer" mode, the person's own browser, computer control
   (M4; computer control depends on a spike).
 - An install website; until then the README has the commands.

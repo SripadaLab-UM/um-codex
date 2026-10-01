@@ -27,6 +27,20 @@ It may be on or off; `launch.md` says which. When it's off, you can reach
 only the model, so installs and downloads will fail: say so instead of
 retrying.
 
+## Browser tool
+
+If `launch.md` says the browser tool is on, you have the `browser` MCP tools
+(Playwright): open pages, click, type, fill in forms, read pages and take
+screenshots, in a headless Chromium inside this container. It's a fresh
+browser with none of the person's logins or cookies, and it can't reach their
+own browser or desktop. The person may be asked to approve each action that
+opens a page, clicks or types (reading the open page doesn't ask), so say
+what you're about to do and keep the steps few. Use it when a page needs
+a real browser (scripts, clicking, forms); for a plain download, `curl` is
+simpler. Don't enter passwords or personal details on sites. Save a
+screenshot only when the person asks for one: give it a file name, and it's
+saved in `/work`.
+
 ## Installing things
 
 You have passwordless `sudo` inside the container. With internet on you can

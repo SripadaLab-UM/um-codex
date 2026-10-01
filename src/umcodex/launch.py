@@ -193,6 +193,10 @@ def launch_note(setup: Setup, layout: Layout) -> str:
             else "Off: only the model is reachable. pip, npm, git clone and curl to the internet will fail."
         ),
         "",
+        "## Browser tool",
+        "",
+        *browser_note(setup),
+        "",
         "## Approvals",
         "",
         (
@@ -203,6 +207,23 @@ def launch_note(setup: Setup, layout: Layout) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def browser_note(setup: Setup) -> list[str]:
+    if not (setup.internet and setup.browser):
+        return ["Off: there's no browser tool in this launch."]
+    return [
+        "On: the `browser` MCP tools (Playwright) drive a headless Chromium inside this",
+        "container, with a fresh profile and none of the person's logins.",
+        (
+            "The person approves each browser action (opening pages, clicking, typing);"
+            " reading the page (snapshot, screenshot, find) runs without asking."
+            if setup.browser_asks
+            else "Browser actions run without asking the person."
+        ),
+        "Take a screenshot into /work (with a file name) only when the person asks for one;",
+        "unnamed screenshots and page snapshots go in /tmp/um-codex-browser.",
+    ]
 
 
 def _write(path: Path, text: str, mode: int = 0o644) -> None:
@@ -293,7 +314,13 @@ def run(
         _write(spec.gateway_conf, render_gateway_conf(port))
         _write(
             spec.config_file,
-            codex_config.render(model=setup.model, approvals=setup.approvals, internet=setup.internet),
+            codex_config.render(
+                model=setup.model,
+                approvals=setup.approvals,
+                internet=setup.internet,
+                browser=setup.browser,
+                browser_asks=setup.browser_asks,
+            ),
         )
         _write(spec.launch_note, launch_note(setup, layout))
         say("Starting the container...")

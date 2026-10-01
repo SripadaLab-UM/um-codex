@@ -1,7 +1,8 @@
 """Saved setups: what a launch shares with the container, and how Codex runs.
 
 A setup is a name, a working folder, more folders to write, folders to read
-only, internet on or off, the model and the approval policy. Setups are kept
+only, internet on or off, the browser tool (only with the internet on), the
+model and the approval policy. Setups are kept
 in `setups.toml` in UM-Codex's data folder, with the last one used first.
 
 The questions are plain `input()` prompts (no curses), so they work the same
@@ -42,6 +43,10 @@ class Setup:
     internet: bool = False
     model: str = DEFAULT_MODEL
     approvals: Approvals = "never"
+    # The browser tool (M2b): only with the internet on. Setups saved before
+    # it existed have neither key, which means off.
+    browser: bool = False
+    browser_asks: bool = True  # approve each browser action
 
     def to_toml(self) -> dict:
         return {
@@ -53,6 +58,8 @@ class Setup:
             "internet": self.internet,
             "model": self.model,
             "approvals": self.approvals,
+            "browser": self.browser,
+            "browser_asks": self.browser_asks,
         }
 
     @classmethod
@@ -60,15 +67,18 @@ class Setup:
         approvals = raw.get("approvals", "never")
         if approvals not in ("never", "on-request"):
             approvals = "never"
+        internet = bool(raw.get("internet", False))
         return cls(
             id=str(raw["id"]),
             name=str(raw.get("name") or raw["id"]),
             working=str(raw["working"]),
             writes=tuple(str(p) for p in raw.get("writes", [])),
             reads=tuple(str(p) for p in raw.get("reads", [])),
-            internet=bool(raw.get("internet", False)),
+            internet=internet,
             model=str(raw.get("model") or DEFAULT_MODEL),
             approvals=approvals,
+            browser=internet and raw.get("browser", False) is True,
+            browser_asks=raw.get("browser_asks", True) is not False,
         )
 
 
@@ -173,6 +183,11 @@ def resolved(setup: Setup, layout: folders.Layout) -> Setup:
 
 
 # --- Asking -----------------------------------------------------------------
+
+
+BROWSER_PLAIN = "Codex can open websites in a fresh browser inside the sandbox; it has none of your logins."
+BROWSER_QUESTION = f"Browser tool on? ({BROWSER_PLAIN})"
+BROWSER_ASKS_QUESTION = "Approve each browser action (opening pages, clicking, typing)?"
 
 
 def yes(ask: Ask, question: str, default: bool = True) -> bool:
@@ -306,6 +321,11 @@ def ask_setup(
         "Internet on? (Off: Codex can reach only the model.)",
         base.internet if base else False,
     )
+    browser, browser_asks = False, base.browser_asks if base else True
+    if internet:
+        browser = yes(ask, BROWSER_QUESTION, base.browser if base else False)
+        if browser:
+            browser_asks = yes(ask, BROWSER_ASKS_QUESTION, browser_asks)
     model = ask_model(ask, say, base.model if base else DEFAULT_MODEL, models)
     say("Approvals:")
     say("  1. Codex runs commands without asking (recommended: the container is its sandbox)")
@@ -326,6 +346,8 @@ def ask_setup(
         internet=internet,
         model=model,
         approvals=approvals,
+        browser=browser,
+        browser_asks=browser_asks,
     )
     return setup
 
@@ -361,6 +383,16 @@ def summary(setup: Setup, layout: folders.Layout) -> list[str]:
         ]
     else:
         lines.append("Internet: off. Codex can reach only the model.")
+    if setup.internet and setup.browser:
+        lines.append(f"Browser tool: ON. {BROWSER_PLAIN}")
+        lines.append(
+            "  It asks you before each browser action (opening pages, clicking, typing);"
+            " reading a page doesn't ask."
+            if setup.browser_asks
+            else "  It doesn't ask you before browser actions."
+        )
+    elif setup.internet:
+        lines.append("Browser tool: off.")
     lines.append(f"Model: {setup.model}")
     if setup.approvals == "never":
         lines.append("Approvals: Codex runs commands without asking.")
@@ -490,6 +522,7 @@ def manage(store: SetupStore, ask: Ask, say: Say, *, models: Callable[[], Sequen
         say("Saved setups (the last one used first):")
         for number, item in enumerate(setups, 1):
             net = "internet on" if item.internet else "internet off"
+            net += ", browser tool" if item.internet and item.browser else ""
             say(f"  {number}. {item.name}   ({item.working}; {net}; {item.model})")
         answer = ask("Choose a number to edit or delete it, or press Enter to finish: ").strip()
         if not answer:

@@ -27,12 +27,17 @@
 # Everything is pinned so every person runs the same tools:
 # - R: the Rocker r-ver image (exact R version), with CRAN packages from a
 #   dated Posit Package Manager snapshot;
-# - Codex CLI and Node: exact versions;
+# - Codex CLI, Node and the Playwright MCP server (with the Chromium build
+#   its Playwright pins): exact versions;
 # - Python packages: requirements.txt (see requirements.in).
 
 FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS node
 ARG CODEX_VERSION=0.157.1
-RUN npm install -g "@openai/codex@${CODEX_VERSION}" && npm cache clean --force
+# The browser tool (M2b): Playwright's MCP server, which brings its own
+# Playwright. Its Chromium is installed in the final stage.
+ARG PLAYWRIGHT_MCP_VERSION=0.0.83
+RUN npm install -g "@openai/codex@${CODEX_VERSION}" "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" \
+    && npm cache clean --force
 
 FROM rocker/r-ver:4.6.1@sha256:4e6e6696ff54a86625c7f80046478e67014a2184e942b85eeff43db7b992d93e
 
@@ -75,7 +80,19 @@ COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex \
     && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && ln -s ../lib/node_modules/@playwright/mcp/cli.js /usr/local/bin/playwright-mcp \
     && codex --version
+
+# The browser tool: the Chromium build that the MCP server's Playwright pins
+# (Chrome for Testing, for amd64 and arm64), with the system libraries it
+# needs, in a shared folder the agent user can read. Codex starts the server
+# only when a setup turns the browser tool on (codex_config.py); it runs
+# headless, as agent, with a fresh in-memory profile each time. The headless
+# shell isn't installed: `--browser chromium` uses the full build.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN playwright-mcp install-browser --with-deps --no-shell chromium \
+    && chmod -R a+rX /opt/ms-playwright \
+    && rm -rf /var/lib/apt/lists/* /tmp/*
 
 # Non-root user with passwordless sudo (see the note at the top).
 RUN useradd --create-home --uid 10004 --shell /bin/bash agent \
@@ -95,8 +112,9 @@ ENV PATH="/opt/venv/bin:${PATH}"
 # smoke test, which CI can also run: `docker run --rm <image> um-codex-smoke`.
 COPY AGENTS.md /etc/um-codex/AGENTS.md
 COPY smoke.sh /usr/local/bin/um-codex-smoke
+COPY browser-check.js /usr/local/bin/um-codex-browser-check
 RUN chmod 0644 /etc/um-codex/AGENTS.md \
-    && chmod 0755 /usr/local/bin/um-codex-smoke \
+    && chmod 0755 /usr/local/bin/um-codex-smoke /usr/local/bin/um-codex-browser-check \
     && mkdir -p /work /mnt/write /mnt/read /codex-home /home/agent/R/library \
     && chown agent:agent /work /codex-home /home/agent/R /home/agent/R/library
 
