@@ -1,0 +1,282 @@
+{
+ "object": "list",
+ "total": 46,
+ "data": [
+  {
+   "id": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+   "slug": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+   "canonical_slug": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+   "object": "model"
+  },
+  {
+   "id": "Llama-4-Scout-17B-16E-Instruct",
+   "slug": "Llama-4-Scout-17B-16E-Instruct",
+   "canonical_slug": "Llama-4-Scout-17B-16E-Instruct",
+   "object": "model"
+  },
+  {
+   "id": "claude-haiku-4-5",
+   "slug": "claude-haiku-4-5",
+   "canonical_slug": "claude-haiku-4-5",
+   "object": "model"
+  },
+  {
+   "id": "claude-opus-4-6",
+   "slug": "claude-opus-4-6",
+   "canonical_slug": "claude-opus-4-6",
+   "object": "model"
+  },
+  {
+   "id": "claude-opus-4-7",
+   "slug": "claude-opus-4-7",
+   "canonical_slug": "claude-opus-4-7",
+   "object": "model"
+  },
+  {
+   "id": "claude-opus-4-8",
+   "slug": "claude-opus-4-8",
+   "canonical_slug": "claude-opus-4-8",
+   "object": "model"
+  },
+  {
+   "id": "claude-opus-5",
+   "slug": "claude-opus-5",
+   "canonical_slug": "claude-opus-5",
+   "object": "model"
+  },
+  {
+   "id": "claude-opus-5-5",
+   "slug": "claude-opus-5-5",
+   "canonical_slug": "claude-opus-5-5",
+   "object": "model"
+  },
+  {
+   "id": "claude-sonnet-4-6",
+   "slug": "claude-sonnet-4-6",
+   "canonical_slug": "claude-sonnet-4-6",
+   "object": "model"
+  },
+  {
+   "id": "claude-sonnet-5",
+   "slug": "claude-sonnet-5",
+   "canonical_slug": "claude-sonnet-5",
+   "object": "model"
+  },
+  {
+   "id": "claude-fable-5-1",
+   "slug": "claude-fable-5-1",
+   "canonical_slug": "claude-fable-5-1",
+   "object": "model"
+  },
+  {
+   "id": "gemini-3.5-flash",
+   "slug": "gemini-3.5-flash",
+   "canonical_slug": "gemini-3.5-flash",
+   "object": "model"
+  },
+  {
+   "id": "gemini-3.6-flash",
+   "slug": "gemini-3.6-flash",
+   "canonical_slug": "gemini-3.6-flash",
+   "object": "model"
+  },
+  {
+   "id": "gemini-3.7-flash",
+   "slug": "gemini-3.7-flash",
+   "canonical_slug": "gemini-3.7-flash",
+   "object": "model"
+  },
+  {
+   "id": "gemini-3.8-flash",
+   "slug": "gemini-3.8-flash",
+   "canonical_slug": "gemini-3.8-flash",
+   "object": "model"
+  },
+  {
+   "id": "gemini-3-flash-preview",
+   "slug": "gemini-3-flash-preview",
+   "canonical_slug": "gemini-3-flash-preview",
+   "object": "model"
+  },
+  {
+   "id": "gemini-3.1-flash-image-preview",
+   "slug": "gemini-3.1-flash-image-preview",
+   "canonical_slug": "gemini-3.1-flash-image-preview",
+   "object": "model"
+  },
+  {
+   "id": "gpt-4.1",
+   "slug": "gpt-4.1",
+   "canonical_slug": "gpt-4.1",
+   "object": "model"
+  },
+  {
+   "id": "gpt-5.6-luna",
+   "slug": "gpt-5.6-luna",
+   "canonical_slug": "gpt-5.6-luna",
+   "object": "model"
+  },
+  {
+   "id": "gpt-5.6-sol",
+   "slug": "gpt-5.6-sol",
+   "canonical_slug": "gpt-5.6-sol",
+   "object": "model"
+  },
+  {
+   "id": "gpt-5.6-terra",
+   "slug": "gpt-5.6-terra",
+   "canonical_slug": "gpt-5.6-terra",
+   "object": "model"
+  },
+  {
+   "id": "gpt-6-astra",
+   "slug": "gpt-6-astra",
+   "canonical_slug": "gpt-6-astra",
+   "object": "model"
+  },
+  {
+   "id": "gpt-6-luna",
+   "slug": "gpt-6-luna",
+   "canonical_slug": "gpt-6-luna",
+   "object": "model"
+  },
+  {
+   "id": "gpt-6-sol",
+   "slug": "gpt-6-sol",
+   "canonical_slug": "gpt-6-sol",
+   "object": "model"
+  },
+  {
+   "id": "gpt-6.1-sol",
+   "slug": "gpt-6.1-sol",
+   "canonical_slug": "gpt-6.1-sol",
+   "object": "model"
+  },
+  {
+   "id": "gpt-4.1-mini",
+   "slug": "gpt-4.1-mini",
+   "canonical_slug": "gpt-4.1-mini",
+   "object": "model"
+  },
+  {
+   "id": "gpt-4.1-nano",
+   "slug": "gpt-4.1-nano",
+   "canonical_slug": "gpt-4.1-nano",
+   "object": "model"
+  },
+  {
+   "id": "gpt-4o",
+   "slug": "gpt-4o",
+   "canonical_slug": "gpt-4o",
+   "object": "model"
+  },
+  {
+   "id": "gpt-4o-mini",
+   "slug": "gpt-4o-mini",
+   "canonical_slug": "gpt-4o-mini",
+   "object": "model"
+  },
+  {
+   "id": "gpt-5",
+   "slug": "gpt-5",
+   "canonical_slug": "gpt-5",
+   "object": "model"
+  },
+  {
+   "id": "gpt-5-mini",
+   "slug": "gpt-5-mini",
+   "canonical_slug": "gpt-5-mini",
+   "object": "model"
+  },
+  {
+   "id": "gpt-5.1",
+   "slug": "gpt-5.1",
+   "canonical_slug": "gpt-5.1",
+   "object": "model"
+  },
+  {
+   "id": "gpt-5.2",
+   "slug": "gpt-5.2",
+   "canonical_slug": "gpt-5.2",
+   "object": "model"
+  },
+  {
+   "id": "gpt-5.4",
+   "slug": "gpt-5.4",
+   "canonical_slug": "gpt-5.4",
+   "object": "model"
+  },
+  {
+   "id": "gpt-5.5",
+   "slug": "gpt-5.5",
+   "canonical_slug": "gpt-5.5",
+   "object": "model"
+  },
+  {
+   "id": "gpt-image-1.5",
+   "slug": "gpt-image-1.5",
+   "canonical_slug": "gpt-image-1.5",
+   "object": "model"
+  },
+  {
+   "id": "gpt-image-2",
+   "slug": "gpt-image-2",
+   "canonical_slug": "gpt-image-2",
+   "object": "model"
+  },
+  {
+   "id": "gpt-image-2.5-flare",
+   "slug": "gpt-image-2.5-flare",
+   "canonical_slug": "gpt-image-2.5-flare",
+   "object": "model"
+  },
+  {
+   "id": "gpt-image-2.5-sunburst",
+   "slug": "gpt-image-2.5-sunburst",
+   "canonical_slug": "gpt-image-2.5-sunburst",
+   "object": "model"
+  },
+  {
+   "id": "o1",
+   "slug": "o1",
+   "canonical_slug": "o1",
+   "object": "model"
+  },
+  {
+   "id": "o3",
+   "slug": "o3",
+   "canonical_slug": "o3",
+   "object": "model"
+  },
+  {
+   "id": "kimi-k2.5",
+   "slug": "kimi-k2.5",
+   "canonical_slug": "kimi-k2.5",
+   "object": "model"
+  },
+  {
+   "id": "kimi-k3",
+   "slug": "kimi-k3",
+   "canonical_slug": "kimi-k3",
+   "object": "model"
+  },
+  {
+   "id": "deepseek-v4-flash-0731",
+   "slug": "deepseek-v4-flash-0731",
+   "canonical_slug": "deepseek-v4-flash-0731",
+   "object": "model"
+  },
+  {
+   "id": "text-embedding-3-small",
+   "slug": "text-embedding-3-small",
+   "canonical_slug": "text-embedding-3-small",
+   "object": "model"
+  },
+  {
+   "id": "text-embedding-3-large",
+   "slug": "text-embedding-3-large",
+   "canonical_slug": "text-embedding-3-large",
+   "object": "model"
+  }
+ ]
+}
