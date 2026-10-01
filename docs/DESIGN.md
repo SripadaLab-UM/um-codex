@@ -116,7 +116,11 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
 
   Codex's other features stay at Codex's defaults: full power.
 - **AGENTS.md** in the image tells Codex where things are: the folders, what's
-  read-only, and whether the internet is on.
+  read-only, and that it has `sudo`. The container copies it into
+  `$CODEX_HOME/AGENTS.md` at every start (it's the app's file). What changes
+  per launch (each mounted folder and whether the internet is on) is in
+  `/etc/um-codex/launch.md`, which the launcher writes and mounts read-only;
+  AGENTS.md tells Codex to read it first.
 - **The terminal:**
   - The container starts with `sleep infinity`, then
     `docker exec -it <agent> codex` runs in the foreground with the person's
