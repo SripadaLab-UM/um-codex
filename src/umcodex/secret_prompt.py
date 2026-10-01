@@ -177,9 +177,7 @@ def _whitespace(text: str) -> str:
 def _read(label: str) -> Entry:
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return Entry(getpass.getpass(f"{label} (input hidden): "))
-    sys.stdout.write(f"{label}: ")
-    sys.stdout.flush()
-    return _read_windows() if sys.platform == "win32" else _read_posix()
+    return _read_windows(label) if sys.platform == "win32" else _read_posix(label)
 
 
 def _write(text: str) -> None:
@@ -187,7 +185,7 @@ def _write(text: str) -> None:
     sys.stdout.flush()
 
 
-def _read_posix() -> Entry:
+def _read_posix(label: str) -> Entry:
     assert sys.platform != "win32"
     import codecs
     import select
@@ -216,7 +214,11 @@ def _read_posix() -> Entry:
     quiet[6][termios.VMIN] = 1
     quiet[6][termios.VTIME] = 0
     try:
+        # Quiet first, then the label: anything typed or pasted as soon as the
+        # label shows is never echoed. ISIG stays off, so Ctrl-C reaches the
+        # loop (KeyboardInterrupt: `um-codex key` exits 2, cancelled).
         termios.tcsetattr(fd, termios.TCSANOW, quiet)
+        _write(f"{label}: ")
         return read_masked(read_char, _write, pending)
     finally:
         termios.tcsetattr(fd, termios.TCSANOW, saved)
@@ -263,9 +265,11 @@ class WindowsKeys:
             return char
 
 
-def _read_windows() -> Entry:
+def _read_windows(label: str) -> Entry:
     assert sys.platform == "win32"
     import msvcrt
+
+    _write(f"{label}: ")  # getwch never echoes
 
     keys = WindowsKeys(msvcrt.getwch, msvcrt.kbhit)
 

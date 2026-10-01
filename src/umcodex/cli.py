@@ -1,6 +1,7 @@
 """The `um-codex` command. With no command, it launches.
 
 um-codex            choose a setup and open Codex in a container
+um-codex launch --from-app   the same, from the UM-Codex app or shortcut
 um-codex setups     list, edit and delete saved setups
 um-codex key        save or replace the Toolkit API key
 um-codex doctor     check Docker, the images, the key and the Toolkit
@@ -33,6 +34,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=f"UM-Codex {__version__}")
     commands = parser.add_subparsers(dest="command")
     launch = commands.add_parser("launch", help="choose a setup and open Codex (the default)")
+    launch.add_argument(
+        "--from-app",
+        action="store_true",
+        help="opened from the UM-Codex app or shortcut: the current folder isn't offered as the working "
+        "folder (the last setup's is, or ~/Documents/UM-Codex)",
+    )
     launch.add_argument("codex_args", nargs=argparse.REMAINDER, help="passed to codex (after --)")
     commands.add_parser("setups", help="list, edit and delete saved setups")
     key = commands.add_parser("key", help="save or replace the Toolkit API key")
@@ -74,10 +81,14 @@ def main(argv: list[str] | None = None) -> int:
         codex_args = list(getattr(args, "codex_args", []))
         if codex_args[:1] == ["--"]:
             codex_args = codex_args[1:]
-        return _launch(codex_args)
+        return _launch(codex_args, from_app=getattr(args, "from_app", False))
     except KeyboardInterrupt:
         print("\nStopped.")
         return 130
+    except EOFError:
+        # A question with nothing to answer it (no terminal): taken as no.
+        print("\nNo answer (there's no terminal to type in), so nothing more was done.")
+        return 1
     except UpstreamRefused as error:
         print(error)
         return 1
@@ -171,7 +182,7 @@ def _setups() -> int:
     return 0
 
 
-def _launch(codex_args: list[str]) -> int:
+def _launch(codex_args: list[str], *, from_app: bool = False) -> int:
     from umcodex import launch
 
     print(f"UM-Codex {__version__}")
@@ -185,7 +196,10 @@ def _launch(codex_args: list[str]) -> int:
         print("First, UM-Codex needs your Toolkit API key.")
         if _key_command() != KEY_SAVED:
             return 1
-    chosen = choose(SetupStore(), input, print, start_folder=Path.cwd(), models=_models)
+    # From the app, the current folder is wherever Terminal opened (home):
+    # not a choice the person made, so it isn't offered.
+    start_folder = None if from_app else Path.cwd()
+    chosen = choose(SetupStore(), input, print, start_folder=start_folder, models=_models)
     if chosen is None:
         print("Not started.")
         return 0

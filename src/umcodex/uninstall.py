@@ -4,7 +4,8 @@
 its program files (the uninstaller scripts remove those after this returns)
 and the person's own folders, which are never touched.
 
-Removed, found by label only:
+It first asks "Uninstall UM-Codex? [y/N]" (not with --yes); nothing is
+removed before that's answered yes. Then, found by label only:
 - UM-Codex's containers and networks;
 - with --delete-data, each setup's Codex home volume (its Codex history);
 - the Toolkit key, from the keychain;
@@ -44,7 +45,8 @@ def uninstall(
     run: Run = subprocess.run,
 ) -> int:
     """0 when done (even if something was left, which is reported); 1 if
-    UM-Codex is running."""
+    UM-Codex is running or the person says no (EOFError, with no terminal
+    to answer, is left to the caller: `um-codex` takes it as no)."""
     data = data_dir()
     if _running(data):
         say("UM-Codex is running (a launch is open). Quit Codex first, then run the uninstaller again.")
@@ -54,6 +56,10 @@ def uninstall(
         if yes:
             return True
         return ask(f"{question} [y/N] ").strip().lower() in ("y", "yes")
+
+    if not confirm("Uninstall UM-Codex?"):
+        say("Nothing was removed.")
+        return 1
 
     docker_ok = shutil.which("docker") is not None and _docker(run, "info", "--format", "x") is not None
     if docker_ok:

@@ -207,15 +207,27 @@ def test_a_real_pseudo_terminal(monkeypatch, capsys):
                 return True
 
         monkeypatch.setattr(sys, "stdin", Stdin())
+        # The label is written only once echo is off: a paste that arrives as
+        # soon as it shows is never echoed.
+        echo_at_label: list[bool] = []
+        real_write = secret_prompt._write
+
+        def write(text: str) -> None:
+            if text == "Key: ":
+                echo_at_label.append(bool(termios.tcgetattr(follower)[3] & termios.ECHO))
+            real_write(text)
+
+        monkeypatch.setattr(secret_prompt, "_write", write)
         # Typed and pasted UTF-8, a Backspace, then a paste with a line break inside.
         os.write(leader, "pä€x\x7f".encode() + b"\r")
-        assert secret_prompt._read_posix() == Entry("pä€")
+        assert secret_prompt._read_posix("Key") == Entry("pä€")
         os.write(leader, f"{SECRET}\nmore\n".encode())
-        assert secret_prompt._read_posix().multiline
+        assert secret_prompt._read_posix("Key").multiline
         os.write(leader, b"\x03")
         with pytest.raises(KeyboardInterrupt):
-            secret_prompt._read_posix()
+            secret_prompt._read_posix("Key")
         assert termios.tcgetattr(follower) == before  # the terminal is put back
+        assert echo_at_label == [False, False, False]
         out = capsys.readouterr().out
         assert "*" in out and SECRET not in out and "pä" not in out
     finally:

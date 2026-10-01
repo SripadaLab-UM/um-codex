@@ -11,6 +11,7 @@ in Terminal, Windows Terminal and PowerShell. Every function that asks takes
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import secrets
@@ -186,14 +187,35 @@ def yes(ask: Ask, question: str, default: bool = True) -> bool:
             return False
 
 
+def app_folder() -> Path:
+    """The working folder offered when UM-Codex is opened from its app (or
+    shortcut) and there's no last setup to offer: made when it's chosen."""
+    return Path.home() / "Documents" / "UM-Codex"
+
+
+def shown(path: str) -> str:
+    """A path as people read it: ~ for the home folder."""
+    home = str(Path.home())
+    return "~" + path[len(home) :] if path == home or path.startswith(home + os.sep) else path
+
+
 def ask_folder(ask: Ask, say: Say, question: str, default: str | None, own_data: Path | None) -> str:
-    """One folder, checked. Empty input takes the default."""
+    """One folder, checked. Empty input takes the default; the app's own
+    default folder (~/Documents/UM-Codex) is made when it's chosen."""
+    say(question)
+    prompt = f"Drag a folder here, or press Enter for {shown(default)}: " if default else (
+        "Drag a folder here, or type its path: "
+    )  # fmt: skip
     while True:
-        prompt = f"{question}" + (f" [{default}]" if default else "") + ": "
         raw = ask(prompt).strip()
         if not raw and default:
             raw = default
+            if Path(default) == app_folder():
+                with contextlib.suppress(OSError):  # if it can't be made, the check says why
+                    app_folder().mkdir(parents=True, exist_ok=True)
         if not raw:
+            say("  Drag a folder from Finder or File Explorer into this window (or type its path),")
+            say("  then press Enter.")
             continue
         try:
             checked = folders.check_folder(folders.parse_path_input(raw), own_data=own_data)
@@ -252,15 +274,23 @@ def ask_setup(
     ask: Ask,
     say: Say,
     *,
-    start_folder: Path,
+    start_folder: Path | None,
     models: Sequence[str] = (),
     existing: Setup | None = None,
     own_data: Path | None = None,
+    fallback: str | None = None,
 ) -> Setup:
-    """Every question for a new setup, or to edit `existing`."""
+    """Every question for a new setup, or to edit `existing`. The working
+    folder's default: the existing one's, else the folder um-codex was
+    started in (`start_folder`), else `fallback` (opened from the app)."""
     base = existing
     say("")
-    default_working = base.working if base else _default_working(start_folder, own_data)
+    if base:
+        default_working: str | None = base.working
+    elif start_folder is not None:
+        default_working = _default_working(start_folder, own_data)
+    else:
+        default_working = fallback
     working = ask_folder(
         ask, say, "Working folder (Codex starts here, and can read, write and delete)",
         default_working, own_data,
@@ -349,12 +379,20 @@ def choose(
     ask: Ask,
     say: Say,
     *,
-    start_folder: Path,
+    start_folder: Path | None,
     models: Callable[[], Sequence[str]] = lambda: (),
     own_data: Path | None = None,
 ) -> tuple[Setup, folders.Layout] | None:
-    """The launch's setup questions, up to "Start? [Y/n]". None if the person stops."""
+    """The launch's setup questions, up to "Start? [Y/n]". None if the person stops.
+
+    `start_folder` is the folder um-codex was started in, offered as a new
+    setup's working folder. None when it was opened from the app (whose
+    folder means nothing): then the last setup's working folder is offered,
+    or else ~/Documents/UM-Codex."""
     setups = store.all()
+    fallback = None
+    if start_folder is None:
+        fallback = setups[0].working if setups else str(app_folder())
     setup: Setup | None = None
     if setups:
         last = setups[0]
@@ -374,7 +412,9 @@ def choose(
                     setup = setups[int(answer) - 1]
                     break
     if setup is None:
-        setup = ask_setup(ask, say, start_folder=start_folder, models=models(), own_data=own_data)
+        setup = ask_setup(
+            ask, say, start_folder=start_folder, models=models(), own_data=own_data, fallback=fallback
+        )
     while True:
         try:
             layout = check(setup, own_data=own_data)
@@ -384,7 +424,13 @@ def choose(
             if not yes(ask, "Change it now?", True):
                 return None
             setup = ask_setup(
-                ask, say, start_folder=start_folder, models=models(), existing=setup, own_data=own_data
+                ask,
+                say,
+                start_folder=start_folder,
+                models=models(),
+                existing=setup,
+                own_data=own_data,
+                fallback=fallback,
             )
             continue
         changed = moved(setup, own_data=own_data)
@@ -399,7 +445,13 @@ def choose(
             answer = ask("Type yes to use them where they go now, or press Enter to change the setup: ")
             if answer.strip().lower() != "yes":
                 setup = ask_setup(
-                    ask, say, start_folder=start_folder, models=models(), existing=setup, own_data=own_data
+                    ask,
+                    say,
+                    start_folder=start_folder,
+                    models=models(),
+                    existing=setup,
+                    own_data=own_data,
+                    fallback=fallback,
                 )
                 continue
             setup = resolved(setup, layout)
@@ -411,7 +463,13 @@ def choose(
             return setup, layout
         if answer in ("e", "edit", "change"):
             setup = ask_setup(
-                ask, say, start_folder=start_folder, models=models(), existing=setup, own_data=own_data
+                ask,
+                say,
+                start_folder=start_folder,
+                models=models(),
+                existing=setup,
+                own_data=own_data,
+                fallback=fallback,
             )
             continue
         if answer in ("n", "no"):
