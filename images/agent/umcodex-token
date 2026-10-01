@@ -1,0 +1,7 @@
+#!/bin/sh
+# UM-Codex: the launch token for Codex's provider (`auth.command` in
+# /etc/codex/requirements.toml) when the Codex app drives Codex over ssh:
+# ssh sessions don't have the container's UMCODEX_TOKEN, so the launch writes
+# it to this file (0640 root:agent) at start. It's the per-launch token,
+# never the Toolkit key, and works only through this launch's gateway.
+exec cat /run/um-codex/token

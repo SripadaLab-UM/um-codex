@@ -1,0 +1,39 @@
+# UM-Codex: sshd for the Codex desktop app's SSH connection (M6, "Open in:
+# Codex app"). Started once per connection, as
+# `sshd -i -f /etc/um-codex/sshd_config`, through `docker exec` (the host's
+# `um-codex ssh-proxy`, ssh's ProxyCommand); it never listens on a port.
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+# Only agent, only with the setup's key; no passwords, no root.
+AllowUsers agent
+PermitRootLogin no
+AuthenticationMethods publickey
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+HostbasedAuthentication no
+UsePAM no
+
+# No agent or X11 forwarding, no remote forwards or tunnels. Local forwards
+# (the app's previews of the container's ports) only to the container's own
+# localhost.
+AllowAgentForwarding no
+AllowTcpForwarding local
+PermitOpen localhost:* 127.0.0.1:* [::1]:*
+AllowStreamLocalForwarding no
+GatewayPorts no
+X11Forwarding no
+PermitTunnel no
+PermitUserEnvironment no
+PermitUserRC no
+
+PrintMotd no
+PrintLastLog no
+LogLevel ERROR
+Subsystem sftp internal-sftp
+
+# ssh sessions don't get `docker run` variables; these are what the image
+# sets. The launch token is not here: Codex reads it with umcodex-token.
+SetEnv CODEX_HOME=/codex-home PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 MPLCONFIGDIR=/tmp/matplotlib R_LIBS_USER=/home/agent/R/library PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1

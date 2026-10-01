@@ -7,7 +7,10 @@
    mounted read-only; see codex_config.py) and a private env file with the
    token (deleted as soon as the agent has started).
 4. The networks, the gateway and the agent start.
-5. `docker exec -it <agent> codex` runs in the person's terminal.
+5. `docker exec -it <agent> codex` runs in the person's terminal; or, for a
+   setup opened in the Codex app (codex_app.py), a `hold` step prepares the
+   container for the app's ssh connection and waits until the launch is
+   stopped.
 6. When it ends (or anything fails), the containers, networks, launch folder
    and relay go. The setup's Codex home volume stays, so `codex resume` works.
 
@@ -30,7 +33,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO
+from typing import IO, Protocol
 
 from umcodex import codex_config, credentials, locks, toolkit
 from umcodex.containers import (
@@ -123,16 +126,35 @@ class RunningLaunch:
     setup_id: str
     setup_name: str
     started_at: float  # seconds since the epoch
+    # A launch in the Codex app: {"alias", "connected", "first_time", "steps",
+    # "notes", "copy"} (codex_app.AppHold); None in a terminal.
+    app: dict | None = None
 
 
-def write_launch_info(folder: Path, setup: Setup, started_at: float | None = None) -> None:
+def write_launch_info(
+    folder: Path, setup: Setup, started_at: float | None = None, *, app: dict | None = None
+) -> None:
     """What the launcher window shows about a running launch."""
     info = {
         "setup_id": setup.id,
         "setup_name": setup.name,
         "started_at": time.time() if started_at is None else started_at,
+        **({"app": app} if app is not None else {}),
     }
-    _write(folder / LAUNCH_INFO, json.dumps(info) + "\n")
+    _write_info(folder, info)
+
+
+def update_launch_app(folder: Path, app: dict) -> None:
+    """Change the Codex app part of a running launch's launch.json."""
+    info = json.loads((folder / LAUNCH_INFO).read_text(encoding="utf-8"))
+    _write_info(folder, {**info, "app": app})
+
+
+def _write_info(folder: Path, info: dict) -> None:
+    """Whole, through a temporary file, so a reader never sees half of it."""
+    temporary = folder / f".{LAUNCH_INFO}.{secrets.token_hex(4)}"
+    _write(temporary, json.dumps(info) + "\n")
+    os.replace(temporary, folder / LAUNCH_INFO)
 
 
 def running_launches(data: Path) -> list[RunningLaunch]:
@@ -153,6 +175,7 @@ def running_launches(data: Path) -> list[RunningLaunch]:
                 setup_id=str(raw["setup_id"]),
                 setup_name=str(raw["setup_name"]),
                 started_at=float(raw["started_at"]),
+                app=raw["app"] if isinstance(raw.get("app"), dict) else None,
             )
         except (OSError, ValueError, KeyError, TypeError):
             continue
@@ -292,9 +315,12 @@ def _write(path: Path, text: str, mode: int = 0o644) -> None:
         file.write(text)
 
 
-def write_codex_settings(docker: Docker, spec: LaunchSpec, setup: Setup, api_key: Callable[[], str]) -> None:
+def write_codex_settings(
+    docker: Docker, spec: LaunchSpec, setup: Setup, api_key: Callable[[], str], *, app: bool = False
+) -> None:
     """Codex's enforced settings and model catalog (codex_config.py), in the
-    folder mounted read-only at /etc/codex."""
+    folder mounted read-only at /etc/codex. `app`: the launch is opened in
+    the Codex app (the token comes from a command; no ChatGPT sign-in)."""
     spec.codex_etc.mkdir()
     try:
         code, bundled, _ = docker.status(*spec.bundled_models_command(), timeout=120)
@@ -307,7 +333,7 @@ def write_codex_settings(docker: Docker, spec: LaunchSpec, setup: Setup, api_key
         _write(spec.codex_etc / codex_config.CATALOG_FILE, catalog)
     _write(
         spec.codex_etc / codex_config.REQUIREMENTS_FILE,
-        codex_config.render_requirements(internet=setup.internet, catalog=catalog is not None),
+        codex_config.render_requirements(internet=setup.internet, catalog=catalog is not None, app=app),
     )
     _write(
         spec.codex_etc / codex_config.MANAGED_CONFIG_FILE,
@@ -317,6 +343,7 @@ def write_codex_settings(docker: Docker, spec: LaunchSpec, setup: Setup, api_key
             internet=setup.internet,
             browser=setup.browser,
             browser_asks=setup.browser_asks,
+            app=app,
         ),
     )
 
@@ -340,6 +367,23 @@ def folder_mounts(layout: Layout) -> tuple[BindMount, ...]:
 # --- The launch -------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class Running:
+    """A launch that's up, for a `hold` step (codex_app.AppHold)."""
+
+    spec: LaunchSpec
+    relay_port: int
+    token: str
+    folder: Path  # the launch's folder in the data folder (launch.json is here)
+    setup: Setup
+
+
+class Hold(Protocol):
+    labels: tuple[tuple[str, str], ...]
+
+    def __call__(self, running: Running) -> int: ...
+
+
 def run(
     setup: Setup,
     layout: Layout,
@@ -350,8 +394,14 @@ def run(
     tty: bool | None = None,
     run_exec: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     api_key: Callable[[], str] = credentials.api_key,
+    hold: Hold | None = None,
 ) -> int:
-    """Run one launch to the end. Returns Codex's exit code (or 1 if it couldn't start)."""
+    """Run one launch to the end. Returns Codex's exit code (or 1 if it couldn't start).
+
+    `hold` (a setup opened in the Codex app, codex_app.AppHold): its labels go
+    on the containers, Codex's settings are the app's (the token from a
+    command), and it's called with the running launch in place of
+    `docker exec codex`; the launch ends when it returns."""
     docker = docker or Docker()
     data = data_dir()
     instance = instance_of(data)
@@ -407,10 +457,11 @@ def run(
             gateway_conf=folder / "gateway.conf",
             env_file=folder / "agent.env",
             image_cmd=image_command(docker, image),
+            extra_labels=hold.labels if hold is not None else (),
         )
         # Files the Linux containers read get Unix line ends, on Windows too.
         _write(spec.gateway_conf, render_gateway_conf(port))
-        write_codex_settings(docker, spec, setup, api_key)
+        write_codex_settings(docker, spec, setup, api_key, app=hold is not None)
         _write(spec.launch_note, launch_note(setup, layout))
         say("Starting the container...")
         if not docker.exists("volume", spec.volume):
@@ -431,6 +482,10 @@ def run(
             spec.env_file.unlink(missing_ok=True)
         if not docker.wait_running(spec.agent) or not docker.wait_running(spec.gateway):
             raise DockerError("the container stopped as soon as it started")
+        if hold is not None:
+            code = hold(Running(spec=spec, relay_port=port, token=token, folder=folder, setup=setup))
+            log.info("launch %s: ended in the Codex app (code %s)", launch_id, code)
+            return code
         interactive = sys.stdin.isatty() and sys.stdout.isatty() if tty is None else tty
         command = exec_command(
             spec.agent, tty=interactive, term=os.environ.get("TERM") or "xterm-256color", args=codex_args

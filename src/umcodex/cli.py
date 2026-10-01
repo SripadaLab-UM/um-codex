@@ -3,6 +3,7 @@
 um-codex            choose a setup and open Codex in a container
 um-codex ui         the launcher window (what the UM-Codex app and shortcuts open)
 um-codex launch --setup <id>   start a saved setup without asking (the launcher window's way)
+um-codex launch --open app     open Codex in the Codex desktop app instead of this terminal (Mac)
 um-codex setups     list, edit and delete saved setups
 um-codex key        save or replace the Toolkit API key
 um-codex doctor     check Docker, the images, the key and the Toolkit
@@ -34,7 +35,10 @@ def main(argv: list[str] | None = None) -> int:
         description="Codex on U-M GPT Toolkit, in a Docker container. With no command, it launches.",
     )
     parser.add_argument("--version", action="version", version=f"UM-Codex {__version__}")
-    commands = parser.add_subparsers(dest="command")
+    # The metavar leaves out ssh-proxy, which only ssh runs.
+    commands = parser.add_subparsers(
+        dest="command", metavar="{launch,ui,setups,key,pull,doctor,update,uninstall}"
+    )
     launch = commands.add_parser("launch", help="choose a setup and open Codex (the default)")
     launch.add_argument(
         "--from-app",
@@ -45,8 +49,13 @@ def main(argv: list[str] | None = None) -> int:
     launch.add_argument(
         "--setup",
         metavar="SETUP",
-        help="start this saved setup (its id or name) without asking anything: what the launcher "
-        "window runs",
+        help="start this saved setup (its id or name) without asking anything: what the launcher window runs",
+    )
+    launch.add_argument(
+        "--open",
+        choices=["terminal", "app"],
+        default="terminal",
+        help="where Codex opens: this terminal (the default), or the Codex desktop app (Mac)",
     )
     launch.add_argument("codex_args", nargs=argparse.REMAINDER, help="passed to codex (after --)")
     window = commands.add_parser("ui", help="open the launcher window (in your browser)")
@@ -78,7 +87,17 @@ def main(argv: list[str] | None = None) -> int:
     remove.add_argument(
         "--yes", action="store_true", help="don't ask (images are removed; data is kept unless --delete-data)"
     )
+    # ssh's ProxyCommand for the Codex app (codex_app.py): not in the help.
+    proxy = commands.add_parser("ssh-proxy")
+    proxy.add_argument("setup")
+    proxy.add_argument("--docker", default="docker")
+    proxy.add_argument("--data-dir", type=Path)
     args = parser.parse_args(argv)
+    if args.command == "ssh-proxy":
+        # stdout is the ssh connection: no log setup, nothing printed.
+        from umcodex.codex_app import ssh_proxy
+
+        return ssh_proxy(args.setup, args.docker, args.data_dir)
     if args.command != "uninstall":  # it may delete the data folder the log is in
         _log_to_file()
     try:
@@ -112,7 +131,10 @@ def main(argv: list[str] | None = None) -> int:
         if codex_args[:1] == ["--"]:
             codex_args = codex_args[1:]
         return _launch(
-            codex_args, from_app=getattr(args, "from_app", False), setup_name=getattr(args, "setup", None)
+            codex_args,
+            from_app=getattr(args, "from_app", False),
+            setup_name=getattr(args, "setup", None),
+            in_app=getattr(args, "open", "terminal") == "app",
         )
     except KeyboardInterrupt:
         print("\nStopped.")
@@ -203,6 +225,9 @@ def _models() -> list[str]:
 
 
 def _remove_volume(setup: Setup) -> None:
+    from umcodex import codex_app
+
+    codex_app.forget_setup(setup.id)  # its ssh host for the Codex app, if it had one
     try:
         Docker()("volume", "rm", volume_name(setup.id), check=False)
     except DockerError:
@@ -225,12 +250,23 @@ def _update_notice() -> None:
         logging.getLogger(__name__).warning("the update check at launch failed", exc_info=True)
 
 
-def _launch(codex_args: list[str], *, from_app: bool = False, setup_name: str | None = None) -> int:
+def _launch(
+    codex_args: list[str], *, from_app: bool = False, setup_name: str | None = None, in_app: bool = False
+) -> int:
     from umcodex import launch
 
     print(f"UM-Codex {__version__}")
     _update_notice()
-    if sys.platform == "win32" and not codex_args and not (sys.stdin.isatty() and sys.stdout.isatty()):
+    app = None
+    if in_app:
+        from umcodex import codex_app
+
+        app = codex_app.find_app()
+        reason = codex_app.unavailable_reason(app=app)
+        if reason is not None:
+            print(reason)
+            return 1
+    elif sys.platform == "win32" and not codex_args and not (sys.stdin.isatty() and sys.stdout.isatty()):
         print("This window can't run Codex's screen (Git Bash and mintty can't).")
         print("Use Windows Terminal or PowerShell, then run um-codex again.")
         return 1
@@ -244,6 +280,8 @@ def _launch(codex_args: list[str], *, from_app: bool = False, setup_name: str | 
         chosen = _chosen_without_asking(SetupStore(), setup_name)
         if chosen is None:
             return 1
+        if in_app:
+            return _launch_in_app(*chosen, app=app)
         return launch.run(*chosen, codex_args=codex_args)
     # From the app, the current folder is wherever Terminal opened (home):
     # not a choice the person made, so it isn't offered.
@@ -253,7 +291,36 @@ def _launch(codex_args: list[str], *, from_app: bool = False, setup_name: str | 
         print("Not started.")
         return 0
     setup, layout = chosen
+    if in_app:
+        return _launch_in_app(setup, layout, app=app)
     return launch.run(setup, layout, codex_args=codex_args)
+
+
+def _launch_in_app(setup: Setup, layout: Layout, *, app: Path | None) -> int:
+    """`launch --open app`: the launch runs here (it holds the relay) while the
+    Codex app works in the sandbox. From the launcher window it has no
+    terminal: what it says goes to the log too."""
+    from umcodex import codex_app, launch
+
+    log = logging.getLogger("umcodex.launch")
+
+    def say(text: str) -> None:
+        print(text, flush=True)
+        if text.strip():
+            log.info("%s", text)
+
+    if not codex_app.include_present():
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            say("The Codex app needs one line in ~/.ssh/config first: open UM-Codex and choose Allow.")
+            return 1
+        if not codex_app.ask_for_include(input, say):
+            return 1
+    docker = Docker()
+    if codex_app.app_launch_running(docker, setup.id):
+        say(f"“{setup.name}” is already running in the Codex app. Stop it in UM-Codex first.")
+        return 1
+    hold = codex_app.AppHold(setup.id, say=say, app=app, docker=docker)
+    return launch.run(setup, layout, say=say, docker=docker, hold=hold)
 
 
 def _chosen_without_asking(store: SetupStore, wanted: str) -> tuple[Setup, Layout] | None:

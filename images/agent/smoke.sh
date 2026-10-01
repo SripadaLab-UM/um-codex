@@ -44,6 +44,16 @@ check "browser tool opens a page headless" um-codex-browser-check \
     -- /usr/local/bin/playwright-mcp --headless --browser chromium --isolated --output-dir /tmp/um-codex-browser
 rm -rf /tmp/um-codex-browser
 
+# "Open in: Codex app" (M6): sshd's config is valid (checked with a throwaway
+# host key: each container makes its own), the app's login shell gets
+# CODEX_HOME and codex, and the token helper is there.
+check "sshd and sftp-server" test -x /usr/sbin/sshd -a -x /usr/lib/openssh/sftp-server
+check "sshd config is valid" sh -c 'k=$(mktemp -u) && ssh-keygen -q -t ed25519 -N "" -f "$k" && sudo -n /usr/sbin/sshd -t -f /etc/um-codex/sshd_config -h "$k"; s=$?; rm -f "$k" "$k.pub"; exit $s'
+check "no host keys in the image" sh -c '! ls /etc/ssh/ssh_host_* 2>/dev/null'
+check "agent's login shell is bash" test "$(getent passwd agent | cut -d: -f7)" = /bin/bash
+check "login shell has CODEX_HOME and codex" env -i HOME=/home/agent SHELL=/bin/bash /bin/bash -l -c 'test "$CODEX_HOME" = /codex-home && command -v codex'
+check "token helper" test -x /usr/local/bin/umcodex-token
+
 check "python is the venv" test "$(command -v python)" = /opt/venv/bin/python
 check "pip in the venv" python -m pip --version
 check "venv owned by agent" test -w /opt/venv/lib

@@ -295,17 +295,18 @@ function renderList() {
         "section",
         { class: "block", "aria-label": "Running" },
         el("div", { class: "block-head" }, el("h2", { class: "label", text: "Running now" })),
-        state.running.map((run) =>
+        state.running.flatMap((run) => [
           el(
             "div",
             { class: "running-row" },
             el("span", { class: "pulse", "aria-hidden": "true" }),
             el("span", { class: "name", text: run.setup_name }),
-            el("span", { class: "since", text: `Running since ${run.since}` }),
+            el("span", { class: "since", text: `${run.app ? "Running in the Codex app" : "Running"} since ${run.since}` }),
             el("span", { class: "grow" }),
             el("button", { key: `stop-${run.launch_id}`, onclick: () => stopLaunch(run), text: "Stop" }),
           ),
-        ),
+          run.app ? appPanel(run) : null,
+        ]),
       ),
     );
   }
@@ -338,7 +339,7 @@ function firstRun() {
     "section",
     { class: "block", "aria-label": "Getting started" },
     el("h2", { text: "Getting started" }),
-    el("p", { class: "muted", text: "Three things, then Codex opens in a terminal window whenever you start a setup." }),
+    el("p", { class: "muted", text: "Three things, then Codex opens (in a terminal window, or the Codex app) whenever you start a setup." }),
     el(
       "ol",
       { class: "checklist" },
@@ -368,13 +369,58 @@ function firstRun() {
   );
 }
 
+// A launch in the Codex app: connected or not, the first-time steps, and
+// the plain lines about where chats run.
+const shownSteps = new Set(); // launch ids whose steps were opened by hand
+
+function appPanel(run) {
+  const app = run.app;
+  const copy = {
+    "already-open": "UM-Codex's Codex window was already open: switch to it (a second ChatGPT icon in the Dock).",
+    failed: "UM-Codex's Codex window couldn't be opened. Stop, then Start again.",
+  }[app.copy];
+  let head;
+  if (app.connected) {
+    head = el("p", { class: "connected", role: "status" }, el("span", { class: "tick", "aria-hidden": "true", text: "✓ " }), `Connected: the Codex app is working in the sandbox (${app.alias}).`);
+  } else if (app.first_time) {
+    head = el("p", { class: "strong", role: "status", text: "The first time for this setup, in UM-Codex's Codex window:" });
+  } else {
+    head = el("p", { role: "status", text: `Waiting for the Codex app to reconnect to ${app.alias}…` });
+  }
+  const showSteps = !app.connected && (app.first_time || shownSteps.has(run.launch_id));
+  return el(
+    "div",
+    { class: "app-panel", "aria-label": `${run.setup_name} in the Codex app` },
+    head,
+    copy ? el("p", { class: "note", text: copy }) : null,
+    showSteps ? el("ol", { class: "steps" }, app.steps.map((step) => el("li", { text: step }))) : null,
+    !app.connected && !showSteps
+      ? el("button", {
+          class: "link",
+          key: `steps-${run.launch_id}`,
+          text: "It doesn't connect: show the steps",
+          onclick: () => {
+            shownSteps.add(run.launch_id);
+            renderList();
+          },
+        })
+      : null,
+    el("ul", { class: "app-notes" }, app.notes.map((line) => el("li", { text: line }))),
+  );
+}
+
 function card(s) {
   const run = runningOf(s.id);
   if (run) starting.delete(s.id);
   const since = starting.get(s.id);
   if (since && Date.now() - since > START_WAIT_MS) {
     starting.delete(s.id);
-    notice(`“${s.name}” didn't start. Its terminal window says why.`, true);
+    notice(
+      s.open_in === "codex-app"
+        ? `“${s.name}” didn't start. Why is in UM-Codex's data folder, ui/app-launch.log.`
+        : `“${s.name}” didn't start. Its terminal window says why.`,
+      true,
+    );
   }
   let start;
   if (run) {
@@ -382,7 +428,7 @@ function card(s) {
       "span",
       { class: "running-tag" },
       el("span", { class: "pulse", "aria-hidden": "true" }),
-      "Running · ",
+      run.app ? "Running in the Codex app · " : "Running · ",
       el("button", { class: "link", key: `stop-card-${s.id}`, onclick: () => stopLaunch(run), text: "Stop" }),
     );
   } else if (starting.has(s.id)) {
@@ -428,10 +474,14 @@ function card(s) {
 }
 
 async function stopLaunch(run) {
+  const inApp = run.app
+    ? ` The Codex app then says it can't reconnect to ${run.app.alias}; that's expected. Start the setup again to go on.`
+    : "";
   const ok = await confirmBox(
     `Stop “${run.setup_name}”?`,
     "Codex stops and its sandbox is removed. Files it already changed in your folders stay as they are; " +
-      "its history is kept.",
+      "its history is kept." +
+      inApp,
     "Stop",
   );
   if (!ok) return;
@@ -703,9 +753,13 @@ function renderForm() {
         value: o.key,
         checked: draft.open_in === o.key,
         disabled: !o.available,
-        onchange: () => (draft.open_in = o.key),
+        onchange: () => {
+          draft.open_in = o.key;
+          renderForm();
+        },
       }),
-      o.available ? o.label : `${o.label} (coming soon)`,
+      o.label,
+      !o.available && o.reason ? el("span", { class: "help", text: o.reason }) : null,
     ),
   );
 
@@ -752,7 +806,19 @@ function renderForm() {
       error("approvals"),
     ),
     modelField,
-    el("fieldset", { class: "field" }, el("legend", { class: "label", text: "Open in" }), el("div", { class: "radios" }, openers), error("open_in")),
+    el(
+      "fieldset",
+      { class: "field" },
+      el("legend", { class: "label", text: "Open in" }),
+      el("div", { class: "radios" }, openers),
+      draft.open_in === "codex-app"
+        ? el("span", {
+            class: "help",
+            text: "Codex's desktop app, in a separate copy with UM-Codex's own settings; the work happens in the sandbox.",
+          })
+        : null,
+      error("open_in"),
+    ),
     errors.general ? el("p", { class: "message", role: "alert", text: errors.general }) : null,
     el(
       "div",
@@ -924,21 +990,53 @@ function renderSummary() {
       dockerBox,
       warning,
       summaryBlock(prepared.summary),
+      prepared.app_notes && prepared.app_notes.length
+        ? el(
+            "div",
+            { class: "app-notes-block" },
+            el("p", { class: "strong", text: "In the Codex app:" }),
+            el("ul", { class: "app-notes" }, prepared.app_notes.map((line) => el("li", { text: line }))),
+          )
+        : null,
       el("div", { class: "actions" }, start, el("button", { key: "back", onclick: backToList, text: "Back" })),
     ),
   );
+}
+
+// The Codex app needs UM-Codex's line in ~/.ssh/config: asked once, with the reason.
+async function allowSshInclude() {
+  const ok = await confirmBox("Let the Codex app find the sandbox?", state.include_explained, "Allow");
+  if (!ok) return false;
+  await api("POST", "/api/codex-app/allow");
+  return true;
 }
 
 async function startSetup() {
   const { setup } = view;
   view.busy = true;
   renderSummary();
+  const start = () =>
+    api("POST", `/api/setups/${encodeURIComponent(setup.id)}/start`, { confirm_moved: Boolean(view.confirmed) });
   try {
-    const result = await api("POST", `/api/setups/${encodeURIComponent(setup.id)}/start`, {
-      confirm_moved: Boolean(view.confirmed),
-    });
+    let result;
+    try {
+      result = await start();
+    } catch (error) {
+      if (error.field !== "ssh_include") throw error;
+      if (!(await allowSshInclude())) {
+        notice("Not started: the Codex app can't reach the sandbox without that line. Terminal works without it.", true);
+        view.busy = false;
+        renderSummary();
+        return;
+      }
+      result = await start();
+    }
     starting.set(setup.id, Date.now());
-    notice(`Opened in ${result.opened}: Codex is starting there. Quit Codex there (or Stop here) to end it.`);
+    notice(
+      result.in_background
+        ? "Starting in the Codex app: UM-Codex's Codex window opens when the sandbox is ready. Stop it here."
+        : `Opened in ${result.opened}: Codex is starting there. Quit Codex there (or Stop here) to end it.`,
+    );
     backToList();
   } catch (error) {
     notice(error.message, true);

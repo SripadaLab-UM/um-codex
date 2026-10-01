@@ -173,6 +173,30 @@ def test_uninstall_keeping_data(data_folder, memory_keychain, docker_here):
     assert "Kept. You can delete them yourself later." in said
 
 
+def test_uninstall_takes_out_the_codex_apps_ssh_entries(data_folder, docker_here, ssh_home):
+    from umcodex import codex_app
+
+    ssh = ssh_home / ".ssh"
+    ssh.mkdir()
+    (ssh / "config").write_text("Host mine\n  User me\n")
+    codex_app.add_include()
+    (ssh / "um-codex").mkdir()
+    (ssh / "um-codex" / "config").write_text("Host umcodex-thesis-a1b2c3\n")
+    (ssh / "um-codex" / "thesis-a1b2c3_ed25519").write_text("key")
+    said: list[str] = []
+    assert uninstall.uninstall(delete_data=False, yes=True, say=said.append, run=UninstallDocker()) == 0
+    assert (ssh / "config").read_text() == "Host mine\n  User me\n"
+    assert not (ssh / "config.um-codex-backup").exists()  # the file is as it was before
+    assert not (ssh / "um-codex").exists()
+    assert any("Include ~/.ssh/um-codex/config" in line for line in said)
+
+
+def test_uninstall_with_no_ssh_entries_says_nothing_about_them(data_folder, docker_here, ssh_home):
+    said: list[str] = []
+    uninstall.uninstall(delete_data=False, yes=True, say=said.append, run=UninstallDocker())
+    assert not any(".ssh" in line for line in said)
+
+
 def test_uninstall_deleting_data_keeps_the_program_files(data_folder, docker_here, tmp_path):
     fill(data_folder)
     outside = tmp_path / "your-thesis"

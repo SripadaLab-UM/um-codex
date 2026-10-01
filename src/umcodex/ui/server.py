@@ -10,8 +10,9 @@ that secret, for a new sign-in link and opens that instead. The server ends
 by itself after IDLE_SECONDS with no request from the page.
 
 Starting a setup opens a new terminal window running `um-codex launch
---setup <id>` (opener.py); the launch runs there, on its own, and goes on if
-this server ends.
+--setup <id>` (opener.py), or, for a setup opened in the Codex app, starts
+that launch in the background (`--open app`, codex_app.py); either way the
+launch runs on its own, and goes on if this server ends.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ from typing import Any
 from aiohttp import web
 from keyring.errors import KeyringError
 
-from umcodex import __version__, credentials, folders, toolkit, windows_vm
+from umcodex import __version__, codex_app, credentials, folders, toolkit, windows_vm
 from umcodex.containers import Docker, DockerError, volume_name
 from umcodex.docker_path import ensure_docker_on_path
 from umcodex.folders import FolderRefused
@@ -294,6 +295,7 @@ class Launcher:
     own_data: Path | None = None  # for the folder rules (tests)
     quit: Callable[[], None] | None = None  # set by serve(): ends the server
     reopen_after: bool = False  # start the installed version's window once this one has ended
+    ssh_home: Path | None = None  # where ~/.ssh is (tests)
 
     # ----------------------------------------------------------- reading
 
@@ -346,9 +348,13 @@ class Launcher:
             "update": self.status.update,
             "installed": self.installed_version(),
             "openers": [
-                {"key": key, "label": opener.label, "available": opener.available()}
+                {"key": key, "label": opener.label, "available": reason is None, "reason": reason}
                 for key, opener in self.openers.items()
+                for reason in [opener.reason()]
             ],
+            # The Codex app (M6): whether ~/.ssh/config has UM-Codex's line yet.
+            "ssh_include": codex_app.include_present(self.ssh_home),
+            "include_explained": codex_app.INCLUDE_EXPLAINED,
         }
 
     def installed_version(self) -> str | None:
@@ -379,6 +385,7 @@ class Launcher:
                 "setup_name": launch.setup_name,
                 "started_at": launch.started_at,
                 "since": time.strftime("%H:%M", time.localtime(launch.started_at)),
+                "app": launch.app,
             }
             for launch in running_launches(self.data)
         ]
@@ -425,6 +432,7 @@ class Launcher:
         if any(launch.setup_id == setup_id for launch in running_launches(self.data)):
             raise Invalid("Stop this setup's running launch first.", status=409)
         self.store.delete(setup.id)
+        codex_app.forget_setup(setup.id, self.ssh_home)  # its ssh host for the Codex app, if any
         with contextlib.suppress(DockerError):  # its Codex history; Docker may be closed
             self.docker("volume", "rm", volume_name(setup.id), check=False, timeout=30)
 
@@ -448,6 +456,7 @@ class Launcher:
             "setup": setup_json(setup, own_data=self.own_data),
             "summary": summary(resolved(setup, layout), layout),
             "moved": [{"saved": saved, "now": str(now)} for saved, now in changed],
+            "app_notes": codex_app.notes(setup.id) if setup.open_in == "codex-app" else [],
         }
 
     def start(self, setup_id: str, body: object) -> dict[str, Any]:
@@ -459,8 +468,17 @@ class Launcher:
         if docker != "ready":
             raise Invalid(DOCKER_NOT_READY.get(docker, DOCKER_NOT_READY["unknown"]), "docker", status=409)
         opener = self.openers.get(setup.open_in)
-        if opener is None or not opener.available():
-            raise Invalid("Codex can't be opened there yet: edit the setup and choose Terminal.", status=409)
+        if opener is None:
+            raise Invalid("Codex can't be opened there: edit the setup and choose Terminal.", status=409)
+        if not opener.available():
+            raise Invalid(opener.reason() or "Codex can't be opened there now: choose Terminal.", status=409)
+        if opener.key == "codex-app":
+            if not codex_app.include_present(self.ssh_home):
+                raise Invalid(
+                    "The Codex app needs one line in your ssh settings first.", "ssh_include", status=409
+                )
+            if any(launch.setup_id == setup.id and launch.app for launch in running_launches(self.data)):
+                raise Invalid("This setup is already running in the Codex app.", status=409)
         try:
             layout = check(setup, own_data=self.own_data)
             changed = moved(setup, own_data=self.own_data)
@@ -475,7 +493,17 @@ class Launcher:
             opener.open(setup.id)
         except OpenFailed as why:
             raise Invalid(str(why), status=500) from None
-        return {"opened": opener.label}
+        return {"opened": opener.label, "in_background": opener.key == "codex-app"}
+
+    def allow_ssh_include(self) -> dict[str, Any]:
+        """The person chose Allow: the Include line at the top of ~/.ssh/config
+        (backed up first)."""
+        try:
+            result = codex_app.add_include(self.ssh_home)
+        except OSError:
+            raise Invalid("Your ssh settings (~/.ssh/config) couldn't be changed.", status=500) from None
+        log.info("launcher window: ~/.ssh/config Include line %s", result)
+        return {"result": result}
 
     def stop(self, launch_id: str) -> dict[str, Any]:
         if not re.fullmatch(r"[0-9a-f]{8}", launch_id):
@@ -668,6 +696,10 @@ def make_app(
         await _body(request)
         return web.json_response(launcher.reopen_newer())
 
+    async def allow_ssh(request: web.Request) -> web.Response:
+        await _body(request)
+        return web.json_response(await blocking(launcher.allow_ssh_include))
+
     async def docker_fix(request: web.Request) -> web.Response:
         await _body(request)
         return web.json_response(await blocking(launcher.fix_docker))
@@ -692,6 +724,7 @@ def make_app(
     app.router.add_post("/api/docker/open", docker_open)
     app.router.add_post("/api/docker/fix", docker_fix)
     app.router.add_post("/api/reopen", reopen_newer)
+    app.router.add_post("/api/codex-app/allow", allow_ssh)
     return app
 
 

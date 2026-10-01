@@ -9,9 +9,13 @@ removed before that's answered yes. Then, found by label only:
 - UM-Codex's containers and networks;
 - with --delete-data, each setup's Codex home volume (its Codex history);
 - the Toolkit key, from the keychain;
+- the Codex app's ssh entries: the `Include ~/.ssh/um-codex/config` line at
+  the top of ~/.ssh/config (its backup too, if the file is now the same as
+  it) and ~/.ssh/um-codex;
 - the agent image and, if no container uses it, the gateway image (asked first);
-- with --delete-data, the data folder's contents (saved setups, logs), but
-  never its `app` folder.
+- with --delete-data, the data folder's contents (saved setups, logs, the
+  Codex app copy's settings and chats in `codex-app`), but never its `app`
+  folder.
 """
 
 from __future__ import annotations
@@ -77,6 +81,13 @@ def uninstall(
 
     say("Removing the Toolkit key from the keychain...")
     credentials.delete_api_key()
+
+    # The Codex app's ssh entries (M6): the Include line in ~/.ssh/config and
+    # ~/.ssh/um-codex. Without UM-Codex they lead nowhere.
+    from umcodex import codex_app
+
+    for line in codex_app.remove_include() + codex_app.remove_ssh_files():
+        say(line)
 
     if docker_ok:
         _remove_images(run, say, confirm)

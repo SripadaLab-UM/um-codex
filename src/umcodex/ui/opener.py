@@ -1,9 +1,10 @@
 """Where a launch started from the launcher window opens Codex.
 
 An `Opener` starts `um-codex launch --setup <id>` somewhere the person can
-use Codex's screen. For now that's a new terminal window (`TerminalOpener`);
-Codex's desktop app is being tried on another branch, and plugs in here as
-another Opener (`CodexAppOpener` is its placeholder).
+use Codex's screen: a new terminal window (`TerminalOpener`), or, for the
+Codex desktop app (`CodexAppOpener`, M6), in the background with no window
+(`--open app`): that launch holds the relay and opens UM-Codex's copy of the
+app (codex_app.py).
 
 Nothing here goes through a shell with the setup's id or the program's path
 spliced in unquoted:
@@ -27,6 +28,7 @@ import secrets
 import shlex
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
@@ -47,6 +49,7 @@ PASSED_ON = (
     "PYTHON_KEYRING_BACKEND",
 )
 
+
 class OpenFailed(RuntimeError):
     """The window couldn't be opened. The message is for the person."""
 
@@ -61,6 +64,10 @@ class Opener(Protocol):
     label: str
 
     def available(self) -> bool: ...
+
+    def reason(self) -> str | None:
+        """Why it isn't available, in plain words (None when it is)."""
+        ...
 
     def open(self, setup_id: str) -> None: ...
 
@@ -174,6 +181,9 @@ class TerminalOpener:
     def available(self) -> bool:
         return self._platform in ("darwin", "win32")
 
+    def reason(self) -> str | None:
+        return None if self.available() else "Terminal windows open on a Mac or Windows computer only."
+
     def command(self, setup_id: str) -> list[str]:
         """Windows: the command that opens the window."""
         env = passed_on(self._environ)
@@ -228,16 +238,75 @@ class TerminalOpener:
 
 
 class CodexAppOpener:
-    """Placeholder: Codex's desktop app (being tried on branch spike-codex-app)."""
+    """The Codex desktop app (M6, codex_app.py): the launch runs in the
+    background, with no window (it holds the relay until it's stopped), and
+    opens UM-Codex's copy of the app. What it prints goes to
+    `ui/app-launch.log` in the data folder (and its steps to um-codex.log)."""
 
     key = "codex-app"
     label = "Codex app"
+    FIND_EVERY_SECONDS = 60.0
+
+    def __init__(
+        self,
+        *,
+        program: Sequence[str] | None = None,
+        platform: str = sys.platform,
+        popen: Callable[..., object] = subprocess.Popen,
+        find: Callable[[], Path | None] | None = None,
+        folder: Path | None = None,
+    ) -> None:
+        self._program = list(program) if program is not None else own_command()
+        self._platform = platform
+        self._popen = popen
+        self._find = find
+        self._folder = folder  # where its output goes (default: the data folder's ui/)
+        self._found: tuple[float, Path | None] | None = None
+
+    def app(self) -> Path | None:
+        """The installed app, looked for at most once a minute (the page asks often)."""
+        from umcodex import codex_app
+
+        now = time.monotonic()
+        if self._found is None or now - self._found[0] > self.FIND_EVERY_SECONDS:
+            find = self._find or (lambda: codex_app.find_app(platform=self._platform))
+            self._found = (now, find())
+        return self._found[1]
+
+    def reason(self) -> str | None:
+        from umcodex import codex_app
+
+        if self._platform != "darwin":
+            return codex_app.unavailable_reason(self._platform)
+        return codex_app.unavailable_reason(self._platform, self.app())
 
     def available(self) -> bool:
-        return False
+        return self.reason() is None
+
+    def command(self, setup_id: str) -> list[str]:
+        return [*launch_args(self._program, setup_id), "--open", "app"]
 
     def open(self, setup_id: str) -> None:
-        raise OpenFailed("Opening in the Codex app isn't ready yet: choose Terminal.")
+        if not SAFE_ID.fullmatch(setup_id):
+            raise OpenFailed("This setup can't be started from here: its saved id has unusual characters.")
+        reason = self.reason()
+        if reason is not None:
+            raise OpenFailed(reason)
+        folder = self._folder or data_dir() / "ui"
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            with (folder / "app-launch.log").open("ab") as output:
+                self._popen(
+                    self.command(setup_id),
+                    stdin=subprocess.DEVNULL,
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                    env={**os.environ, "PYTHONUTF8": "1"},
+                    close_fds=True,
+                    start_new_session=True,
+                )
+        except OSError as error:
+            raise OpenFailed("UM-Codex couldn't start the sandbox for the Codex app.") from error
 
 
 def openers() -> dict[str, Opener]:

@@ -50,7 +50,8 @@ There you:
   with it on, the browser tool), whether Codex asks before commands, and the
   model. "Choose folder…" opens your computer's own folder picker;
 - press **Start** on a setup: the page shows what Codex will be able to see
-  and do, then opens a terminal window with Codex in it;
+  and do, then opens a terminal window with Codex in it (or the Codex app:
+  see below);
 - see what's **running** ("Running since 14:05") and **Stop** it;
 - see whether Docker is running, whether your key is saved ("Replace key…"),
   and whether a new version is out.
@@ -58,6 +59,39 @@ There you:
 The window closes by itself a while after you close its page; opening the
 app again brings it back. In a terminal, `um-codex ui` opens it too, and
 plain `um-codex` still asks the setup questions in the terminal instead.
+
+### Opening a setup in the Codex app (Mac)
+
+Instead of a terminal, a setup can open in **Codex's desktop app** (part of
+OpenAI's ChatGPT desktop app; get it from https://chatgpt.com/download). In
+the setup, choose **Open in: Codex app**. The work still happens in the
+sandbox, with the same folders, internet setting and key protection; the app
+is only the window you use. What to know:
+
+- UM-Codex opens **its own copy** of the app, with its own settings, beside
+  your normal one (a second ChatGPT icon in the Dock). Your own Codex/ChatGPT
+  app and its settings aren't touched, and the copy needs no sign-in.
+- The app reaches the sandbox through ssh. The first time, UM-Codex asks to
+  add one line at the top of your `~/.ssh/config`
+  (`Include ~/.ssh/um-codex/config`; your file is backed up first, and
+  uninstalling takes it out). Choose **Allow**, or use Terminal instead.
+- **The first time for each setup**, in UM-Codex's Codex window: open
+  Settings → Connections and turn on `umcodex-<setup>`; then start a chat in
+  the project "work" (Remote · `umcodex-<setup>`), or add the folder `/work`.
+  The launcher shows these steps and says "Connected ✓" once the app is in.
+  After that, the app is meant to reconnect by itself when you start the
+  setup again; if it doesn't, "show the steps" in the launcher brings them
+  back.
+- **Chats must show "Remote · umcodex-<setup>"** to run in the sandbox. Other
+  chats in that window run on your computer, not in the sandbox (and only
+  while a setup is running).
+- The app's own browser runs on your computer, not in the sandbox. For
+  browsing inside the sandbox, turn on the setup's Browser tool.
+- The setup runs until you press **Stop** in the launcher; the app then says
+  it can't reconnect, which is expected.
+- Windows: not yet (Terminal only).
+
+In a terminal: `um-codex launch --setup <name> --open app`.
 
 ## Updating
 

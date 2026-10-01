@@ -16,7 +16,9 @@
 #   /etc/codex             Codex's enforced settings and model catalog
 #                          (read-only; src/umcodex/codex_config.py)
 #   /etc/um-codex/launch.md  this launch's folders and internet (read-only)
-# and runs Codex with `docker exec -it <agent> codex`.
+# and runs Codex with `docker exec -it <agent> codex`, or, for the Codex
+# desktop app (M6), lets the app in over ssh through `docker exec ... sshd -i`
+# (see the openssh-server step below; nothing listens on a port).
 #
 # The `agent` user has passwordless sudo, on purpose: the container is the
 # sandbox, and with internet on people must be able to apt/pip install.
@@ -119,6 +121,26 @@ RUN chmod 0644 /etc/um-codex/AGENTS.md \
     && chmod 0755 /usr/local/bin/um-codex-smoke /usr/local/bin/um-codex-browser-check \
     && mkdir -p /work /mnt/write /mnt/read /codex-home /home/agent/R/library \
     && chown agent:agent /work /codex-home /home/agent/R /home/agent/R/library
+
+# "Open in: Codex app" (M6): the Codex desktop app reaches this container over
+# ssh, through `docker exec` (the host's `um-codex ssh-proxy`, ssh's
+# ProxyCommand), so nothing listens on a port. openssh-server brings
+# sftp-server too (the app uses sftp for files). The package's host keys are
+# removed: each container makes its own at start. `usermod -p '*'` leaves
+# agent with no password but not "locked", which sshd (without PAM) would
+# refuse even for a key. The app runs agent's login shell, which must be bash.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssh-server openssh-sftp-server \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -f /etc/ssh/ssh_host_* \
+    && mkdir -p /run/sshd && chmod 0755 /run/sshd \
+    && usermod -p '*' agent \
+    && test "$(getent passwd agent | cut -d: -f7)" = /bin/bash
+COPY sshd_config /etc/um-codex/sshd_config
+COPY profile.sh /etc/profile.d/um-codex.sh
+COPY umcodex-token /usr/local/bin/umcodex-token
+RUN chmod 0644 /etc/um-codex/sshd_config /etc/profile.d/um-codex.sh \
+    && chmod 0755 /usr/local/bin/umcodex-token
 
 USER agent
 WORKDIR /work
