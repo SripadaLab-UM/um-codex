@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 
 from umcodex import __version__, credentials, toolkit, windows_vm
-from umcodex.containers import Docker, DockerError, images, instance_of, owned_leftovers
+from umcodex.containers import Docker, DockerError, agent_image, images, instance_of, owned_leftovers
 from umcodex.docker_path import ensure_docker_on_path
 from umcodex.paths import data_dir
 from umcodex.setups import SetupStore
@@ -75,55 +75,57 @@ _WINDOWS_STATES = {
 }
 
 
-def report(say: Say = print, docker: Docker | None = None) -> bool:
-    """`um-codex doctor`. True when everything needed for a launch is there."""
+def report(say: Say = print, docker: Docker | None = None, *, quiet: bool = False) -> bool:
+    """`um-codex doctor`. True when everything needed for a launch is there.
+
+    `quiet` (for the installers): nothing is printed but one line saying the
+    first problem, if there is one."""
     docker = docker or Docker()
-    ok = True
+    problems: list[str] = []
+    out: list[str] = []
 
     def line(good: bool | None, text: str) -> None:
         mark = {True: "ok     ", False: "PROBLEM", None: "note   "}[good]
-        say(f"  {mark}  {text}")
+        out.append(f"  {mark}  {text}")
+        if good is False:
+            problems.append(text)
 
-    say(f"UM-Codex {__version__} on {platform.system()} {platform.release()} ({platform.machine()}),")
-    say(f"Python {platform.python_version()}")
-    say(f"Data folder: {data_dir()}")
-    say("")
+    out.append(f"UM-Codex {__version__} on {platform.system()} {platform.release()} ({platform.machine()}),")
+    out.append(f"Python {platform.python_version()}")
+    out.append(f"Data folder: {data_dir()}")
+    out.append("")
     ensure_docker_on_path()
     found = shutil.which("docker")
     line(found is not None, f"Docker command: {found or 'not found'}")
     engine = None
     if found:
         try:
-            code, out, _ = docker.status("version", "--format", "{{.Server.Version}}", timeout=15)
-            engine = out.strip() if code == 0 else None
+            code, version, _ = docker.status("version", "--format", "{{.Server.Version}}", timeout=15)
+            engine = version.strip() if code == 0 else None
         except DockerError:
             engine = None
-    line(engine is not None, f"Docker engine: {engine or 'not answering (is Docker Desktop running?)'}")
-    ok = ok and engine is not None
+        line(engine is not None, f"Docker engine: {engine or 'not answering (is Docker Desktop running?)'}")
     if engine:
         for role, image in images().items():
-            override = os.environ.get("UMCODEX_AGENT_IMAGE") if role == "agent" else None
-            image = override or image
+            image = agent_image() if role == "agent" else image
             present = docker.status("image", "inspect", "--format", "{{.Id}}", image, timeout=30)[0] == 0
-            hint = "" if present else (
-                " (build it: see README, 'Run from source')" if role == "agent" else " (will be pulled)"
-            )  # fmt: skip
-            state = "present" if present else "missing"
-            line(present or role == "gateway", f"{role} image {image}: {state}{hint}")
-            ok = ok and (present or role == "gateway")
+            if role == "agent":
+                hint = "" if present else " (run: um-codex pull; for a :dev image, build it: see README)"
+                line(present, f"agent image {image}: {'present' if present else 'missing'}{hint}")
+            else:
+                line(
+                    True if present else None,
+                    f"gateway image: {'present' if present else 'missing (run: um-codex pull)'}",
+                )
         try:
-            containers, networks = owned_leftovers(
-                docker, instance_of(data_dir()), lambda launch: _launch_live(launch)
-            )
+            containers, networks = owned_leftovers(docker, instance_of(data_dir()), _launch_live)
             if containers or networks:
                 line(None, f"{len(containers)} container(s) and {len(networks)} network(s) left by an "
                            "earlier launch: the next launch removes them")  # fmt: skip
         except DockerError:
             pass
     saved = credentials.has_api_key()
-    where = "saved in the keychain" if saved else "not saved (run: um-codex key)"
-    line(saved, f"Toolkit API key: {where}")
-    ok = ok and saved
+    line(saved, "Toolkit API key: " + ("saved in the keychain" if saved else "not saved (run: um-codex key)"))
     if os.environ.get("UMCODEX_UPSTREAM"):
         line(None, "UMCODEX_UPSTREAM is set: model requests go to a test stub, not the Toolkit")
     if saved:
@@ -135,12 +137,23 @@ def report(say: Say = print, docker: Docker | None = None) -> bool:
             "error": "the Toolkit answered with an error",
         }
         line(result == "ok", f"Toolkit ({toolkit.base_url()}): {words[result]}")
-        ok = ok and result == "ok"
-    setups = SetupStore().all()
-    line(None, f"{len(setups)} saved setup(s)")
+    line(None, f"{len(SetupStore().all())} saved setup(s)")
+    ok = not problems
+    if quiet:
+        if not ok:
+            say(f"UM-Codex doctor: {problems[0]}")
+        return ok
+    for text in out:
+        say(text)
     say("")
     say("Everything needed for a launch is there." if ok else "Some things need fixing before a launch.")
     return ok
+
+
+def fix_docker(say: Say = print, ask: Ask = input) -> bool:
+    """`um-codex doctor --fix-docker`: open Docker Desktop and, on Windows,
+    offer the virtual machine's logon-right fix. True once Docker answers."""
+    return ensure_docker(say, ask)
 
 
 def _launch_live(launch_id: str) -> bool:

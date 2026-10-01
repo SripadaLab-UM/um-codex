@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import time
 from collections.abc import Callable, Sequence
@@ -56,6 +57,11 @@ def images() -> dict[str, str]:
     """The pinned images (images.json)."""
     text = resources.files(__package__).joinpath("images.json").read_text(encoding="utf-8")
     return {k: v for k, v in json.loads(text).items() if not k.startswith("_")}
+
+
+def agent_image() -> str:
+    """The agent image: images.json's, or `UMCODEX_AGENT_IMAGE` (development only)."""
+    return os.environ.get("UMCODEX_AGENT_IMAGE") or images()["agent"]
 
 
 def volume_name(setup_id: str) -> str:
@@ -295,3 +301,49 @@ def remove_leftovers(docker: Docker, instance: str, live: Callable[[str], bool])
     if networks:
         docker("network", "rm", *networks, check=False)
     return len(containers) + len(networks)
+
+
+def pull_images(
+    say: Callable[[str], None] = print,
+    docker: Docker | None = None,
+    run: Runner = subprocess.run,
+) -> bool:
+    """`um-codex pull`: every image in images.json (the agent, the gateway).
+
+    Docker's own progress is shown. A local `:dev` image that's already here
+    is skipped; one that isn't can only be built, not pulled. False on any
+    failure, or when Docker isn't running."""
+    docker = docker or Docker(run)
+    try:
+        code, _, _ = docker.status("info", "--format", "{{.ServerVersion}}", timeout=30)
+    except DockerError as error:
+        say(str(error))
+        return False
+    if code != 0:
+        say("Docker isn't running. Open Docker Desktop, wait until it says it's running, then try again.")
+        return False
+    ok = True
+    for role, image in images().items():
+        image = agent_image() if role == "agent" else image
+        if image.endswith(":dev") and "@" not in image:
+            if docker.exists("image", image):
+                say(f"The {role} image {image} is a local development image and is already here: not pulled.")
+            else:
+                say(
+                    f"The {role} image {image} is a local development image, so it can't be pulled: "
+                    "build it (see README)."
+                )
+                ok = False
+            continue
+        say(f"Pulling the {role} image ({image})...")
+        try:
+            done = run(["docker", "pull", image], timeout=3600)
+        except (OSError, subprocess.TimeoutExpired):
+            done = None
+        if done is None or done.returncode != 0:
+            say(
+                f"Couldn't pull the {role} image. Check your network and that Docker is running, "
+                "then try again."
+            )
+            ok = False
+    return ok

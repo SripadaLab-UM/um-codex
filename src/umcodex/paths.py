@@ -6,7 +6,8 @@ generated config while it runs.
 - Windows: %LOCALAPPDATA%\\UM-Codex
 - elsewhere (tests, CI): $XDG_DATA_HOME/um-codex
 
-`UMCODEX_DATA_DIR` overrides it (for tests).
+`UMCODEX_DATA_DIR` overrides it (for tests). The installers put the program
+files in `app` inside the default data folder (see app_dir).
 """
 
 from __future__ import annotations
@@ -26,3 +27,10 @@ def default_data_dir(platform: str = sys.platform) -> Path:
 
 def data_dir() -> Path:
     return Path(os.environ.get("UMCODEX_DATA_DIR") or default_data_dir())
+
+
+def app_dir(platform: str = sys.platform) -> Path:
+    """Where the installers put UM-Codex's program files: `app` in the default
+    data folder. `um-codex uninstall` never removes or measures it: the
+    uninstaller scripts remove it after it returns."""
+    return default_data_dir(platform) / "app"

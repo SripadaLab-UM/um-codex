@@ -34,6 +34,7 @@ from umcodex.containers import (
     Docker,
     DockerError,
     LaunchSpec,
+    agent_image,
     exec_command,
     images,
     instance_of,
@@ -185,11 +186,6 @@ def folder_mounts(layout: Layout) -> tuple[BindMount, ...]:
     mounts += [BindMount(host, target, readonly=False) for host, target in layout.writes]
     mounts += [BindMount(host, target, readonly=True) for host, target in layout.reads]
     return tuple(mounts)
-
-
-def agent_image() -> str:
-    """The agent image: images.json's, or `UMCODEX_AGENT_IMAGE` (development only)."""
-    return os.environ.get("UMCODEX_AGENT_IMAGE") or images()["agent"]
 
 
 # --- The launch -------------------------------------------------------------

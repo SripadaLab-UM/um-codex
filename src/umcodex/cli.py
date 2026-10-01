@@ -11,11 +11,12 @@ from __future__ import annotations
 import argparse
 import logging
 import logging.handlers
+import re
 import sys
 from pathlib import Path
 
 from umcodex import __version__, credentials, doctor, toolkit
-from umcodex.containers import Docker, DockerError, volume_name
+from umcodex.containers import Docker, DockerError, pull_images, volume_name
 from umcodex.paths import data_dir
 from umcodex.secret_prompt import ask_secret
 from umcodex.setups import Setup, SetupStore, choose, manage
@@ -31,17 +32,42 @@ def main(argv: list[str] | None = None) -> int:
     launch = commands.add_parser("launch", help="choose a setup and open Codex (the default)")
     launch.add_argument("codex_args", nargs=argparse.REMAINDER, help="passed to codex (after --)")
     commands.add_parser("setups", help="list, edit and delete saved setups")
-    commands.add_parser("key", help="save or replace the Toolkit API key")
-    commands.add_parser("doctor", help="check Docker, the images, the key and the Toolkit")
+    key = commands.add_parser("key", help="save or replace the Toolkit API key")
+    key.add_argument(
+        "--from-stdin", action="store_true", help="read the key from standard input (for the installers)"
+    )
+    commands.add_parser("pull", help="pull the pinned images (agent and gateway)")
+    check = commands.add_parser("doctor", help="check Docker, the images, the key and the Toolkit")
+    check.add_argument("--quiet", action="store_true", help="exit code only, and one line on failure")
+    check.add_argument(
+        "--fix-docker", action="store_true", help="open Docker Desktop; on Windows, offer the logon-right fix"
+    )
+    remove = commands.add_parser("uninstall", help="remove UM-Codex's containers, key, images and data")
+    data = remove.add_mutually_exclusive_group()
+    data.add_argument("--delete-data", action="store_true", help="also delete saved setups and Codex history")
+    data.add_argument("--keep-data", action="store_true", help="keep saved setups and Codex history")
+    remove.add_argument(
+        "--yes", action="store_true", help="don't ask (images are removed; data is kept unless --delete-data)"
+    )
     args = parser.parse_args(argv)
-    _log_to_file()
+    if args.command != "uninstall":  # it may delete the data folder the log is in
+        _log_to_file()
     try:
         if args.command == "setups":
             return _setups()
         if args.command == "key":
-            return 0 if _ask_key() else 1
+            return _key_command(from_stdin=args.from_stdin)
+        if args.command == "pull":
+            return 0 if pull_images() else 1
         if args.command == "doctor":
-            return 0 if doctor.report() else 1
+            if args.fix_docker:
+                return 0 if doctor.fix_docker() else 1
+            return 0 if doctor.report(quiet=args.quiet) else 1
+        if args.command == "uninstall":
+            from umcodex.uninstall import uninstall
+
+            choice = True if args.delete_data else False if args.keep_data else None
+            return uninstall(delete_data=choice, yes=args.yes)
         codex_args = [a for a in getattr(args, "codex_args", []) if a != "--"]
         return _launch(codex_args)
     except KeyboardInterrupt:
@@ -68,21 +94,42 @@ def _log_to_file() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-def _ask_key() -> bool:
-    print("Paste your U-M GPT Toolkit API key. It's saved in this computer's keychain and")
-    print("never goes into the container.")
-    key = ask_secret("Toolkit API key", what="key")
+KEY_SAVED, KEY_REFUSED, KEY_CANCELLED = 0, 1, 2
+_KEY_SHAPE = re.compile(r"[\x21-\x7e]{8,512}")
+
+
+def _key_command(*, from_stdin: bool = False) -> int:
+    """`um-codex key`: 0 saved, 1 refused or invalid, 2 cancelled."""
+    try:
+        if from_stdin:
+            key = sys.stdin.readline().strip()
+        else:
+            print("Paste your U-M GPT Toolkit API key. It's saved in this computer's keychain and")
+            print("never goes into the container.")
+            key = ask_secret("Toolkit API key", what="key")
+    except (KeyboardInterrupt, EOFError):
+        print("\nCancelled: nothing was saved.")
+        return KEY_CANCELLED
     if not key:
-        return False
+        if from_stdin:
+            print("No key was given, so nothing was saved.")
+        return KEY_CANCELLED
+    if not _KEY_SHAPE.fullmatch(key):
+        print("That doesn't look like an API key (it has spaces or unusual characters), so it wasn't saved.")
+        return KEY_REFUSED
     result = toolkit.check_key(key)
     if result == "refused":
         print("The Toolkit refused that key, so it wasn't saved. Check it and try again.")
-        return False
-    if result in ("unreachable", "error"):
-        print("Couldn't check the key with the Toolkit right now (network or VPN?). Saving it anyway.")
+        return KEY_REFUSED
+    if result == "unreachable":
+        print("Couldn't reach the Toolkit to check the key (no network, or off the VPN?). Saved it anyway.")
+    elif result == "error":
+        print("The Toolkit couldn't check the key just now (it answered with an error). Saved it anyway.")
+    else:
+        print("The Toolkit accepted the key.")
     credentials.save_api_key(key)
-    print("Saved.")
-    return True
+    print("Saved in the keychain.")
+    return KEY_SAVED
 
 
 def _models() -> list[str]:
@@ -112,7 +159,7 @@ def _launch(codex_args: list[str]) -> int:
         return 1
     if not credentials.has_api_key():
         print("First, UM-Codex needs your Toolkit API key.")
-        if not _ask_key():
+        if _key_command() != KEY_SAVED:
             return 1
     chosen = choose(SetupStore(), input, print, start_folder=Path.cwd(), models=_models)
     if chosen is None:
