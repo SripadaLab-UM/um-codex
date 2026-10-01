@@ -138,7 +138,7 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
  │   adds the Toolkit key                   to reach the host's relay        /mnt/write/*  rw  more write folders
  └─ docker exec -it agent codex                                              /mnt/read/*   ro  read-only folders
      (the person's terminal)                                                 /codex-home       setup's volume
-                                         internet on: agent also joins       config.toml   ro  from the host
+                                         internet on: agent also joins       /etc/codex    ro  enforced settings
                                          network umcodex-<id>-net (bridge)
 ```
 
@@ -189,21 +189,79 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
   not a host folder. DataLab learned that Codex makes Linux symlinks there,
   and the Windows uninstaller then tripped on them (#36). A volume also keeps
   Codex's history off the host's synced folders.
-- **config.toml** is written by the host and mounted read-only over the
-  volume. From DataLab's `codex_config.py`, it sets:
-  - `model_provider = "toolkit"`, pointing at the gateway, with `env_key` for
-    the launch token;
-  - `sandbox_mode = "danger-full-access"`, because the container is the
-    sandbox;
-  - `approval_policy`: `never` (the default) or `on-request`, from the setup
-    (with "never" and browser actions to approve, a `granular` policy that
-    behaves as "never" for commands: see M2b);
-  - `web_search = "live"` when the internet is on, otherwise `disabled`;
-  - with the browser tool on (internet on only), `[mcp_servers.browser]`
-    (see M2b);
-  - analytics, feedback and update checks off.
+- **Codex's settings: three layers** (codex_config.py; checked in the
+  rust-v0.157.1 source, `codex-rs/config/src/loader` and
+  `config_requirements.rs`). The host writes three files into the launch's
+  folder, mounted read-only as one folder at `/etc/codex`, where Codex reads
+  them on Linux:
+  - **`requirements.toml`**, which Codex enforces over every other setting
+    (it refuses to save the keys it fixes):
+    - `model_provider = "toolkit"` ("exact provider selection, overriding
+      local and session configuration") and `[model_providers.toolkit]`
+      (replaces any provider of that name, whole): the gateway's URL, with
+      `env_key` for the launch token;
+    - `model_catalog_json` (see "Models" below), `check_for_update_on_startup
+      = false`, feedback off;
+    - `allowed_sandbox_modes = ["read-only", "danger-full-access"]` (Codex
+      requires read-only in the list) and, with the internet off,
+      `allowed_web_search_modes = ["disabled"]`.
+  - **`managed_config.toml`**, a config layer above all the others (the
+    person's `config.toml`, profiles, `-c` flags); on Unix this is Codex's
+    "legacy managed config", still read by 0.157.1:
+    - `model`: the setup's;
+    - `sandbox_mode = "danger-full-access"`, because the container is the
+      sandbox;
+    - `approval_policy`: `never` (the default) or `on-request`, from the setup
+      (with "never" and browser actions to approve, a `granular` policy that
+      behaves as "never" for commands: see M2b). Codex also makes this the
+      only allowed policy, so `/permissions` can't change it, and `codex
+      exec` (which asks for "never") falls back to it with a warning;
+    - `web_search = "live"` when the internet is on, otherwise `disabled`;
+    - with the browser tool on (internet on only), `[mcp_servers.browser]`
+      (see M2b);
+    - analytics off; the two "switch to a newer model" prompts Codex knows by
+      name hidden; `/work` trusted.
+  - **`models.json`**: the model catalog (below).
+
+  `$CODEX_HOME/config.toml`, in the setup's volume, is the person's own
+  writable file: Codex saves its preferences there (reasoning effort, the
+  TUI's notices and choices). Nothing is mounted over it. A model chosen with
+  `/model` applies to that session; Codex saves it, says "a higher-priority
+  configuration layer overrides the saved value", and the next launch uses
+  the setup's model again. A config.toml the person writes can still change
+  their own Codex inside their own container (tools, MCP servers, hooks,
+  instructions, reasoning, history), but not the provider or its gateway
+  (checked live: another provider, a `toolkit` provider with another URL, a
+  profile and `-c model_provider=…` all still went to the gateway). And no
+  Codex setting can change what the container reaches: the container and
+  the relay decide that.
+
+  Before this, config.toml itself was mounted read-only, and the TUI failed
+  to save its preferences ("failed to persist config at
+  /codex-home/config.toml"). Volumes from then hold an empty, root-owned
+  config.toml (Docker's mount point); Codex replaces it at its first save (it
+  writes a new file and renames it over the old one, and the folder is the
+  agent's), so nothing needs migrating: checked live.
 
   Codex's other features stay at Codex's defaults: full power.
+- **Models.** Without a catalog, Codex asks the provider for `/models`, and
+  can't read the Toolkit's answer (`{"object", "total", "data": [{"id",
+  "slug", "canonical_slug", "object"}]}`; Codex wants `{"models": [...]}`
+  with instructions, tools, reasoning levels and context window per model:
+  "failed to decode models response"). It then falls back to the list built
+  into Codex, whose entries offer upgrades: in 0.157.1, `gpt-5.6-terra`
+  offers `gpt-6-sol`. So a launch on the default model showed a "switch to
+  GPT-6-Sol" prompt, and accepting it changed the session's model. Now each
+  launch writes a catalog (`model_catalog_json`, enforced): Codex's own
+  entries (`codex debug models --bundled`, run in a throwaway container from
+  the agent image with no network) for the models the Toolkit lists
+  (`toolkit.list_models`, on the host, with the key) and the setup's model,
+  all shown in `/model`, with no upgrade offers. With a catalog Codex never
+  asks for `/models` (its static model manager) and lists only these. A
+  Toolkit model Codex has no entry for (`gpt-4.1`, `o3`, …) isn't listed in
+  `/model`, but still works as a setup's model, with Codex's fallback
+  settings. If the Toolkit can't be reached the catalog is the setup's model
+  alone; if Codex's list can't be read the launch runs without a catalog.
 - **AGENTS.md** in the image tells Codex where things are: the folders, what's
   read-only, and that it has `sudo`. The container copies it into
   `$CODEX_HOME/AGENTS.md` at every start (it's the app's file). It tells
@@ -212,8 +270,9 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
   setup's name, `/work` and each `/mnt/write/*` and `/mnt/read/*` with its
   folder on the computer, internet on or off, the browser tool (on or off,
   and whether each action is approved), and the approval policy.
-- **The launch's files** (`config.toml`, `launch.md`, `gateway.conf`, and the
-  env file with the token, deleted once the agent has started) are in
+- **The launch's files** (`codex/` with the three files above, `launch.md`,
+  `gateway.conf`, and the env file with the token, deleted once the agent
+  has started) are in
   `launches/<id>/` in UM-Codex's data folder, never in a folder the agent can
   write. The folder is removed when the launch ends.
 - **The terminal:**
@@ -312,7 +371,7 @@ um-codex/
     paths.py                the data folder per OS (from DataLab config.py), and the program files' folder
     relay.py                (from DataLab relay/__init__ + recovery, policy trimmed)
     containers.py           docker commands, labels, cleanup (from DataLab containers.py)
-    codex_config.py         config.toml (from DataLab)
+    codex_config.py         Codex's enforced settings and model catalog (from DataLab's config.toml)
     credentials.py          (from DataLab)
     secret_prompt.py        (from DataLab)
     docker_path.py          (from DataLab)
@@ -406,7 +465,8 @@ modes, rigor, and the frontend.
      libraries, 19 MB for the MCP package): `docker image ls` showed 4.7 GB
      before and 5.56 GB after on arm64, and the content to download went
      from 1.2 GB to 1.46 GB.
-   - **config.toml** (only with the internet and the tool on):
+   - **managed_config.toml** (config.toml until the settings were split into
+     layers; only with the internet and the tool on):
      ```toml
      [mcp_servers.browser]
      command = "/usr/local/bin/playwright-mcp"

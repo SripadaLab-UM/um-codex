@@ -1,13 +1,31 @@
-"""The config.toml each launch's Codex runs with."""
+"""The Codex settings each launch runs with: requirements.toml,
+managed_config.toml and the model catalog."""
 
 from __future__ import annotations
 
+import json
 import tomllib
 from pathlib import Path
 
 import pytest
 
-from umcodex.codex_config import BROWSER_ARGS, BROWSER_COMMAND, BROWSER_ENV, TOKEN_ENV, render
+from umcodex import toolkit
+from umcodex.codex_config import (
+    BROWSER_ARGS,
+    BROWSER_COMMAND,
+    BROWSER_ENV,
+    TOKEN_ENV,
+    model_catalog,
+    render,
+    render_requirements,
+)
+
+DATA = Path(__file__).parent / "data"
+# `codex debug models --bundled` in the agent image (Codex 0.157.1), four of
+# its eleven entries, with the instruction texts shortened.
+BUNDLED = (DATA / "codex-0.157.1-bundled-models.json").read_text()
+# The Toolkit's GET /v1/models answer (the fields and ids; taken 2026-10-01).
+TOOLKIT_MODELS = json.loads((DATA / "toolkit-models.json").read_text())
 
 
 def parsed(**options) -> dict:
@@ -15,15 +33,51 @@ def parsed(**options) -> dict:
     return tomllib.loads(render(**{**defaults, **options}))
 
 
-def test_the_model_provider_is_the_gateway_with_the_launch_token():
-    config = parsed()
-    assert config["model"] == "gpt-5.6-terra"
-    assert config["model_provider"] == "toolkit"
-    provider = config["model_providers"]["toolkit"]
+def requirements(**options) -> dict:
+    return tomllib.loads(render_requirements(**{"internet": False, **options}))
+
+
+def test_the_model_provider_is_required_and_is_the_gateway_with_the_launch_token():
+    required = requirements()
+    assert required["model_provider"] == "toolkit"
+    provider = required["model_providers"]["toolkit"]
     assert provider["base_url"] == "http://gateway/v1"
     assert provider["env_key"] == TOKEN_ENV == "UMCODEX_TOKEN"
     assert provider["wire_api"] == "responses"
     assert provider["request_max_retries"] == 1
+    # The provider is in requirements.toml only, where nothing can override it.
+    config = parsed()
+    assert "model_provider" not in config and "model_providers" not in config
+
+
+def test_the_model_is_the_setups_in_the_top_layer():
+    assert parsed()["model"] == "gpt-5.6-terra"
+    assert parsed(model="gpt-6-sol")["model"] == "gpt-6-sol"
+
+
+def test_requirements_hold_the_catalog_and_what_codex_enforces_exactly():
+    required = requirements()
+    assert required["model_catalog_json"] == "/etc/codex/models.json"
+    assert required["check_for_update_on_startup"] is False
+    assert required["feedback"] == {"enabled": False}
+    # Codex refuses an allow-list without read-only (config_requirements.rs).
+    assert required["allowed_sandbox_modes"] == ["read-only", "danger-full-access"]
+    assert "model_catalog_json" not in requirements(catalog=False)
+
+
+def test_no_web_search_without_the_internet():
+    assert requirements(internet=False)["allowed_web_search_modes"] == ["disabled"]
+    assert "allowed_web_search_modes" not in requirements(internet=True)
+
+
+def test_requirements_use_only_keys_codex_0_157_1_knows():
+    # ConfigRequirementsToml's fields (rust-v0.157.1 config_requirements.rs)
+    # that UM-Codex uses; anything else would be ignored, with a warning.
+    known = {
+        "model_provider", "model_providers", "model_catalog_json", "check_for_update_on_startup",
+        "feedback", "allowed_sandbox_modes", "allowed_web_search_modes",
+    }  # fmt: skip
+    assert set(requirements()) <= known and set(requirements(internet=True)) <= known
 
 
 def test_the_container_is_the_sandbox():
@@ -47,20 +101,77 @@ def test_web_search_follows_the_internet_switch():
     assert parsed(internet=False)["web_search"] == "disabled"
 
 
-def test_analytics_feedback_and_update_checks_are_off():
+def test_analytics_is_off_and_no_model_switch_prompts():
     config = parsed()
     assert config["analytics"]["enabled"] is False
-    assert config["feedback"]["enabled"] is False
-    assert config["check_for_update_on_startup"] is False
+    assert config["notice"]["hide_gpt5_1_migration_prompt"] is True
+    assert config["notice"]["hide_gpt-5.1-codex-max_migration_prompt"] is True
 
 
 def test_no_key_or_auth_file_settings():
-    text = render(model="gpt-5.6-terra", approvals="never", internet=True)
-    assert "api.toolkit" not in text and "auth" not in text.lower() and "sk-" not in text
+    for text in (
+        render(model="gpt-5.6-terra", approvals="never", internet=True),
+        render_requirements(internet=True),
+    ):
+        assert "api.toolkit" not in text and "auth" not in text.lower() and "sk-" not in text
 
 
 def test_a_strange_model_name_stays_one_toml_string():
-    assert parsed(model='gpt"x\nmodel_provider = "openai')["model_provider"] == "toolkit"
+    config = parsed(model='gpt"x\nmodel_provider = "openai')
+    assert config["model"] == 'gpt"x\nmodel_provider = "openai' and "model_provider" not in config
+
+
+# --- The model catalog --------------------------------------------------------
+
+
+def served() -> list[str]:
+    """What the launch passes: the Toolkit's list as toolkit.list_models reads it."""
+    return sorted({m["id"] for m in TOOLKIT_MODELS["data"] if toolkit.text_model(m["id"])})
+
+
+def catalog(served_models, model="gpt-5.6-terra", bundled=BUNDLED) -> list[dict]:
+    text = model_catalog(bundled, served_models, model)
+    assert text is not None
+    return json.loads(text)["models"]
+
+
+def test_the_catalog_is_the_toolkits_models_that_codex_knows():
+    models = catalog(served())
+    # codex-auto-review isn't served by the Toolkit; gpt-5.4 is, though Codex hides it.
+    assert [m["slug"] for m in models] == ["gpt-6-sol", "gpt-5.6-terra", "gpt-5.4"]
+    assert all(m["visibility"] == "list" for m in models)
+    # Codex's own settings for each model are kept as they are.
+    terra = json.loads(BUNDLED)["models"][1]
+    assert models[1] == {**terra, "upgrade": None, "visibility": "list"}
+
+
+def test_the_catalog_offers_no_upgrades():
+    # Codex 0.157.1's own list offers gpt-6-sol in place of gpt-5.6-terra: the
+    # prompt that switched a real launch's model.
+    assert json.loads(BUNDLED)["models"][1]["upgrade"]["model"] == "gpt-6-sol"
+    assert all(m["upgrade"] is None and m["availability_nux"] is None for m in catalog(served()))
+
+
+def test_the_setups_model_is_in_the_catalog_even_when_the_toolkit_cant_say():
+    assert [m["slug"] for m in catalog([], model="gpt-5.4")] == ["gpt-5.4"]
+
+
+def test_a_catalog_with_no_known_model_falls_back_to_codexs_own_list():
+    models = catalog(["gpt-4o"], model="gpt-4o")
+    assert [m["slug"] for m in models] == [m["slug"] for m in json.loads(BUNDLED)["models"]]
+    assert all(m["upgrade"] is None for m in models)
+
+
+@pytest.mark.parametrize("bundled", ["", "not json", "[]", '{"models": {}}', '{"models": []}'])
+def test_no_catalog_when_codexs_list_cant_be_read(bundled):
+    assert model_catalog(bundled, served(), "gpt-5.6-terra") is None
+
+
+def test_the_toolkits_own_answer_is_not_what_codex_reads():
+    # Codex decodes {"models": [...]}; the Toolkit sends {"object", "total", "data"}.
+    assert "models" not in TOOLKIT_MODELS and set(TOOLKIT_MODELS["data"][0]) == {
+        "id", "slug", "canonical_slug", "object"
+    }  # fmt: skip
 
 
 # --- The browser tool (M2b) -----------------------------------------------------
