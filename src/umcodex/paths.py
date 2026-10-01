@@ -1,0 +1,36 @@
+# Adapted from DataLab's backend/src/datalab/config.py (default_data_dir) at 6b6fdca.
+"""Where UM-Codex keeps its own files: saved setups, and each launch's
+generated config while it runs.
+
+- macOS: ~/Library/Application Support/UM-Codex
+- Windows: %LOCALAPPDATA%\\UM-Codex
+- elsewhere (tests, CI): $XDG_DATA_HOME/um-codex
+
+`UMCODEX_DATA_DIR` overrides it (for tests). The installers put the program
+files in `app` inside the default data folder (see app_dir).
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+
+def default_data_dir(platform: str = sys.platform) -> Path:
+    if platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "UM-Codex"
+    if platform == "win32":
+        return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "UM-Codex"
+    return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "um-codex"
+
+
+def data_dir() -> Path:
+    return Path(os.environ.get("UMCODEX_DATA_DIR") or default_data_dir())
+
+
+def app_dir(platform: str = sys.platform) -> Path:
+    """Where the installers put UM-Codex's program files: `app` in the default
+    data folder. `um-codex uninstall` never removes or measures it: the
+    uninstaller scripts remove it after it returns."""
+    return default_data_dir(platform) / "app"
