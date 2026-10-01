@@ -203,7 +203,7 @@ jobs:
           cmd /c mklink /J "$tree\junction" "$outside" | Out-Null
           New-Item -ItemType SymbolicLink -Path (Join-Path $tree "link.txt") -Target (Join-Path $outside "keep.txt") | Out-Null
           $tag = Get-ReparseTag (Join-Path $tree "junction")
-          if ($tag -ne 0xA0000003) { Fail ("junction tag {0:X8}" -f $tag) }
+          if (("{0:X8}" -f $tag) -ne "A0000003") { Fail ("junction tag {0:X8}" -f $tag) }
           if ((Get-ReparseTag $object) -ne 0) { Fail "a plain file has a reparse tag" }
           if (-not (Test-Link (Get-Item -Force (Join-Path $tree "junction")))) { Fail "a junction isn't a link" }
           if (-not (Test-Link (Get-Item -Force (Join-Path $tree "link.txt")))) { Fail "a symbolic link isn't a link" }
