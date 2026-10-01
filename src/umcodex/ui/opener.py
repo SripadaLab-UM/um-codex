@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import secrets
 import shlex
 import subprocess
@@ -94,11 +95,23 @@ def ps_quote(text: str) -> str:
     return f"'{text}'"
 
 
+def native_arg(text: str) -> str:
+    """An argument as Windows PowerShell 5.1 must be given it for a program
+    to receive it unchanged. 5.1 puts quotes around an argument with a space
+    in it but doesn't escape the double quotes inside (nor the backslashes
+    before them, or before its own closing quote), so this does, by the rules
+    programs use to split their command line (CommandLineToArgvW)."""
+    text = re.sub(r'(\\*)"', lambda m: m.group(1) * 2 + '\\"', text)
+    if re.search(r"\s", text):
+        text = re.sub(r"(\\+)$", lambda m: m.group(1) * 2, text)
+    return text
+
+
 def powershell_script(program: Sequence[str], setup_id: str, env: Mapping[str, str]) -> str:
     lines = ["$Host.UI.RawUI.WindowTitle = 'UM-Codex'", "$Env:PYTHONUTF8 = '1'"]
     lines += [f"$Env:{name} = {ps_quote(value)}" for name, value in env.items()]
     first, *rest = launch_args(program, setup_id)
-    lines.append("& " + " ".join(ps_quote(part) for part in [first, *rest]))
+    lines.append("& " + " ".join(ps_quote(native_arg(part)) for part in [first, *rest]))
     return "\n".join(lines)
 
 

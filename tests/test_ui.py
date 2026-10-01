@@ -293,7 +293,18 @@ def test_setups_round_trip_through_the_api(folders_here):
     with_server(test)
 
 
-def test_folder_refusals_come_back_in_plain_words(folders_here):
+@pytest.fixture
+def home_with_keys(tmp_path, monkeypatch) -> Path:
+    """A home folder with ~/.ssh and ~/.aws in it (a CI runner may have neither)."""
+    home = tmp_path / "home"
+    for name in (".ssh", ".aws"):
+        (home / name).mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return Path(os.path.realpath(home))
+
+
+def test_folder_refusals_come_back_in_plain_words(folders_here, home_with_keys):
     async def test(h: Harness) -> None:
         await h.sign_in()
         home = await h.post("/api/setups", setup_body(Path.home()))
@@ -323,7 +334,7 @@ def test_folder_refusals_come_back_in_plain_words(folders_here):
     with_server(test)
 
 
-def test_choose_folder_uses_the_picker_and_checks_what_it_returns(folders_here, monkeypatch):
+def test_choose_folder_uses_the_picker_and_checks_what_it_returns(folders_here, monkeypatch, home_with_keys):
     chosen: list[Path | None] = [folders_here["data"], Path.home() / ".aws", None]
     starts = []
 
@@ -602,6 +613,8 @@ NASTY = [
     "$Env:PATH; Remove-Item x",
     "it\u2019s",
     "--setup",
+    "x y\\",
+    'q\\"z w',
 ]
 
 
@@ -658,6 +671,15 @@ def test_the_mac_opener_opens_one_command_file_in_terminal(tmp_path):
     assert "HOME" not in text  # only UM-Codex's own development settings
 
 
+def test_native_arguments_survive_windows_powershell_5():
+    # What the program gets back (CommandLineToArgvW) from PowerShell 5.1's quoting.
+    assert opening.native_arg('say "hi"') == 'say \\"hi\\"'
+    assert opening.native_arg('a\\"b') == 'a\\\\\\"b'
+    assert opening.native_arg("C:\\a b\\") == "C:\\a b\\\\"
+    assert opening.native_arg("C:\\ab\\") == "C:\\ab\\"
+    assert opening.native_arg("plain") == "plain"
+
+
 def test_the_windows_command_is_encoded_and_quoted(tmp_path):
     terminal = Path("C:/Users/o'brien/AppData/Local/Microsoft/WindowsApps/wt.exe")
     for setup_id in NASTY:
@@ -676,7 +698,7 @@ def test_the_windows_command_is_encoded_and_quoted(tmp_path):
         # Every argument is one single-quoted PowerShell string, quotes doubled.
         parts = re.findall(r"'((?:[^'\u2018\u2019\u201a\u201b]|''|\u2018\u2018|\u2019\u2019)*)'", last)
         undo = [p.replace("''", "'").replace("\u2019\u2019", "\u2019") for p in parts]
-        assert undo == [*program, "launch", "--setup", setup_id]
+        assert undo == [opening.native_arg(a) for a in [*program, "launch", "--setup", setup_id]]
         assert last.startswith("& '")
         assert "$Env:UMCODEX_DATA_DIR = 'C:\\d''x'" in script and "$Env:PYTHONUTF8 = '1'" in script
 
