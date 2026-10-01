@@ -38,6 +38,11 @@ approvals, then shows a summary and asks "Start?". When you quit Codex, the
 container is removed; the setup's Codex history is kept (`codex resume`
 works next time, or `uv run um-codex launch -- resume`).
 
+A word of care: Codex can change anything in the folders you let it write,
+including files your own tools run later on your computer (git hooks, a
+Makefile, `package.json` scripts, `.envrc`, `.vscode/tasks.json`). Look before
+running those in a folder Codex has worked in.
+
 Other commands: `uv run um-codex setups` (list, edit, delete setups) and
 `uv run um-codex uninstall`.
 

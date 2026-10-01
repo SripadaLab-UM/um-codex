@@ -136,7 +136,10 @@ def report(say: Say = print, docker: Docker | None = None, *, quiet: bool = Fals
             "unreachable": "couldn't reach the Toolkit (check your network or VPN)",
             "error": "the Toolkit answered with an error",
         }
-        line(result == "ok", f"Toolkit ({toolkit.base_url()}): {words[result]}")
+        # Off the VPN or offline isn't a broken install: for the installers
+        # (--quiet) it's a note. A refused key stays a problem.
+        good = True if result == "ok" else None if (quiet and result == "unreachable") else False
+        line(good, f"Toolkit ({toolkit.base_url()}): {words[result]}")
     line(None, f"{len(SetupStore().all())} saved setup(s)")
     ok = not problems
     if quiet:

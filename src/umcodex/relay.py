@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Literal
+from urllib.parse import urlsplit
 
 import httpx
 from aiohttp import web
@@ -42,8 +43,14 @@ from aiohttp import web
 from umcodex.credentials import MissingCredential
 
 log = logging.getLogger(__name__)
+# httpcore's debug log prints response headers, which a careless server could
+# fill with the key; httpx's prints request lines. Neither may log below WARNING,
+# whatever the root logger's level.
+for _noisy in ("httpcore", "httpx", "aiohttp.access"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 PREFIX = "/relay/v1/"
+ALIVE = "_umcodex/alive"
 REDACTED = b"[removed by UM-Codex]"
 
 # Response headers passed back to Codex. Everything else (cookies, upstream
@@ -126,6 +133,9 @@ class Relay:
         if not request.path.startswith(PREFIX):
             return _refused(404, "only /v1/ is relayed")
         path = request.path[len(PREFIX) :]
+        if path == ALIVE:
+            # The agent's watchdog: the launch is still on. Never upstream.
+            return web.Response(status=204)
         if (
             request.method not in ("GET", "POST")
             or not _SAFE_PATH.fullmatch(path)
@@ -193,11 +203,9 @@ async def _forward(
                 finally:
                     await upstream.aclose()
                 return response
-            content = await _read_bounded(upstream)
-            trouble = classify(upstream.status_code, upstream.headers, content)
-            failure = web.Response(
-                body=scrub.feed(content) + scrub.flush(), status=upstream.status_code, headers=passed
-            )
+            content = await _read_bounded(upstream, key)
+            trouble = classify(upstream.status_code, upstream.headers, content, key=key)
+            failure = web.Response(body=content, status=upstream.status_code, headers=passed)
         log.warning("model request failed (attempt %d): %s", attempt, trouble.record())
         delay = next_delay(trouble, attempt, waited)
         if delay is None:
@@ -239,15 +247,22 @@ class Scrubber:
         return held
 
 
-async def _read_bounded(upstream: httpx.Response, limit: int = 65_536) -> bytes:
+async def _read_bounded(upstream: httpx.Response, key: str, limit: int = 65_536) -> bytes:
+    """An error body, at most `limit` bytes, with the key removed before it's
+    cut short (so a cut can't leave part of the key at the end)."""
+    scrub = Scrubber(key.encode())
     content = b""
+    complete = True
     try:
         async for chunk in upstream.aiter_bytes():
-            content += chunk
+            content += scrub.feed(chunk)
             if len(content) >= limit:
+                complete = False
                 break
     finally:
         await upstream.aclose()
+    if complete:
+        content += scrub.flush()
     return content[:limit]
 
 
@@ -332,10 +347,25 @@ class RelayServer:
             self._thread = None
 
 
+class UpstreamRefused(ValueError):
+    pass
+
+
 def upstream_base_url(default: str) -> str:
-    """The Toolkit's base URL. `UMCODEX_UPSTREAM` replaces it, for tests only
-    (a local stub): UM-Codex says so when it's set."""
-    return os.environ.get("UMCODEX_UPSTREAM") or default
+    """The Toolkit's base URL. `UMCODEX_UPSTREAM` replaces it, for tests only:
+    a local stub on this computer (http://127.0.0.1, localhost or [::1]), never
+    another host, so the variable can't send the key anywhere else. UM-Codex
+    says so when it's set."""
+    override = os.environ.get("UMCODEX_UPSTREAM")
+    if not override:
+        return default
+    parsed = urlsplit(override)
+    if parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "localhost", "::1") or parsed.username:
+        raise UpstreamRefused(
+            "UMCODEX_UPSTREAM may only point at a test stub on this computer "
+            "(http://127.0.0.1, http://localhost or http://[::1])."
+        )
+    return override
 
 
 # ---------------------------------------------------------------------------
@@ -383,8 +413,10 @@ class Trouble:
         }
 
 
-def classify(status: int, headers: httpx.Headers, body: bytes) -> Trouble:
-    code = _provider_code(body)
+def classify(status: int, headers: httpx.Headers, body: bytes, *, key: str = "") -> Trouble:
+    """What went wrong. A provider code or request ID that holds the key (or
+    a piece of it) is dropped: they're logged."""
+    code = _not_secret(_provider_code(body), key)
     lowered = (code or "").lower()
     wait = retry_after(headers)
     if status in (429, 403):
@@ -401,7 +433,7 @@ def classify(status: int, headers: httpx.Headers, body: bytes) -> Trouble:
         kind = "busy"
     else:
         kind = "request"
-    request_id = headers.get("x-request-id")
+    request_id = _not_secret(headers.get("x-request-id"), key)
     return Trouble(
         kind=kind,
         status=status,
@@ -409,6 +441,14 @@ def classify(status: int, headers: httpx.Headers, body: bytes) -> Trouble:
         retry_after=wait,
         request_id=request_id if request_id and _CODE.match(request_id) else None,
     )
+
+
+def _not_secret(value: str | None, key: str) -> str | None:
+    if value is None or not key:
+        return value
+    if key in value or (len(value) >= 8 and value in key):
+        return None
+    return value
 
 
 def connection_trouble(error: httpx.HTTPError) -> Trouble:

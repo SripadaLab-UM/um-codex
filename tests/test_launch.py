@@ -180,3 +180,38 @@ def test_a_missing_agent_image_stops_before_anything_starts(folders, data_folder
     said: list[str] = []
     code = launch.run(setup, layout, say=said.append, docker=Docker(no_image), run_exec=None)  # type: ignore[arg-type]
     assert code == 1 and "isn't on this computer" in "\n".join(said)
+
+
+def test_a_young_launch_folder_without_its_lock_yet_is_left_alone(data_folder):
+    import time
+
+    young = data_folder / "launches" / "0000aaaa"
+    young.mkdir(parents=True)  # made, lock not taken yet
+    old = data_folder / "launches" / "0000bbbb"
+    old.mkdir()
+    os.utime(old, (time.time() - 3600, time.time() - 3600))
+    launch.remove_stale_launch_folders(data_folder)
+    assert young.exists() and not old.exists()
+
+
+def test_closing_the_windows_terminal_removes_the_containers_quickly():
+    calls: list[float] = []
+    assert launch.on_console_event(2, calls.append) is True  # CTRL_CLOSE_EVENT
+    assert launch.on_console_event(5, calls.append) is True  # CTRL_LOGOFF_EVENT
+    assert calls == [2, 2]  # short Docker timeouts: Windows allows about 5 s
+    assert launch.on_console_event(0, calls.append) is False  # Ctrl-C belongs to Codex
+    assert calls == [2, 2]
+
+
+def test_the_images_command_is_read_for_the_watchdog():
+    def inspect(command, **options):
+        out = 'null|["sh","-c","cp /etc/um-codex/AGENTS.md /codex-home/ && exec sleep infinity"]\n'
+        return subprocess.CompletedProcess(command, 0, out, "")
+
+    cmd = launch.image_command(Docker(inspect), "um-codex-agent:dev")
+    assert cmd[:2] == ("sh", "-c") and cmd[2].endswith("exec sleep infinity")
+
+    def with_entrypoint(command, **options):
+        return subprocess.CompletedProcess(command, 0, '["/entry"]|["x"]\n', "")
+
+    assert launch.image_command(Docker(with_entrypoint), "img") == ()

@@ -42,6 +42,23 @@ NO_DNS = "192.0.2.1"
 HOST_ALIAS = "host.docker.internal"
 CODEX_HOME = "/codex-home"
 LAUNCH_NOTE = "/etc/um-codex/launch.md"
+# The agent's main process when the image's command is known: the image's
+# command runs in the background, and this loop asks the relay (through the
+# gateway, with the launch token) every 15 s whether the launch is still on.
+# After 4 failed asks in a row (about a minute: the relay or gateway is gone,
+# because `um-codex` was killed or its terminal closed) the loop ends, so the
+# container stops and, started with --rm, removes itself. The leftovers'
+# networks and gateway go at the next launch (by label). No curl: never stop.
+WATCHDOG = (
+    '"$@" & '
+    "command -v curl >/dev/null 2>&1 || { wait; exit 0; }; "
+    "fails=0; "
+    "while sleep 15; do "
+    'if curl -fsS -m 5 -o /dev/null -H "Authorization: Bearer $UMCODEX_TOKEN" '
+    "http://gateway/v1/_umcodex/alive; then fails=0; else fails=$((fails+1)); fi; "
+    '[ "$fails" -ge 4 ] && exit 0; '
+    "done"
+)
 
 
 class DockerError(RuntimeError):
@@ -105,6 +122,9 @@ class LaunchSpec:
     launch_note: Path  # launch.md, mounted read-only
     gateway_conf: Path
     env_file: Path
+    # The agent image's own command (`Config.Cmd`), run under the watchdog
+    # (see WATCHDOG). Empty: the image's command runs as it is, unwatched.
+    image_cmd: tuple[str, ...] = ()
 
     @property
     def prefix(self) -> str:
@@ -117,6 +137,10 @@ class LaunchSpec:
     @property
     def internet_network(self) -> str:
         return f"{self.prefix}-net"
+
+    @property
+    def gateway_network(self) -> str:
+        return f"{self.prefix}-gw"
 
     @property
     def gateway(self) -> str:
@@ -138,7 +162,12 @@ class LaunchSpec:
         ]  # fmt: skip
 
     def network_commands(self) -> list[list[str]]:
-        commands = [["network", "create", "--internal", *self.labels(), self.internal_network]]
+        commands = [
+            ["network", "create", "--internal", *self.labels(), self.internal_network],
+            # The gateway's own way to the host's relay: a bridge of its own,
+            # not Docker's shared default one.
+            ["network", "create", *self.labels(), self.gateway_network],
+        ]
         if self.internet:
             commands.append(["network", "create", *self.labels(), self.internet_network])
         return commands
@@ -156,6 +185,7 @@ class LaunchSpec:
         run = [
             "run", "-d", "--name", self.gateway,
             *self.labels(),
+            "--network", self.gateway_network,
             "--add-host", f"{HOST_ALIAS}:host-gateway",
             "--read-only", "--tmpfs", "/var/cache/nginx", "--tmpfs", "/var/run",
             "--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "SETUID",
@@ -184,18 +214,20 @@ class LaunchSpec:
         ]  # fmt: skip
         dns = [] if self.internet else ["--dns", NO_DNS]
         run = [
-            "run", "-d", "--name", self.agent,
+            "run", "-d", "--rm", "--name", self.agent,
             *self.labels(),
             "--network", self.internal_network,
             *dns,
             "--add-host", f"{HOST_ALIAS}:{NO_DNS}",
             "--hostname", "um-codex",
             "--init",
+            "--pids-limit", "4096",
             # The token goes in a private env file, not on a command line
             # where other programs on this computer could see it.
             "--env-file", str(self.env_file),
             *mounts,
             self.agent_image,
+            *(["sh", "-c", WATCHDOG, "sh", *self.image_cmd] if self.image_cmd else []),
         ]  # fmt: skip
         commands = [_guarded(run)]
         if self.internet:
@@ -203,7 +235,8 @@ class LaunchSpec:
         return commands
 
     def remove_commands(self) -> list[list[str]]:
-        networks = [self.internal_network] + ([self.internet_network] if self.internet else [])
+        networks = [self.internal_network, self.gateway_network]
+        networks += [self.internet_network] if self.internet else []
         return [["rm", "-f", self.agent, self.gateway], ["network", "rm", *networks]]
 
 
@@ -215,14 +248,24 @@ def exec_command(agent: str, *, tty: bool, term: str, args: Sequence[str] = ()) 
 
 def _guarded(args: list[str]) -> list[str]:
     """A last check on a `docker run` command line."""
-    for arg in args:
+    allowed = {"CHOWN", "SETUID", "SETGID", "NET_BIND_SERVICE"}
+    added: set[str] = set()
+    for index, arg in enumerate(args):
         lowered = arg.lower()
-        if arg == "--privileged" or "docker.sock" in lowered or lowered.startswith("--cap-add=sys"):
+        if lowered.startswith("--privileged") or "docker.sock" in lowered:
             raise DockerError("UM-Codex refused to start a container with access to Docker or the host.")
-    if "--cap-add" in args:
-        added = {args[i + 1] for i, a in enumerate(args[:-1]) if a == "--cap-add"}
-        if added - {"CHOWN", "SETUID", "SETGID", "NET_BIND_SERVICE"}:
-            raise DockerError("UM-Codex refused to add a capability to a container.")
+        if lowered in ("--network=host", "--pid=host", "--ipc=host", "--userns=host", "--uts=host"):
+            raise DockerError("UM-Codex refused to start a container with access to Docker or the host.")
+        if arg in ("--network", "--pid", "--ipc", "--userns", "--uts") and args[index + 1 : index + 2] == [
+            "host"
+        ]:
+            raise DockerError("UM-Codex refused to start a container with access to Docker or the host.")
+        if arg == "--cap-add" and index + 1 < len(args):
+            added.add(args[index + 1].upper())
+        elif lowered.startswith("--cap-add="):
+            added.add(arg.split("=", 1)[1].upper())
+    if added - allowed:
+        raise DockerError("UM-Codex refused to add a capability to a container.")
     return args
 
 

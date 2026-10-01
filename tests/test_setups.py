@@ -173,3 +173,24 @@ def test_manage_deletes_and_removes_the_volume(project):
     script = Script("1", "d", "y", "")
     manage(store, script.ask, script.say, remove_volume=removed.append)
     assert store.all() == [] and removed == [setup]
+
+
+def test_a_saved_folder_that_now_leads_elsewhere_needs_an_explicit_yes(project, tmp_path):
+    store = SetupStore()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    moved_link = project.parent / "outputs-link"
+    moved_link.symlink_to(elsewhere)
+    # As if saved before a link was put in its place.
+    setup = make(project, writes=(str(moved_link),))
+    store.save(setup, used=True)
+    script = Script("", "y")  # use it again; a plain "y" isn't enough, so it goes on to change the setup...
+    script.answers += ["", "", "n", "", "", "", "", "", "n", "n"]  # ...where the person stops
+    assert choose(store, script.ask, script.say, start_folder=project) is None
+    assert "WARNING: a saved folder now leads somewhere else" in script.text
+    assert f"now goes to {os.path.realpath(elsewhere)}" in script.text
+
+    script = Script("", "yes", "")  # an explicit yes, then Start
+    chosen = choose(store, script.ask, script.say, start_folder=project)
+    assert chosen is not None
+    assert chosen[0].writes == (os.path.realpath(elsewhere),)  # what was approved is saved

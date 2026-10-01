@@ -137,3 +137,68 @@ def test_mount_names_are_clean():
     assert mount_name("..", taken) == "folder"
     assert mount_name("a‮b", taken) == "ab"
     assert mount_name("AB", taken) == "AB-2"  # case-insensitive clash with "ab"
+
+
+@pytest.mark.parametrize(
+    "sub",
+    [".gnupg", ".kube", ".azure", ".config/gcloud", ".local/bin", ".local/share/uv", "Library/LaunchAgents"],
+)
+def test_more_protected_places(home, sub):
+    (home / sub).mkdir(parents=True)
+    with pytest.raises(FolderRefused):
+        check(home / sub, home)
+
+
+def test_umcodex_program_files_are_protected(home, tmp_path, monkeypatch):
+    from umcodex import folders as module
+
+    program = tmp_path / "elsewhere" / "UM-Codex" / "app"
+    program.mkdir(parents=True)
+    monkeypatch.setattr(module, "app_dir", lambda platform=None: program)
+    with pytest.raises(FolderRefused, match="program files"):
+        check(program, home)
+    with pytest.raises(FolderRefused, match="program files"):
+        check(program.parent, home)
+
+
+def test_windows_startup_folder_is_protected(home, monkeypatch):
+    roaming = home / "AppData" / "Roaming"
+    startup = roaming / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    startup.mkdir(parents=True)
+    monkeypatch.setenv("APPDATA", str(roaming))
+    with pytest.raises(FolderRefused, match="log in"):
+        check(startup, home, platform="win32")
+
+
+def test_the_same_folder_by_another_name_is_caught_by_its_identity(home, tmp_path, monkeypatch):
+    """A Mac firmlink or a Windows \\\\localhost\\C$ path names the same folder
+    differently; realpath doesn't unify them, the disk's identity does. A
+    folder whose identity matches ~/.ssh is refused whatever its name."""
+    from umcodex import folders as module
+
+    other_name = tmp_path / "other-name"
+    other_name.mkdir()
+    real_ids = module._ids
+
+    def ids(path):
+        found = real_ids(path)
+        if path == other_name or str(path) == str(other_name):
+            return [real_ids(home / ".ssh")[0], *found[1:]]
+        return found
+
+    monkeypatch.setattr(module, "_ids", ids)
+    with pytest.raises(FolderRefused, match="SSH"):
+        check(other_name, home)
+
+
+@pytest.mark.skipif(not Path("/System/Volumes/Data").is_dir(), reason="a Mac with a firmlinked data volume")
+def test_a_mac_firmlink_to_home_is_refused():
+    firmlinked = Path("/System/Volumes/Data") / Path.home().relative_to("/")
+    with pytest.raises(FolderRefused, match="whole home folder"):
+        check_folder(firmlinked)
+
+
+@pytest.mark.skipif(not Path("/System/Volumes/Data").is_dir(), reason="a Mac with a separate data volume")
+def test_the_data_volume_holding_home_under_another_name_is_refused():
+    with pytest.raises(FolderRefused, match="holds your home folder|whole drive"):
+        check_folder("/System/Volumes/Data")

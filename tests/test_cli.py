@@ -233,3 +233,67 @@ def test_size_never_follows_links(tmp_path):
 
 def _no_questions(question: str) -> str:
     raise AssertionError(f"asked {question!r}")
+
+
+def test_key_from_stdin_drops_a_byte_order_mark(monkeypatch, toolkit_says):
+    toolkit_says.append("ok")
+    monkeypatch.setattr("sys.stdin", io.StringIO("\ufeff" + FAKE_KEY + "\r\n"))
+    assert cli.main(["key", "--from-stdin"]) == 0
+    assert credentials.api_key() == FAKE_KEY
+
+
+def test_a_keychain_that_refuses_is_said_plainly(monkeypatch, capsys, toolkit_says):
+    from keyring.errors import KeyringLocked
+
+    toolkit_says.append("ok")
+
+    def locked(*_):
+        raise KeyringLocked("locked")
+
+    monkeypatch.setattr("keyring.set_password", locked)
+    monkeypatch.setattr("sys.stdin", io.StringIO(FAKE_KEY + "\n"))
+    assert cli.main(["key", "--from-stdin"]) == 1
+    assert "keychain refused it" in capsys.readouterr().out
+
+
+def test_ctrl_c_while_checking_the_key_is_cancelled(monkeypatch):
+    def interrupted(*_, **__):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(toolkit, "check_key", interrupted)
+    monkeypatch.setattr("sys.stdin", io.StringIO(FAKE_KEY + "\n"))
+    assert cli.main(["key", "--from-stdin"]) == 2
+    assert not credentials.has_api_key()
+
+
+def test_only_the_first_double_dash_is_dropped(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli, "_launch", lambda args: seen.setdefault("args", args) and 0)
+    cli.main(["launch", "--", "exec", "--", "echo"])
+    assert seen["args"] == ["exec", "--", "echo"]
+
+
+def test_doctor_quiet_off_the_vpn_is_not_a_failure(monkeypatch, capsys, memory_keychain):
+    from umcodex import doctor
+    from umcodex.containers import Docker
+
+    credentials.save_api_key(FAKE_KEY)
+    monkeypatch.setattr(toolkit, "check_key", lambda key: "unreachable")
+    monkeypatch.setattr("shutil.which", lambda name, **_: "/usr/local/bin/docker")
+
+    def docker_ok(command, **options):
+        return subprocess.CompletedProcess(command, 0, "29.0.0\n", "")
+
+    assert doctor.report(docker=Docker(docker_ok), quiet=True) is True
+    assert capsys.readouterr().out == ""
+    monkeypatch.setattr(toolkit, "check_key", lambda key: "refused")
+    assert doctor.report(say=print, docker=Docker(docker_ok), quiet=True) is False
+    assert "refused the key" in capsys.readouterr().out
+
+
+def test_an_upstream_override_off_this_computer_is_refused(monkeypatch, capsys):
+    monkeypatch.setenv("UMCODEX_UPSTREAM", "https://elsewhere.example.org/v1")
+    monkeypatch.setattr("sys.stdin", io.StringIO(FAKE_KEY + "\n"))
+    assert cli.main(["key", "--from-stdin"]) == 1
+    assert "test stub on this computer" in capsys.readouterr().out
+    assert not credentials.has_api_key()

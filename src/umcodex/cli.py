@@ -15,9 +15,12 @@ import re
 import sys
 from pathlib import Path
 
+from keyring.errors import KeyringError
+
 from umcodex import __version__, credentials, doctor, toolkit
 from umcodex.containers import Docker, DockerError, pull_images, volume_name
 from umcodex.paths import data_dir
+from umcodex.relay import UpstreamRefused
 from umcodex.secret_prompt import ask_secret
 from umcodex.setups import Setup, SetupStore, choose, manage
 
@@ -68,11 +71,16 @@ def main(argv: list[str] | None = None) -> int:
 
             choice = True if args.delete_data else False if args.keep_data else None
             return uninstall(delete_data=choice, yes=args.yes)
-        codex_args = [a for a in getattr(args, "codex_args", []) if a != "--"]
+        codex_args = list(getattr(args, "codex_args", []))
+        if codex_args[:1] == ["--"]:
+            codex_args = codex_args[1:]
         return _launch(codex_args)
     except KeyboardInterrupt:
         print("\nStopped.")
         return 130
+    except UpstreamRefused as error:
+        print(error)
+        return 1
     except DockerError as error:
         print(f"\nDocker problem: {error}")
         print("Run `um-codex doctor` for details.")
@@ -99,17 +107,22 @@ _KEY_SHAPE = re.compile(r"[\x21-\x7e]{8,512}")
 
 
 def _key_command(*, from_stdin: bool = False) -> int:
-    """`um-codex key`: 0 saved, 1 refused or invalid, 2 cancelled."""
+    """`um-codex key`: 0 saved, 1 refused or invalid (or the keychain failed), 2 cancelled."""
     try:
-        if from_stdin:
-            key = sys.stdin.readline().strip()
-        else:
-            print("Paste your U-M GPT Toolkit API key. It's saved in this computer's keychain and")
-            print("never goes into the container.")
-            key = ask_secret("Toolkit API key", what="key")
+        return _key_steps(from_stdin=from_stdin)
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled: nothing was saved.")
         return KEY_CANCELLED
+
+
+def _key_steps(*, from_stdin: bool) -> int:
+    if from_stdin:
+        # One line; a Windows pipe may start with a UTF-8 byte order mark.
+        key = sys.stdin.readline().lstrip("\ufeff").strip()
+    else:
+        print("Paste your U-M GPT Toolkit API key. It's saved in this computer's keychain and")
+        print("never goes into the container.")
+        key = ask_secret("Toolkit API key", what="key")
     if not key:
         if from_stdin:
             print("No key was given, so nothing was saved.")
@@ -121,13 +134,20 @@ def _key_command(*, from_stdin: bool = False) -> int:
     if result == "refused":
         print("The Toolkit refused that key, so it wasn't saved. Check it and try again.")
         return KEY_REFUSED
+    try:
+        credentials.save_api_key(key)
+    except KeyringError:
+        print("The key couldn't be saved: this computer's keychain refused it or isn't available.")
+        print("Unlock the keychain (or sign in to Windows normally) and try again.")
+        return KEY_REFUSED
     if result == "unreachable":
-        print("Couldn't reach the Toolkit to check the key (no network, or off the VPN?). Saved it anyway.")
+        print(
+            "Couldn't reach the Toolkit to check the key (no network, or off the VPN?). It was saved anyway."
+        )
     elif result == "error":
-        print("The Toolkit couldn't check the key just now (it answered with an error). Saved it anyway.")
+        print("The Toolkit couldn't check the key just now (it answered with an error). It was saved anyway.")
     else:
         print("The Toolkit accepted the key.")
-    credentials.save_api_key(key)
     print("Saved in the keychain.")
     return KEY_SAVED
 
@@ -155,6 +175,10 @@ def _launch(codex_args: list[str]) -> int:
     from umcodex import launch
 
     print(f"UM-Codex {__version__}")
+    if sys.platform == "win32" and not codex_args and not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("This window can't run Codex's screen (Git Bash and mintty can't).")
+        print("Use Windows Terminal or PowerShell, then run um-codex again.")
+        return 1
     if not doctor.ensure_docker():
         return 1
     if not credentials.has_api_key():

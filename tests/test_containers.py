@@ -9,10 +9,12 @@ import pytest
 
 from umcodex.containers import (
     NO_DNS,
+    WATCHDOG,
     BindMount,
     Docker,
     DockerError,
     LaunchSpec,
+    _guarded,
     exec_command,
     images,
     remove_leftovers,
@@ -67,8 +69,9 @@ def test_everything_created_is_labelled(tmp_path, internet):
 
 def test_internet_off_internal_network_only_and_no_dns(tmp_path):
     s = spec(tmp_path, internet=False)
-    [create] = s.network_commands()
+    create, gateway_bridge = s.network_commands()
     assert create[:3] == ["network", "create", "--internal"] and create[-1] == "umcodex-1a2b3c4d-int"
+    assert "--internal" not in gateway_bridge and gateway_bridge[-1] == "umcodex-1a2b3c4d-gw"
     [run] = s.agent_commands()
     assert run[run.index("--network") + 1] == "umcodex-1a2b3c4d-int"
     assert run[run.index("--dns") + 1] == NO_DNS
@@ -77,7 +80,7 @@ def test_internet_off_internal_network_only_and_no_dns(tmp_path):
 
 def test_internet_on_adds_a_bridge_network_of_its_own(tmp_path):
     s = spec(tmp_path, internet=True)
-    internal, bridge = s.network_commands()
+    internal, _, bridge = s.network_commands()
     assert "--internal" in internal
     assert "--internal" not in bridge and bridge[-1] == "umcodex-1a2b3c4d-net"
     run, connect = s.agent_commands()
@@ -139,7 +142,7 @@ def test_a_privileged_or_socket_mount_is_refused(tmp_path):
 def test_removal(tmp_path):
     assert spec(tmp_path, internet=True).remove_commands() == [
         ["rm", "-f", "umcodex-1a2b3c4d-agent", "umcodex-1a2b3c4d-gateway"],
-        ["network", "rm", "umcodex-1a2b3c4d-int", "umcodex-1a2b3c4d-net"],
+        ["network", "rm", "umcodex-1a2b3c4d-int", "umcodex-1a2b3c4d-gw", "umcodex-1a2b3c4d-net"],
     ]
 
 
@@ -213,3 +216,65 @@ def test_docker_errors_never_include_the_arguments():
     with pytest.raises(DockerError) as raised:
         Docker(failing)("run", "--env-file", "/secret/place", "image")
     assert "/secret/place" not in str(raised.value) and "boom" in str(raised.value)
+
+
+def test_the_gateway_has_a_bridge_of_its_own(tmp_path):
+    run, _ = spec(tmp_path, internet=False).gateway_commands()
+    assert run[run.index("--network") + 1] == "umcodex-1a2b3c4d-gw"
+
+
+def test_the_agent_has_a_pids_limit_and_removes_itself(tmp_path):
+    [run] = spec(tmp_path, internet=False).agent_commands()
+    assert run[run.index("--pids-limit") + 1] == "4096"
+    assert "--rm" in run and "--memory" not in run
+
+
+def test_the_watchdog_wraps_the_images_own_command(tmp_path):
+    image_cmd = ("sh", "-c", 'cp /etc/um-codex/AGENTS.md "$CODEX_HOME/AGENTS.md" && exec sleep infinity')
+    s = LaunchSpec(**{**spec(tmp_path, internet=False).__dict__, "image_cmd": image_cmd})
+    [run] = s.agent_commands()
+    image_at = run.index("um-codex-agent:dev")
+    assert run[image_at + 1 : image_at + 3] == ["sh", "-c"]
+    assert run[image_at + 3] == WATCHDOG and run[image_at + 4] == "sh"
+    assert tuple(run[image_at + 5 :]) == image_cmd
+    assert "http://gateway/v1/_umcodex/alive" in WATCHDOG and "$UMCODEX_TOKEN" in WATCHDOG
+    # Without a known command, the image runs as it is.
+    [plain] = spec(tmp_path, internet=False).agent_commands()
+    assert plain[-1] == "um-codex-agent:dev"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--cap-add=SYS_ADMIN"],
+        ["--cap-add", "NET_ADMIN"],
+        ["--cap-add=all"],
+        ["--privileged=true"],
+        ["--network=host"],
+        ["--pid", "host"],
+        ["-v", "/var/run/docker.sock:/var/run/docker.sock"],
+    ],
+)
+def test_the_guard_refuses_host_access_in_any_spelling(extra):
+    with pytest.raises(DockerError):
+        _guarded(["run", "-d", *extra, "image"])
+
+
+def test_the_watchdog_ends_when_the_relay_is_gone(tmp_path):
+    """The loop itself, run by a local shell with a curl that always fails."""
+    import shutil
+
+    if shutil.which("sh") is None:
+        pytest.skip("no sh")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "curl").write_text("#!/bin/sh\nexit 7\n")
+    (fake_bin / "curl").chmod(0o755)
+    (fake_bin / "sleep").write_text("#!/bin/sh\nexit 0\n")  # no waiting in a test
+    (fake_bin / "sleep").chmod(0o755)
+    done = subprocess.run(
+        ["sh", "-c", WATCHDOG, "sh", "true"],
+        env={"PATH": f"{fake_bin}:/usr/bin:/bin", "UMCODEX_TOKEN": "umc_x"},
+        timeout=20,
+    )
+    assert done.returncode == 0

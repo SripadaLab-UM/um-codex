@@ -80,7 +80,8 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      image that's already present is skipped. Nonzero on failure, and a plain
      message when Docker isn't running.
    - `um-codex doctor [--quiet] [--fix-docker]`: `--quiet` prints nothing but
-     one line on failure; `--fix-docker` opens Docker Desktop and, on
+     one line on failure (a Toolkit that can't be reached, off the VPN, is a
+     note there, not a failure; a refused key is a failure); `--fix-docker` opens Docker Desktop and, on
      Windows, offers the logon-right fix (as the launch does).
    - `um-codex uninstall [--delete-data|--keep-data] [--yes]`: removes, by
      label only, UM-Codex's containers and networks (and, with
@@ -118,7 +119,9 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
   The gateway reaches it at `host.docker.internal` (with
   `--add-host host.docker.internal:host-gateway`).
 - **Gateway:** DataLab's nginx container and config, minus `/mcp`. Codex's
-  `base_url` is `http://gateway/v1`.
+  `base_url` is `http://gateway/v1`. It's on the launch's internal network
+  and on a bridge of its own (`umcodex-<id>-gw`, not Docker's shared default
+  bridge), through which it reaches the relay.
 - **Agent:** this repo's image, `ghcr.io/sripadalab-um/um-codex-agent`, pinned
   by digest. It's a non-root `agent` user with passwordless sudo inside the
   container, has no Docker socket, isn't privileged, and adds no host
@@ -129,12 +132,24 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
     Model calls still go through the gateway.
   - In both, its `host.docker.internal` points nowhere (`192.0.2.1`), so the
     easy way to the computer's own localhost services is closed.
-    A known limit, found in the M1 live check: with the internet on, the
-    container can still reach programs that listen only on this computer's
-    localhost through Docker Desktop's host address (by IP). The relay there
-    still needs the launch token, and the key is never reachable, but other
-    local programs are; the summary screen says so. With the internet off,
-    the host address isn't reachable.
+    A known limit, found in the M1 live check and kept by decision: with the
+    internet on, the container can still reach programs that listen only on
+    this computer's localhost through Docker Desktop's host address (by IP),
+    and computers on the person's local network and VPN ranges. The relay
+    there still needs the launch token, and the key is never reachable, but
+    other local programs and machines are; the summary screen says so. With
+    the internet off, none of these is reachable.
+  - `--pids-limit 4096`. No `--memory`: Docker Desktop's own VM limit (set in
+    its settings) already bounds it, and a fixed number here would be either
+    above that limit (meaningless) or below what some work needs.
+  - **A watchdog ends a forgotten launch.** The agent's main process runs the
+    image's own command in the background and asks the relay, through the
+    gateway with the launch token, every 15 s whether the launch is still on
+    (`/v1/_umcodex/alive`, answered by the relay, never sent upstream). After
+    four failures in a row (about a minute) it exits, and the container
+    (started with `--rm`) removes itself. This covers `um-codex` being killed
+    in any way, on any OS, without depending on signals. The gateway and
+    networks left behind hold nothing and go at the next launch, by label.
   - Docker's default capabilities stay (so `sudo` works); nothing is added.
 - **Codex home is a named Docker volume per setup** (`umcodex-home-<setup>`),
   not a host folder. DataLab learned that Codex makes Linux symlinks there,
@@ -168,6 +183,12 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
     `resume`). On Windows, the same works in Windows Terminal and
     PowerShell.
   - Ctrl-C belongs to Codex.
+  - A closed terminal still cleans up: SIGHUP and SIGTERM on a Mac, and on
+    Windows a console handler (`SetConsoleCtrlHandler`, for Close, Logoff and
+    Shutdown) that removes the containers with short Docker timeouts within
+    the ~5 s Windows allows. The watchdog is the backstop.
+  - On Windows without a console (Git Bash's mintty), `um-codex` says to use
+    Windows Terminal or PowerShell instead.
   - When `docker exec` ends, `um-codex` removes the containers and network.
     If `um-codex` itself is killed, the next launch removes leftovers by label.
     Each launch holds an OS file lock (`launches/<id>/lock`) while it runs, so
@@ -186,6 +207,10 @@ injection) read it and send it out. Here the key is:
 - in the Keychain or Credential Manager (DataLab's `credentials.py`);
 - read only by the relay on the host;
 - never in a container, an environment variable, a file, a log or diagnostics.
+  The relay drops a request ID or error code that holds the key before
+  logging it, and HTTP libraries' debug logs (which print headers) are kept
+  off. `UMCODEX_UPSTREAM` (tests only) may point only at http://127.0.0.1,
+  localhost or [::1], so it can't send the key to another host.
 
 The container has only a per-launch token, which works only through that
 launch's gateway, and only while the launch lasts.
@@ -196,18 +221,40 @@ These come from DataLab's mount checks (`sessions/mounts.py` and
 `inputs.private_place`), loosened to fit this purpose:
 - Paths must be absolute and must exist. They're resolved, so a symlink
   can't widen what's shared.
-- Refused for every access:
-  - the home folder itself, `/`, or a whole drive (`C:\`);
-  - UM-Codex's own data folder;
-  - the key store, `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.codex`;
+- Refused for every access (the folder itself, anything inside it, and
+  anything holding it):
+  - the home folder itself, `/`, or a whole drive or volume (`C:\`);
+  - UM-Codex's own data folder, and its program files (`<data folder>/app`);
+  - the key store, `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.codex`,
+    `~/.gnupg`, `~/.kube`, `~/.azure`, `~/.config/gcloud`;
+  - places whose programs this computer runs later: `~/.local/bin` (where
+    the `um-codex` command is), `~/.local/share/uv`, `~/Library/LaunchAgents`,
+    the Windows Startup folder;
   - Docker's own folders.
 
   The person gets a plain reason. Subfolders of home are fine.
+- Folders are compared by name and by identity on disk (device and inode,
+  for the folder and each folder it's in), so another name for the same
+  folder (a Mac firmlink such as `/System/Volumes/Data/Users/...`, Windows'
+  `\\localhost\C$\` or `\\?\` forms) is caught too.
+- Each launch checks a saved setup's folders again. If one now resolves
+  somewhere else (a link was put in its path, perhaps by an earlier launch
+  in a write folder), a loud warning names both places and the person must
+  type `yes`; otherwise they change the setup.
 - The same folder can't be both read-only and writable. A read-only folder
   inside a writable one stays readable through the writable mount; the
   summary screen says so.
-- Windows: paths are converted for Docker the way DataLab does. Folders on a
-  network drive get a warning, not a refusal.
+- Windows: paths aren't converted. `--mount` takes the Windows path as it is
+  (CSV-quoted), as DataLab's mounts do. Folders on a network drive get a
+  warning, not a refusal.
+- **Code in a write folder can run on the host later.** Codex can write
+  anything in the write folders, including files the person's own tools run
+  on this computer: git hooks (`.git/hooks`), a `Makefile`, `package.json`
+  scripts, `.envrc` (direnv), `.vscode/tasks.json`, a virtual environment's
+  scripts. Running those tools there afterwards runs what Codex (or a prompt
+  injection it read) put there. UM-Codex doesn't scan for this; the README
+  says so, and the protected places above keep the obvious autostart and
+  program folders out.
 
 ## Code layout
 

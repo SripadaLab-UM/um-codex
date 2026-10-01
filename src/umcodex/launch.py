@@ -17,6 +17,7 @@ tell a live launch from a leftover one.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import secrets
@@ -24,6 +25,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import IO
@@ -120,13 +122,42 @@ def launch_is_live(data: Path, launch_id: str) -> bool:
     return True
 
 
-def remove_stale_launch_folders(data: Path) -> None:
+# A launch folder younger than this is never removed as stale: its launch may
+# have made the folder and not yet taken its lock.
+STALE_AFTER_SECONDS = 120
+
+
+def remove_stale_launch_folders(data: Path, now: float | None = None) -> None:
     folder = launches_dir(data)
     if not folder.is_dir():
         return
+    now = time.time() if now is None else now
     for entry in folder.iterdir():
-        if entry.is_dir() and not launch_is_live(data, entry.name):
+        try:
+            young = now - entry.lstat().st_mtime < STALE_AFTER_SECONDS
+        except OSError:
+            continue
+        if entry.is_dir() and not entry.is_symlink() and not young and not launch_is_live(data, entry.name):
             shutil.rmtree(entry, ignore_errors=True)
+
+
+def image_command(docker: Docker, image: str) -> tuple[str, ...]:
+    """The agent image's own command, for the watchdog to run (containers.WATCHDOG).
+    Empty when the image has an entrypoint or its command can't be read: then
+    it runs as it is, without the watchdog."""
+    code, out, _ = docker.status(
+        "image", "inspect", "--format", "{{json .Config.Entrypoint}}|{{json .Config.Cmd}}", image
+    )
+    if code != 0 or "|" not in out:
+        return ()
+    entrypoint, cmd = out.strip().split("|", 1)
+    try:
+        parsed = json.loads(cmd)
+    except ValueError:
+        return ()
+    if json.loads(entrypoint or "null") or not isinstance(parsed, list) or not parsed:
+        return ()
+    return tuple(str(part) for part in parsed)
 
 
 # --- The launch's files -----------------------------------------------------
@@ -230,7 +261,15 @@ def run(
         raise RuntimeError("couldn't lock the launch folder")
     server: RelayServer | None = None
     spec: LaunchSpec | None = None
-    restore = _exit_on_hangup()
+
+    def remove_containers(timeout: float = 120) -> None:
+        if spec is None:
+            return
+        for command in spec.remove_commands():
+            with contextlib.suppress(DockerError):
+                docker(*command, check=False, timeout=timeout)
+
+    restore = _exit_on_hangup(remove_containers)
     try:
         token = new_token()
         server = RelayServer(Relay(token, api_key, upstream_base_url(toolkit.BASE_URL)))
@@ -248,6 +287,7 @@ def run(
             launch_note=folder / "launch.md",
             gateway_conf=folder / "gateway.conf",
             env_file=folder / "agent.env",
+            image_cmd=image_command(docker, image),
         )
         # Files the Linux containers read get Unix line ends, on Windows too.
         _write(spec.gateway_conf, render_gateway_conf(port))
@@ -286,10 +326,7 @@ def run(
             done = run_exec(command)
         return done.returncode
     finally:
-        if spec is not None:
-            for command in spec.remove_commands():
-                with contextlib.suppress(DockerError):
-                    docker(*command, check=False)
+        remove_containers()
         if server is not None:
             server.stop()
         restore()
@@ -309,10 +346,37 @@ def _codex_owns_ctrl_c():
         signal.signal(signal.SIGINT, previous)
 
 
-def _exit_on_hangup() -> Callable[[], None]:
-    """A closed terminal window (SIGHUP) or SIGTERM still cleans up."""
+# Windows console events that end the process: Close, Logoff, Shutdown.
+_WINDOWS_ENDING_EVENTS = (2, 5, 6)
+
+
+def on_console_event(event: int, cleanup: Callable[[float], None]) -> bool:
+    """Windows: the terminal window is being closed (or the person logs off).
+    Windows ends the process about 5 s after this handler starts, so the
+    containers are removed with short Docker timeouts. The agent's watchdog
+    (containers.WATCHDOG) is the backstop if even that doesn't finish."""
+    if event not in _WINDOWS_ENDING_EVENTS:
+        return False  # Ctrl-C and Ctrl-Break: Codex's
+    with contextlib.suppress(Exception):
+        cleanup(2)
+    return True
+
+
+def _exit_on_hangup(cleanup: Callable[[float], None]) -> Callable[[], None]:
+    """A closed terminal window (SIGHUP, or Windows' console Close event) or
+    SIGTERM still cleans up."""
     if sys.platform == "win32":
-        return lambda: None
+        import ctypes
+
+        handler_type = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)  # type: ignore[attr-defined]
+        handler = handler_type(lambda event: 1 if on_console_event(event, cleanup) else 0)
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        kernel32.SetConsoleCtrlHandler(handler, True)
+
+        def restore_windows() -> None:
+            kernel32.SetConsoleCtrlHandler(handler, False)  # also keeps `handler` alive until then
+
+        return restore_windows
 
     def leave(signum, frame):
         raise SystemExit(128 + signum)

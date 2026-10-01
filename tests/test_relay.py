@@ -57,6 +57,11 @@ class Upstream:
             # A careless server that puts the credential in its answer.
             auth = request.headers.get("authorization", "")
             return web.json_response({"error": {"message": f"bad key {auth}"}}, status=401)
+        if self.mode == "echo-id":
+            auth = request.headers.get("authorization", "")[7:]
+            return web.json_response(
+                {"error": {"code": auth, "message": "bad"}}, status=400, headers={"x-request-id": auth}
+            )
         if self.mode == "echo-stream":
             response = web.StreamResponse(headers={"content-type": "text/event-stream"})
             await response.prepare(request)
@@ -267,3 +272,75 @@ def test_the_server_listens_only_on_localhost_and_stops():
         server.stop()
     with pytest.raises(httpx.ConnectError):
         httpx.get(f"http://127.0.0.1:{port}/relay/v1/models", timeout=2)
+
+
+def test_a_key_in_a_request_id_or_error_code_is_never_logged(caplog):
+    """The review's reproduction: a server that returns the key as its request
+    ID (or error code) must not get it into the log."""
+    caplog.set_level(logging.DEBUG)
+    headers = httpx.Headers({"x-request-id": FAKE_KEY, "retry-after": "0"})
+    body = json.dumps({"error": {"code": FAKE_KEY, "type": FAKE_KEY[:20]}}).encode()
+    trouble = relay_module.classify(503, headers, body, key=FAKE_KEY)
+    assert trouble.request_id is None and trouble.code is None
+    assert FAKE_KEY not in json.dumps(trouble.record())
+    ordinary = relay_module.classify(503, httpx.Headers({"x-request-id": "req_1"}), b"", key=FAKE_KEY)
+    assert ordinary.request_id == "req_1"
+
+    async def test(client: httpx.AsyncClient, upstream: Upstream) -> None:
+        upstream.mode = "echo-id"
+        response = await client.post("/relay/v1/responses", content=codex_request(), headers=bearer(TOKEN))
+        assert response.status_code == 400
+        assert FAKE_KEY not in response.text and FAKE_KEY not in json.dumps(dict(response.headers))
+
+    run_with_relay(test)
+    assert FAKE_KEY not in caplog.text
+
+
+def test_a_long_error_body_is_scrubbed_before_its_cut():
+    async def main() -> None:
+        key = FAKE_KEY.encode()
+        limit = 100
+        body = b"x" * (limit - 10) + key + b"tail"  # the cut falls inside the key
+
+        class Upstream:
+            async def aiter_bytes(self):
+                yield body
+
+            async def aclose(self):
+                pass
+
+        out = await relay_module._read_bounded(Upstream(), FAKE_KEY, limit)  # type: ignore[arg-type]
+        assert len(out) <= limit
+        assert not any(key[:n] in out for n in range(8, len(key) + 1))
+
+    asyncio.run(main())
+
+
+def test_the_watchdogs_alive_check_needs_the_token_and_never_goes_upstream():
+    async def test(client: httpx.AsyncClient, upstream: Upstream) -> None:
+        assert (await client.get("/relay/v1/_umcodex/alive")).status_code == 401
+        assert (await client.get("/relay/v1/_umcodex/alive", headers=bearer(TOKEN))).status_code == 204
+
+    assert run_with_relay(test).seen == []
+
+
+@pytest.mark.parametrize(
+    ("value", "allowed"),
+    [
+        ("http://127.0.0.1:5000/v1", True),
+        ("http://localhost:5000/v1", True),
+        ("http://[::1]:5000/v1", True),
+        ("https://api.example.org/v1", False),
+        ("http://192.0.2.10:5000/v1", False),
+        ("http://127.0.0.1.example.org/v1", False),
+        ("http://user@127.0.0.1:5000/v1", False),
+        ("https://127.0.0.1:5000/v1", False),
+    ],
+)
+def test_the_upstream_override_is_only_a_local_stub(monkeypatch, value, allowed):
+    monkeypatch.setenv("UMCODEX_UPSTREAM", value)
+    if allowed:
+        assert relay_module.upstream_base_url("https://default/v1") == value
+    else:
+        with pytest.raises(relay_module.UpstreamRefused):
+            relay_module.upstream_base_url("https://default/v1")

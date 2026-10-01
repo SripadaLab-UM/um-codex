@@ -147,6 +147,30 @@ def check(setup: Setup, *, own_data: Path | None = None) -> folders.Layout:
     return folders.plan(working, writes, reads)
 
 
+def moved(setup: Setup, *, own_data: Path | None = None) -> list[tuple[str, Path]]:
+    """Saved folders that now resolve somewhere else: (as saved, where it goes now).
+
+    A folder the agent could write may have had a part of its path swapped for
+    a link (by an earlier launch, a sync, or an unpacked archive), which would
+    point the next launch at a different folder."""
+    changed = []
+    for saved in (setup.working, *setup.writes, *setup.reads):
+        now = folders.check_folder(saved, own_data=own_data).path
+        if not folders.same(Path(saved), now):
+            changed.append((saved, now))
+    return changed
+
+
+def resolved(setup: Setup, layout: folders.Layout) -> Setup:
+    """The setup with each folder as it resolves now (what was approved)."""
+    return replace(
+        setup,
+        working=str(layout.working),
+        writes=tuple(str(host) for host, _ in layout.writes),
+        reads=tuple(str(host) for host, _ in layout.reads),
+    )
+
+
 # --- Asking -----------------------------------------------------------------
 
 
@@ -302,7 +326,8 @@ def summary(setup: Setup, layout: folders.Layout) -> list[str]:
         lines += [
             "Internet: ON. Codex can reach the whole internet, so it could send anything it",
             "can read above to anywhere. It can also reach programs on this computer that",
-            "listen only locally (for example a local web app or database).",
+            "listen only locally (for example a local web app or database), and computers",
+            "on your local network and VPN.",
         ]
     else:
         lines.append("Internet: off. Codex can reach only the model.")
@@ -362,6 +387,22 @@ def choose(
                 ask, say, start_folder=start_folder, models=models(), existing=setup, own_data=own_data
             )
             continue
+        changed = moved(setup, own_data=own_data)
+        if changed:
+            say("")
+            say("WARNING: a saved folder now leads somewhere else (a link was put in its path):")
+            for saved, now in changed:
+                say(f"  {saved}")
+                say(f"    now goes to {now}")
+            say("This can happen when something (an earlier launch, a sync, an unpacked archive)")
+            say("replaced part of the path with a link. Check that this is what you want.")
+            answer = ask("Type yes to use them where they go now, or press Enter to change the setup: ")
+            if answer.strip().lower() != "yes":
+                setup = ask_setup(
+                    ask, say, start_folder=start_folder, models=models(), existing=setup, own_data=own_data
+                )
+                continue
+            setup = resolved(setup, layout)
         for line in summary(setup, layout):
             say(line)
         answer = ask("Start? [Y/n, or e to change the setup] ").strip().lower()
