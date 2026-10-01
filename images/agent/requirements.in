@@ -1,0 +1,36 @@
+# Python packages in the agent image, adapted from IHS DataLab's
+# images/agent/requirements.in at 6b6fdca (same packages).
+# Pinned versions are in requirements.txt:
+#   uv pip compile requirements.in --universal --python-version 3.12 -o requirements.txt
+altair
+duckdb
+matplotlib
+numpy
+openpyxl
+pandas
+pdfplumber
+plotly
+plotnine
+polars
+pyarrow
+pypdf
+python-docx
+python-pptx
+scikit-learn
+scipy
+seaborn
+statsmodels
+tabulate
+vl-convert-python
+xlrd
+xlsxwriter
+# Figures
+colorcet
+scienceplots
+# Web and general scripting
+beautifulsoup4
+httpx
+lxml
+requests
+pytest
+ruff
