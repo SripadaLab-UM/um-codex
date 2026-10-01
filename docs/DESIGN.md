@@ -62,6 +62,10 @@ It follows ITS's "Codex Setup" articles for the model settings (the
       - **More folders to write** (read, write, delete). Optional; any number.
       - **Folders to read only.** Optional; any number.
       - **Internet: on or off.** Off means Codex can reach only the model.
+      - **Browser tool** (asked only with the internet on): "Browser tool on?
+        (Codex can open websites in a fresh browser inside the sandbox; it has
+        none of your logins.) [y/N]". When it's on: "Approve each browser
+        action? [Y/n]". See M2b below.
       - **Model:** default `gpt-5.6-terra`; the list comes from the Toolkit.
       - **Approvals:** "Codex runs commands without asking" (default), or
         "ask me before commands".
@@ -181,8 +185,12 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
     the launch token;
   - `sandbox_mode = "danger-full-access"`, because the container is the
     sandbox;
-  - `approval_policy`: `never` (the default) or `on-request`, from the setup;
+  - `approval_policy`: `never` (the default) or `on-request`, from the setup
+    (with "never" and browser actions to approve, a `granular` policy that
+    behaves as "never" for commands: see M2b);
   - `web_search = "live"` when the internet is on, otherwise `disabled`;
+  - with the browser tool on (internet on only), `[mcp_servers.browser]`
+    (see M2b);
   - analytics, feedback and update checks off.
 
   Codex's other features stay at Codex's defaults: full power.
@@ -192,7 +200,8 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
   Codex to read `/etc/um-codex/launch.md` first. That's a plain-text note
   written by the host for each launch and mounted read-only as one file: the
   setup's name, `/work` and each `/mnt/write/*` and `/mnt/read/*` with its
-  folder on the computer, internet on or off, and the approval policy.
+  folder on the computer, internet on or off, the browser tool (on or off,
+  and whether each action is approved), and the approval policy.
 - **The launch's files** (`config.toml`, `launch.md`, `gateway.conf`, and the
   env file with the token, deleted once the agent has started) are in
   `launches/<id>/` in UM-Codex's data folder, never in a folder the agent can
@@ -305,7 +314,8 @@ um-codex/
     update.py               `um-codex update`, rollback, the daily notice (from DataLab's updater, simpler)
     gateway.conf            (from DataLab, /mcp removed)
     images.json             pinned image digests (stamped by the release)
-  images/agent/             Dockerfile, AGENTS.md (from DataLab's image: Codex, Node, Python, R; DataLab skills removed; build tools added)
+  images/agent/             Dockerfile, AGENTS.md (from DataLab's image: Codex, Node, Python, R; DataLab skills removed; build tools added),
+                            smoke.sh, browser-check.js (the browser tool's MCP check)
   installer/macos/          install.sh, uninstall.sh (from DataLab, trimmed)
   installer/windows/        install.ps1, uninstall.ps1 (from DataLab, trimmed)
   branding/                 build.py and the mark (from DataLab's "1b": Block M, spark, "codex" under it)
@@ -352,24 +362,109 @@ modes, rigor, and the frontend.
    - uninstallers;
    - CI with Windows tests and the installer parse and run steps;
    - the agent image built and pushed to GHCR.
-3. **M2b, browser tool (asked for on 2026-10-01):**
-   - A launch question, offered only when the internet is on: "Browser
-     tool: on/off" (default off). It's saved with the setup.
-   - When it's on, Codex gets the Playwright MCP server as a tool. It runs
-     inside the agent container with headless Chromium, so the browser is a
-     fresh one with none of the person's logins. It can open pages, click,
-     fill in forms, read pages and take screenshots, and screenshots are
-     saved under /work if the person asks.
-   - Each browser action needs the person's approval by default (MCP
-     `default_tools_approval_mode = "prompt"`). The setup can change that to
-     "don't ask".
-   - The image gets Chromium and the pinned Playwright MCP package. Its size
-     cost is reported in the PR.
+3. **M2b, browser tool (asked for on 2026-10-01; built on branch
+   `m2b-browser`, 2026-10-01):**
+   - **The question.** Only when the internet is on: "Browser tool on?
+     (Codex can open websites in a fresh browser inside the sandbox; it has
+     none of your logins.) [y/N]" (default off), then, when it's on,
+     "Approve each browser action? [Y/n]" (default yes). Both are saved with
+     the setup (`browser`, `browser_asks`); setups saved before M2b have
+     neither, which means off. Turning the internet off turns the browser
+     tool off. The summary screen says "Browser tool: ON. Codex can open
+     websites in a fresh browser inside the sandbox; it has none of your
+     logins." and whether it asks before each browser action (or "Browser
+     tool: off." with the internet on). launch.md says the same to Codex,
+     and the image's AGENTS.md has a short section on the tool.
+   - **The image.** `@playwright/mcp` 0.0.83 (pinned; its Playwright is
+     1.64.0-alpha-1790635538000), installed with Codex in the Node stage
+     and linked as `/usr/local/bin/playwright-mcp`. Its Playwright's own
+     Chromium build (Chrome for Testing 155.0.8059.12, revision 1247,
+     downloaded by `playwright-mcp install-browser --with-deps --no-shell
+     chromium`) is in `/opt/ms-playwright` (`PLAYWRIGHT_BROWSERS_PATH`),
+     readable by everyone, with the system libraries it needs. Playwright
+     publishes this build for linux amd64 and arm64 (Ubuntu 24.04, the
+     Rocker base). The headless shell isn't installed: the full build runs
+     in Chrome's new headless mode. `smoke.sh` starts the server with the
+     launch's arguments, as `agent`, and reads a heading from a `data:` page
+     (`um-codex-browser-check`, which speaks MCP over stdio: `initialize`,
+     `tools/list`, `browser_navigate`, `browser_snapshot`).
+   - **Size:** about +600 MB unpacked (577 MB for Chromium and its
+     libraries, 19 MB for the MCP package): `docker image ls` showed 4.7 GB
+     before and 5.56 GB after on arm64, and the content to download went
+     from 1.2 GB to 1.46 GB.
+   - **config.toml** (only with the internet and the tool on):
+     ```toml
+     [mcp_servers.browser]
+     command = "/usr/local/bin/playwright-mcp"
+     args = ["--headless", "--browser", "chromium", "--isolated", "--output-dir", "/tmp/um-codex-browser"]
+     cwd = "/work"
+     env = { PLAYWRIGHT_BROWSERS_PATH = "/opt/ms-playwright" }
+     startup_timeout_sec = 60
+     tool_timeout_sec = 180
+     default_tools_approval_mode = "prompt"   # "approve" when the person said no
+     ```
+     - It runs inside the agent container over stdio, as `agent`, with no
+       display. `--browser chromium` is Playwright's Chromium (the default
+       is Google Chrome, which isn't installed and has no arm64 Linux
+       build); Playwright runs it without Chrome's own sandbox, as it does
+       for this build on Linux. `--isolated` keeps the profile in memory:
+       a fresh browser each launch, nothing kept.
+     - Files the server names itself (page snapshots, unnamed screenshots)
+       go to `/tmp/um-codex-browser` in the container and go with it. A
+       screenshot Codex saves under a file name is saved relative to `/work`
+       (the server's working folder), so only when the person asks for one.
+     - `env`: Codex starts MCP servers with only a few variables (HOME,
+       PATH, LANG and the like; `rmcp-client`'s `DEFAULT_ENV_VARS`), so the
+       browsers' folder is passed on. The launch token isn't.
+     - Approval values in Codex 0.157.1 (`AppToolApproval`): `auto`,
+       `prompt`, `writes`, `approve`. **With `approval_policy = "never"`
+       and full access, Codex approves every MCP call without asking and
+       turns down MCP approval prompts** (`codex-mcp`'s
+       `mcp_permission_prompt_is_auto_approved`, and
+       `request_mcp_tool_user_approval`). So when the setup runs commands
+       without asking but wants each browser action approved, the policy is
+       `approval_policy = { granular = { sandbox_approval = false, rules =
+       false, mcp_elicitations = true, request_permissions = false,
+       skill_approval = false } }`: command and rule prompts are turned down
+       without asking, as under "never" (with full access, no command needs
+       one), and browser actions are asked about. With "ask me before
+       commands" (`on-request`) the policy stays as it is.
+   - **Live check** (this Mac, arm64, Docker Desktop; `um-codex-agent:dev`
+     rebuilt from this branch; containers, networks and volume made from
+     `LaunchSpec` as a launch makes them, then removed; the model was a stub
+     inside the container, so no key was used):
+     - MCP over stdio with Codex's small environment: `initialize`
+       (Playwright 1.64.0-alpha-1790635538000) and `tools/list` (25 tools)
+       answered; with the internet on, `browser_navigate` to
+       https://example.com returned "Page Title: Example Domain" and
+       `browser_snapshot` returned the live page (its `link "Learn more"`;
+       example.com as served on 2026-10-01 has no heading element, only that
+       title, a paragraph and the link); with the internet off, navigate
+       failed with `net::ERR_NAME_NOT_RESOLVED`.
+     - Codex 0.157.1 started the server from the rendered config.toml and
+       offered its tools to the model (namespace `mcp__browser`, 25 tools).
+       `codex exec` ran a `browser_navigate` the stub asked for and sent the
+       page back to the model (`codex exec` always runs with approval
+       "never", so it never asks).
+     - Codex's terminal interface, driven in a pseudo-terminal inside the
+       container, with the stub asking for `browser_navigate`:
+       - "approve each action" with "runs commands without asking" (the
+         granular policy): Codex showed `Allow the browser MCP server to
+         run tool "browser_navigate"? url: https://example.com` with
+         "1. Allow" and "2. Cancel"; Enter ran it and the page (title
+         "Example Domain") went back to the model; Esc sent back "user
+         cancelled MCP tool call" and the browser didn't run;
+       - the same policy didn't ask before a shell command (it ran);
+       - "approve each action" with "ask me before commands" asked the same
+         way;
+       - "don't ask" (`approve`) ran the browser action without asking.
+     - The same arguments built in an amd64 image (Rocker base, emulated on
+       this Mac) loaded the smoke test's page too.
+   - Not checked: the acceptance sentence with the real model ("open
+     example.com and tell me its heading" after approval) needs a Toolkit
+     key, so it's for the maintainer's first launch with the tool on.
    - It never controls the person's own computer, desktop or browser: the
      container can't reach them (see the end of this document).
-   - Acceptance: with internet on and the tool on, "open example.com and
-     tell me its heading" works after approval. With internet off, the
-     question isn't offered.
 4. **M3, releases:** signed releases (Ed25519, the `release` environment,
    the tag rules) and `um-codex update` with rollback. Built on branch
    `m3-release` (2026-10-01); docs/RELEASING.md has the details and the
@@ -445,9 +540,32 @@ modes, rigor, and the frontend.
   a rebuild can pick up different dependency files; the release's provenance
   and digest pin what was actually built.
 - Controlling the person's own computer (desktop, apps, their browser): out
-  of scope. The container can't reach the host by design. Codex's own
-  `browser_use`, `in_app_browser` and `computer_use` features target its
-  desktop and IDE apps. Whether any of them works in the terminal Codex
-  inside the container is to be checked with the pinned version, and noted
-  here. A virtual desktop inside the container that the person watches
-  (noVNC) is a possible later option, if the group needs GUI apps.
+  of scope. The container can't reach the host by design. A virtual desktop
+  inside the container that the person watches (noVNC) is a possible later
+  option, if the group needs GUI apps.
+- Codex's own `browser_use`, `in_app_browser` and `computer_use` (checked on
+  2026-10-01 with the pinned 0.157.1, in the agent container):
+  - `codex features list` shows `browser_use`, `browser_use_external`,
+    `browser_use_full_cdp_access`, `computer_use` and `in_app_browser` as
+    "stable" and on.
+  - In Codex's source at the `rust-v0.157.1` tag, each of these is
+    documented as a "Requirements-only gate" for the desktop apps ("Allow
+    Browser Use agent integration in desktop apps", "Allow the in-app
+    browser pane in desktop apps", "Allow Codex Computer Use"), and nothing
+    in the CLI or the terminal interface checks them (only a config test
+    reads them). The `[browser_use]` and `[computer_use]` config tables are
+    origin and app allow/deny lists for those integrations.
+  - In the live check, the terminal Codex in the container offered the
+    model no browser or computer tool of its own: the tools in its request
+    were `exec_command`, `write_stdin`, the MCP resource tools,
+    `request_user_input`, `view_image`, the multi-agent and goal tools,
+    `web_search`, and the `mcp__browser` tools when the browser tool was on.
+  - So in the terminal Codex inside the container they do nothing; the M2b
+    browser tool (Playwright's MCP server) is what gives it a browser. Not
+    checked: Codex's desktop app, and whether the Browser Use plugin could
+    be installed in the terminal Codex (it would need a browser to drive,
+    which the container has only through Playwright).
+- The browser tool's size: the headless shell instead of the full Chromium
+  build would be smaller, but it's Chrome's old headless mode, which more
+  sites treat as a bot. Kept the full build; revisit if the image size
+  matters more.

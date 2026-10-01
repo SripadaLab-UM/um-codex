@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import tomllib
+from pathlib import Path
 
 import pytest
 
-from umcodex.codex_config import TOKEN_ENV, render
+from umcodex.codex_config import BROWSER_ARGS, BROWSER_COMMAND, BROWSER_ENV, TOKEN_ENV, render
 
 
 def parsed(**options) -> dict:
@@ -60,3 +61,68 @@ def test_no_key_or_auth_file_settings():
 
 def test_a_strange_model_name_stays_one_toml_string():
     assert parsed(model='gpt"x\nmodel_provider = "openai')["model_provider"] == "toolkit"
+
+
+# --- The browser tool (M2b) -----------------------------------------------------
+
+
+def test_no_browser_tool_unless_asked():
+    assert "mcp_servers" not in parsed(internet=True)
+    assert "mcp_servers" not in parsed(internet=True, browser=False)
+
+
+def test_no_browser_tool_without_the_internet():
+    config = parsed(internet=False, browser=True)
+    assert "mcp_servers" not in config
+    assert config["approval_policy"] == "never"
+
+
+def test_the_browser_tool_runs_in_the_container_over_stdio():
+    server = parsed(internet=True, browser=True)["mcp_servers"]["browser"]
+    assert server["command"] == "/usr/local/bin/playwright-mcp"
+    assert server["args"] == [
+        "--headless", "--browser", "chromium", "--isolated", "--output-dir", "/tmp/um-codex-browser"
+    ]  # fmt: skip
+    assert server["cwd"] == "/work"
+    # Codex passes MCP servers only a few environment variables.
+    assert server["env"] == {"PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright"}
+    assert server["startup_timeout_sec"] >= 30 and server["tool_timeout_sec"] >= 60
+    assert "url" not in server  # stdio, not HTTP
+
+
+@pytest.mark.parametrize(
+    ("approvals", "asks", "mode", "policy"),
+    [
+        # Codex 0.157.1 auto-approves MCP calls under "never" with full access,
+        # so asking needs the granular policy (commands still never asked).
+        (
+            "never",
+            True,
+            "prompt",
+            {
+                "granular": {
+                    "sandbox_approval": False,
+                    "rules": False,
+                    "mcp_elicitations": True,
+                    "request_permissions": False,
+                    "skill_approval": False,
+                }
+            },
+        ),
+        ("never", False, "approve", "never"),
+        ("on-request", True, "prompt", "on-request"),
+        ("on-request", False, "approve", "on-request"),
+    ],
+)
+def test_browser_approvals(approvals, asks, mode, policy):
+    config = parsed(internet=True, browser=True, browser_asks=asks, approvals=approvals)
+    assert config["mcp_servers"]["browser"]["default_tools_approval_mode"] == mode
+    assert config["approval_policy"] == policy
+
+
+def test_the_smoke_test_starts_the_browser_the_same_way():
+    smoke = (Path(__file__).parents[1] / "images" / "agent" / "smoke.sh").read_text()
+    assert " ".join(["--", BROWSER_COMMAND, *BROWSER_ARGS]) in smoke
+    dockerfile = (Path(__file__).parents[1] / "images" / "agent" / "Dockerfile").read_text()
+    for name, value in BROWSER_ENV.items():
+        assert f"ENV {name}={value}" in dockerfile

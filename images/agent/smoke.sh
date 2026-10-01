@@ -35,6 +35,14 @@ for tool in git ssh curl wget jq rg fd tree less ps make gcc g++ vi nano unzip p
     check "$tool on PATH" command -v "$tool"
 done
 
+# The browser tool, started the way codex_config.py starts it (keep the two
+# argument lists the same; a test checks), opening a page with no network.
+check "playwright-mcp" playwright-mcp --version
+check "Chromium in the shared folder" sh -c 'ls -d "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux*/chrome'
+check "browser tool opens a page headless" um-codex-browser-check \
+    'data:text/html,<title>smoke</title><h1>UM-Codex browser smoke</h1>' 'heading "UM-Codex browser smoke"' \
+    -- /usr/local/bin/playwright-mcp --headless --browser chromium --isolated --output-dir /tmp/um-codex-browser
+
 check "python is the venv" test "$(command -v python)" = /opt/venv/bin/python
 check "pip in the venv" python -m pip --version
 check "venv owned by agent" test -w /opt/venv/lib

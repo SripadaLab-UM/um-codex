@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tomllib
 from pathlib import Path
 
 import httpx
@@ -52,6 +53,16 @@ def test_launch_note(folders):
     assert "on-request" in note
     off = launch_note(*make_setup(folders))  # type: ignore[arg-type]
     assert "Off: only the model is reachable" in off and "never: commands run without asking" in off
+
+
+def test_launch_note_mentions_the_browser_tool(folders):
+    on = launch_note(*make_setup(folders, internet=True, browser=True))  # type: ignore[arg-type]
+    assert "## Browser tool" in on and "`browser` MCP tools" in on
+    assert "none of the person's logins" in on and "approves each browser action" in on
+    unasked = launch_note(*make_setup(folders, internet=True, browser=True, browser_asks=False))  # type: ignore[arg-type]
+    assert "run without asking" in unasked
+    for setup_layout in (make_setup(folders, internet=True), make_setup(folders, browser=True)):
+        assert "Off: there's no browser tool" in launch_note(*setup_layout)  # type: ignore[arg-type]
 
 
 def test_a_live_launch_holds_its_lock(data_folder):
@@ -168,6 +179,15 @@ def test_internet_on_connects_the_bridge_network(folders, data_folder):
     assert any(c[-2].endswith("-net") and c[-1].endswith("-agent") for c in connects)
     removal = [c for c in fake.calls if c[1:3] == ["network", "rm"]][-1]
     assert any(n.endswith("-net") for n in removal) and any(n.endswith("-int") for n in removal)
+
+
+def test_the_browser_tool_is_in_the_launchs_config(folders, data_folder):
+    _, fake, _, _ = run_launch(folders, data_folder, internet=True, browser=True)
+    config = tomllib.loads(fake.files["config.toml"])
+    assert config["mcp_servers"]["browser"]["default_tools_approval_mode"] == "prompt"
+    assert "browser" in fake.files["launch.md"].split("## Browser tool")[1]
+    _, fake, _, _ = run_launch(folders, data_folder, internet=True)
+    assert "mcp_servers" not in tomllib.loads(fake.files["config.toml"])
 
 
 def test_a_missing_agent_image_stops_before_anything_starts(folders, data_folder):

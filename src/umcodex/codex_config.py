@@ -21,11 +21,55 @@ GATEWAY_BASE_URL = "http://gateway/v1"
 
 Approvals = Literal["never", "on-request"]
 
+# The browser tool (M2b): Playwright's MCP server, installed in the agent
+# image (images/agent/Dockerfile), started by Codex over stdio inside the
+# container. Headless Chromium (Playwright's own build, so amd64 and arm64
+# both work), a profile kept in memory only (`--isolated`: no logins, nothing
+# kept), and automatically named files (unnamed screenshots, logs) in the
+# container's /tmp. A screenshot saved under a name Codex chooses goes in
+# /work (the server's working folder), so only when the person asks for one.
+# images/agent/smoke.sh starts it with the same arguments (a test checks).
+BROWSER_SERVER = "browser"
+BROWSER_COMMAND = "/usr/local/bin/playwright-mcp"
+BROWSER_ARGS = (
+    "--headless",
+    "--browser", "chromium",
+    "--isolated",
+    "--output-dir", "/tmp/um-codex-browser",
+)  # fmt: skip
+# Codex starts MCP servers with only a few environment variables (HOME, PATH
+# and the like), so where the image put Chromium is passed on here.
+BROWSER_ENV = {"PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright"}
 
-def render(*, model: str, approvals: Approvals, internet: bool) -> str:
-    """The config.toml text for one launch."""
+# Codex 0.157.1 auto-approves every MCP tool call when `approval_policy` is
+# "never" with full access (codex-mcp's mcp_permission_prompt_is_auto_approved),
+# and turns down MCP approval prompts under "never". So when the person wants
+# to approve each browser action but lets Codex run commands without asking,
+# the policy is "granular": command (sandbox) and rule prompts are turned down
+# without asking, exactly as under "never", and MCP approval prompts are shown.
+GRANULAR_NEVER_BUT_MCP = (
+    "{ granular = { sandbox_approval = false, rules = false, mcp_elicitations = true, "
+    "request_permissions = false, skill_approval = false } }"
+)
+
+
+def render(
+    *,
+    model: str,
+    approvals: Approvals,
+    internet: bool,
+    browser: bool = False,
+    browser_asks: bool = True,
+) -> str:
+    """The config.toml text for one launch. The browser tool needs the
+    internet: with the internet off it's never added."""
     if approvals not in ("never", "on-request"):
         raise ValueError(f"unknown approval policy {approvals!r}")
+    browser = browser and internet
+    if browser and browser_asks and approvals == "never":
+        approval_policy = GRANULAR_NEVER_BUT_MCP
+    else:
+        approval_policy = f'"{approvals}"'
     lines = [
         "# Written by UM-Codex for one launch, and mounted read-only. Do not edit.",
         f"model = {json.dumps(model)}",  # a JSON string is a valid TOML string
@@ -33,7 +77,7 @@ def render(*, model: str, approvals: Approvals, internet: bool) -> str:
         # The container is the sandbox; Codex's own Linux sandbox needs
         # privileges the container doesn't have.
         'sandbox_mode = "danger-full-access"',
-        f'approval_policy = "{approvals}"',
+        f"approval_policy = {approval_policy}",
         f'web_search = "{"live" if internet else "disabled"}"',
         "check_for_update_on_startup = false",
         "",
@@ -57,4 +101,19 @@ def render(*, model: str, approvals: Approvals, internet: bool) -> str:
         "stream_max_retries = 2",
         "stream_idle_timeout_ms = 300000",
     ]
+    if browser:
+        lines += [
+            "",
+            f"[mcp_servers.{BROWSER_SERVER}]",
+            f"command = {json.dumps(BROWSER_COMMAND)}",
+            f"args = {json.dumps(list(BROWSER_ARGS))}",
+            'cwd = "/work"',
+            "env = { " + ", ".join(f"{k} = {json.dumps(v)}" for k, v in BROWSER_ENV.items()) + " }",
+            # The first start launches Chromium; a slow page can take a while.
+            "startup_timeout_sec = 60",
+            "tool_timeout_sec = 180",
+            # "prompt": the person approves every browser action. "approve":
+            # none are asked about.
+            f'default_tools_approval_mode = "{"prompt" if browser_asks else "approve"}"',
+        ]
     return "\n".join(lines) + "\n"

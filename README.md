@@ -76,10 +76,20 @@ You need [uv](https://docs.astral.sh/uv/), Docker Desktop (running), and git.
    ```
 
 `um-codex` asks which folder Codex works in, which more folders it can
-write, which it can only read, whether the internet is on, the model and the
-approvals, then shows a summary and asks "Start?". When you quit Codex, the
+write, which it can only read, whether the internet is on (and, if it is,
+whether the browser tool is on), the model and the approvals, then shows a summary and asks "Start?". When you quit Codex, the
 container is removed; the setup's Codex history is kept (`codex resume`
 works next time, or `uv run um-codex launch -- resume`).
+
+With the internet on, `um-codex` also asks about the **browser tool**
+(default off): "Browser tool on? (Codex can open websites in a fresh browser
+inside the sandbox; it has none of your logins.)". When it's on, Codex can
+open pages, click, fill in forms, read pages and take screenshots, in a
+headless Chromium inside the container. It's a fresh browser each time, not
+yours: it has none of your logins or cookies, and it can't see or control
+your own browser or desktop. By default you approve each browser action
+("Approve each browser action? [Y/n]"). A screenshot is saved in your working
+folder only when you ask for one.
 
 A word of care: Codex can change anything in the folders you let it write,
 including files your own tools run later on your computer (git hooks, a
