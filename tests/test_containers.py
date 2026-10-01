@@ -144,7 +144,7 @@ def test_a_privileged_or_socket_mount_is_refused(tmp_path):
 
 def test_removal(tmp_path):
     assert spec(tmp_path, internet=True).remove_commands() == [
-        ["rm", "-f", "umcodex-1a2b3c4d-agent", "umcodex-1a2b3c4d-gateway"],
+        ["rm", "-f", "umcodex-1a2b3c4d-agent", "umcodex-1a2b3c4d-gateway", "umcodex-1a2b3c4d-agent-models"],
         ["network", "rm", "umcodex-1a2b3c4d-int", "umcodex-1a2b3c4d-gw", "umcodex-1a2b3c4d-net"],
     ]
 
@@ -288,7 +288,7 @@ def test_the_watchdog_ends_when_the_relay_is_gone(tmp_path):
 
 def test_the_bundled_model_list_comes_from_a_throwaway_container(tmp_path):
     run = spec(tmp_path, internet=True).bundled_models_command()
-    assert run[:2] == ["run", "--rm"]
+    assert run[:4] == ["run", "--rm", "--name", "umcodex-1a2b3c4d-agent-models"]
     assert labels_of(run) == EXPECTED_LABELS
     assert run[run.index("--network") + 1] == "none"
     assert "--mount" not in run and "--env-file" not in run

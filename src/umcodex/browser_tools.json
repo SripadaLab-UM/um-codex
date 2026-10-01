@@ -1,0 +1,80 @@
+{
+  "_comment": "The browser tool's MCP tools: @playwright/mcp 0.0.83 (images/agent/Dockerfile), from its tools/list in the agent image (2026-10-01). read_only is the tool's readOnlyHint. codex_config.py pins each tool's approval from this list; tests/test_codex_config.py checks it against the image when Docker and the image are there.",
+  "tools": {
+    "browser_click": {
+      "read_only": false
+    },
+    "browser_close": {
+      "read_only": false
+    },
+    "browser_console_messages": {
+      "read_only": true
+    },
+    "browser_drag": {
+      "read_only": false
+    },
+    "browser_drop": {
+      "read_only": false
+    },
+    "browser_emulate_media": {
+      "read_only": false
+    },
+    "browser_evaluate": {
+      "read_only": false
+    },
+    "browser_file_upload": {
+      "read_only": false
+    },
+    "browser_fill_form": {
+      "read_only": false
+    },
+    "browser_find": {
+      "read_only": true
+    },
+    "browser_handle_dialog": {
+      "read_only": false
+    },
+    "browser_hover": {
+      "read_only": false
+    },
+    "browser_navigate": {
+      "read_only": false
+    },
+    "browser_navigate_back": {
+      "read_only": false
+    },
+    "browser_network_request": {
+      "read_only": true
+    },
+    "browser_network_requests": {
+      "read_only": true
+    },
+    "browser_press_key": {
+      "read_only": false
+    },
+    "browser_resize": {
+      "read_only": false
+    },
+    "browser_run_code_unsafe": {
+      "read_only": false
+    },
+    "browser_select_option": {
+      "read_only": false
+    },
+    "browser_snapshot": {
+      "read_only": true
+    },
+    "browser_tabs": {
+      "read_only": false
+    },
+    "browser_take_screenshot": {
+      "read_only": true
+    },
+    "browser_type": {
+      "read_only": false
+    },
+    "browser_wait_for": {
+      "read_only": true
+    }
+  }
+}

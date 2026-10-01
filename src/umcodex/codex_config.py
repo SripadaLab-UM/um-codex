@@ -14,15 +14,20 @@ them there on Linux; checked in the rust-v0.157.1 source
   launch's token, never the Toolkit key. Also the model catalog, update
   checks and feedback (exact values), the allowed sandbox modes and, with the
   internet off, web search. Codex refuses to save these keys elsewhere.
-- `managed_config.toml`: a config layer above all the others: the person's
+- `managed_config.toml`: the top config *layer*, above the person's
   `config.toml`, profiles and `-c` flags (on Unix, Codex's "legacy managed
   config"). The model, approvals, sandbox mode, web search, analytics,
-  /work's trust and the browser tool. The TUI can still change the model or
-  reasoning for a session (`/model`) and saves that in the person's
-  config.toml, where this layer overrides the model at the next launch: the
-  setup decides it. Codex also turns this file's `approval_policy` and
-  `sandbox_mode` into requirements (the only values allowed, besides
-  read-only).
+  /work's trust and the browser tool. It isn't above everything: options
+  passed as overrides rather than config (`codex -m/-s/-a`, the app server's
+  thread/start parameters, the TUI's `/model` for a session) still win for
+  the model, which is harmless (every model goes through the gateway). The
+  TUI saves a `/model` choice in the person's config.toml, where this layer
+  overrides it at the next launch: the setup decides the model. Codex also
+  turns this file's `approval_policy` and `sandbox_mode` into requirements
+  (the only values allowed, besides read-only), so an override asking for
+  another sandbox mode (`-s workspace-write`, say) is refused and Codex falls
+  back to read-only, where every command fails (Codex's own sandbox can't run
+  in the container): a broken session, not a way out.
 - `models.json`: the model catalog (`model_catalog_json`): see model_catalog.
 
 `$CODEX_HOME/config.toml`, in the setup's volume, is the person's own
@@ -41,6 +46,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from importlib import resources
 from typing import Literal
 
 TOKEN_ENV = "UMCODEX_TOKEN"
@@ -79,6 +85,14 @@ BROWSER_ARGS = (
 # Codex starts MCP servers with only a few environment variables (HOME, PATH
 # and the like), so where the image put Chromium is passed on here.
 BROWSER_ENV = {"PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright"}
+
+
+def browser_tools() -> dict[str, bool]:
+    """The browser server's tools and whether each is read-only
+    (browser_tools.json: the pinned @playwright/mcp's tools/list)."""
+    text = resources.files(__package__).joinpath("browser_tools.json").read_text(encoding="utf-8")
+    return {name: bool(tool["read_only"]) for name, tool in json.loads(text)["tools"].items()}
+
 
 # Codex 0.157.1 auto-approves every MCP tool call when `approval_policy` is
 # "never" with full access (codex-mcp's mcp_permission_prompt_is_auto_approved),
@@ -135,12 +149,12 @@ def render(
         "[analytics]",
         "enabled = false",
         "",
-        # The two "switch to a newer model" prompts Codex 0.157.1 knows by name
-        # (tui/src/app/startup_prompts.rs). The others come from a catalog's
-        # upgrade offers, and UM-Codex's catalog has none (model_catalog).
-        "[notice]",
-        "hide_gpt5_1_migration_prompt = true",
-        '"hide_gpt-5.1-codex-max_migration_prompt" = true',
+        # "Switch to a newer model" prompts come from a catalog's upgrade
+        # offers (UM-Codex's catalog has none: model_catalog), except one that
+        # Codex 0.157.1 has built in (tui/src/app/startup_prompts.rs): marked
+        # as already seen, so a setup on gpt-5.4-mini isn't offered gpt-6-luna.
+        "[notice.model_migrations]",
+        '"gpt-5.4-mini" = "gpt-6-luna"',
         "",
         '[projects."/work"]',
         'trust_level = "trusted"',
@@ -162,6 +176,19 @@ def render(
             # run unasked. "approve": none are asked about.
             f'default_tools_approval_mode = "{"writes" if browser_asks else "approve"}"',
         ]
+        # Each tool's approval, pinned here too: a per-tool `approval_mode` in
+        # config.toml (which the agent can write) would beat the default
+        # above (core/src/mcp_tool_call.rs), and this layer beats config.toml.
+        # A soft control only: with full access in the container the agent
+        # could drive Chromium itself with shell commands.
+        for name, read_only in browser_tools().items():
+            mode = "approve" if read_only or not browser_asks else "prompt"
+            lines += ["", f"[mcp_servers.{BROWSER_SERVER}.tools.{name}]", f'approval_mode = "{mode}"']
+        # Code-mode-only models (gpt-5.6-*, gpt-6-*) otherwise get MCP tools
+        # nested in their `exec` tool, deferred and unlisted; this keeps the
+        # browser's tools direct, top-level model tools
+        # (features/src/feature_configs.rs: direct_only_tool_namespaces).
+        lines += ["", "[features.code_mode]", f'direct_only_tool_namespaces = ["mcp__{BROWSER_SERVER}"]']
     return "\n".join(lines) + "\n"
 
 
@@ -181,7 +208,10 @@ def render_requirements(*, internet: bool, catalog: bool = True, app: bool = Fal
         'model_provider = "toolkit"',
         *([f'model_catalog_json = "{CODEX_ETC}/{CATALOG_FILE}"'] if catalog else []),
         "check_for_update_on_startup = false",
-        # Codex requires read-only among the allowed modes.
+        # Defence in depth: managed_config.toml's sandbox_mode already limits
+        # the modes the same way (Codex turns it into a requirement); this
+        # keeps the limit if that legacy file is ever dropped. Codex requires
+        # read-only among the allowed modes.
         'allowed_sandbox_modes = ["read-only", "danger-full-access"]',
         # With the internet off, no web search either (the Toolkit would search
         # for Codex); with it on, the person's choice.

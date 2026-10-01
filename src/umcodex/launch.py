@@ -24,6 +24,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -322,11 +323,8 @@ def write_codex_settings(
     folder mounted read-only at /etc/codex. `app`: the launch is opened in
     the Codex app (the token comes from a command; no ChatGPT sign-in)."""
     spec.codex_etc.mkdir()
-    try:
-        code, bundled, _ = docker.status(*spec.bundled_models_command(), timeout=120)
-    except DockerError:
-        code, bundled = 1, ""
-    catalog = codex_config.model_catalog(bundled if code == 0 else "", served_models(api_key), setup.model)
+    bundled = bundled_models(docker, spec)
+    catalog = codex_config.model_catalog(bundled, served_models(api_key), setup.model)
     if catalog is None:
         log.warning("launch %s: no model catalog (Codex's model list couldn't be read)", spec.launch_id)
     else:
@@ -346,6 +344,32 @@ def write_codex_settings(
             app=app,
         ),
     )
+
+
+_IMAGE_ID = re.compile(r"sha256:([0-9a-f]{64})")
+
+
+def bundled_models(docker: Docker, spec: LaunchSpec) -> str:
+    """The agent image's Codex model list (`codex debug models --bundled`), ""
+    if it can't be read. Kept in the data folder per image ID, so it's run
+    once per image."""
+    code, out, _ = docker.status("image", "inspect", "--format", "{{.Id}}", spec.agent_image)
+    image_id = _IMAGE_ID.fullmatch(out.strip()) if code == 0 else None
+    cache = data_dir() / "codex-models" / f"{image_id.group(1)}.json" if image_id else None
+    if cache is not None and cache.is_file():
+        with contextlib.suppress(OSError):
+            return cache.read_text(encoding="utf-8")
+    try:
+        code, out, _ = docker.status(*spec.bundled_models_command(), timeout=120)
+    except DockerError:
+        return ""
+    if code != 0:
+        return ""
+    if cache is not None and codex_config.model_catalog(out, (), "") is not None:
+        with contextlib.suppress(OSError):
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            _write(cache, out)
+    return out
 
 
 def served_models(api_key: Callable[[], str]) -> list[str]:
