@@ -4,12 +4,16 @@
 # Desktop step is DataLab's, unchanged but for names; docs/INSTALLING.md lists
 # every DataLab finding kept here, so later changes keep them.
 #
-#   sh install.sh --package <umcodex .whl file or URL> [--requirements <requirements.txt or URL>]
+#   sh install.sh [--package <umcodex .whl file or URL>] [--requirements <requirements.txt or URL>]
 #                 [--install-docker] [--replace-key]
 #
-# or, straight from the web:
+# or, straight from the web (a release's copy installs that release):
 #
-#   curl -q -fsSL <url>/install-macos.sh | sh -s -- --package <url> --requirements <url>
+#   curl -q -fsSL https://github.com/SripadaLab-UM/um-codex/releases/latest/download/install-macos.sh | sh
+#
+# A release's install-macos.sh has RELEASE_BASE and RELEASE_WHEEL below filled
+# in (scripts/build-release.sh), so it needs no --package. This copy, in the
+# repository, does.
 #
 # requirements.txt comes with each release: every dependency pinned by version
 # and hash, and the package by its checksum. It's found automatically if it
@@ -63,6 +67,11 @@ UV_VERSION=0.12.19
 # whether it's there is looked up, never the key itself.
 KEY_SERVICE=UM-Codex
 KEY_ACCOUNT=toolkit-api-key
+# The release this copy of the installer belongs to. The release fills these
+# in (scripts/build-release.sh); in the repository they're empty, and
+# --package is needed.
+RELEASE_BASE=""
+RELEASE_WHEEL=""
 PACKAGE=""
 REQUIREMENTS=""
 INSTALL_DOCKER="ask"
@@ -78,6 +87,10 @@ while [ $# -gt 0 ]; do
     *) echo "Unknown option: $1"; exit 2 ;;
   esac
 done
+if [ -z "$PACKAGE" ] && [ -n "$RELEASE_BASE" ] && [ -n "$RELEASE_WHEEL" ]; then
+  PACKAGE="$RELEASE_BASE/$RELEASE_WHEEL"
+  if [ -z "$REQUIREMENTS" ]; then REQUIREMENTS="$RELEASE_BASE/requirements.txt"; fi
+fi
 if [ -z "$PACKAGE" ]; then
   echo "Usage: sh install.sh --package <umcodex .whl file or URL> [--requirements <file or URL>]"
   exit 2

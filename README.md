@@ -5,16 +5,29 @@ your Mac or Windows computer. At each launch you choose which folders Codex
 can read, which it can change, and whether it can use the internet; then
 Codex opens in your terminal.
 
-Status: under construction (see [docs/DESIGN.md](docs/DESIGN.md)).
+Status: under construction (see [docs/DESIGN.md](docs/DESIGN.md)). The
+install commands below work once the first release is published
+([docs/RELEASING.md](docs/RELEASING.md)).
 
 You need a U-M GPT Toolkit API key for Codex (see ITS's "Codex Setup"
 articles for how to get one). The key is kept in your computer's keychain and
 never goes into the container.
 
+## Install on a Mac
+
+In Terminal (Applications > Utilities > Terminal), paste:
+
+```sh
+curl -q -fsSL https://github.com/SripadaLab-UM/um-codex/releases/latest/download/install-macos.sh | sh
+```
+
+It sets up Docker Desktop (if it isn't there, it asks first), UM-Codex and
+your key, then adds the UM-Codex app to Applications and a shortcut to the
+Desktop. Details: [docs/INSTALLING.md](docs/INSTALLING.md).
+
 ## Install on Windows
 
-Once releases are published (M3), in Windows PowerShell (Start menu >
-Windows PowerShell), paste:
+In Windows PowerShell (Start menu > Windows PowerShell), paste:
 
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/SripadaLab-UM/um-codex/releases/latest/download/install-windows.ps1 | iex
@@ -23,6 +36,23 @@ Windows PowerShell), paste:
 It sets up Docker Desktop (with one administrator step and a restart, if
 needed), UM-Codex and your key, then adds UM-Codex to the Start menu and the
 Desktop. Details: [docs/INSTALLING.md](docs/INSTALLING.md).
+
+## Updating
+
+```sh
+um-codex update
+```
+
+It installs the newest release beside the one you have (only a release
+signed with UM-Codex's release key, and never while Codex is open), pulls
+its containers, and switches to it; the version before is kept.
+`um-codex update --rollback` switches back. Once a day, starting UM-Codex
+says when a new version is out. Running the install command again also
+installs the newest release.
+
+To remove UM-Codex: `uninstall-macos.sh` or `uninstall-windows.ps1` from the
+same release page (they ask before removing your saved setups and Codex
+history).
 
 ## Run from source (M1, a Mac with Docker Desktop)
 
@@ -63,6 +93,12 @@ For development only:
 - `UMCODEX_DATA_DIR` puts UM-Codex's data folder somewhere else;
 - `UMCODEX_AGENT_IMAGE` uses another agent image;
 - `UMCODEX_UPSTREAM` sends model requests to a local stub instead of the
-  Toolkit (UM-Codex says so when it's set).
+  Toolkit (UM-Codex says so when it's set);
+- `UMCODEX_INSTALL_DIR` and `UMCODEX_RELEASES_API` (tests) point
+  `um-codex update` at another program folder and at a stand-in for
+  GitHub's API on this computer; `UMCODEX_NO_UPDATE_CHECK=1` turns off the
+  daily check at launch.
+
+Releases, signing and `um-codex update`: [docs/RELEASING.md](docs/RELEASING.md).
 
 Checks: `uv run ruff check . && uv run pyright && uv run pytest -q`.

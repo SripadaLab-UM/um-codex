@@ -15,11 +15,17 @@ files:
 sh install-macos.sh --package umcodex-<version>-py3-none-any.whl
 ```
 
-or straight from the web (the release's URLs):
+or straight from the web, with no arguments:
 
 ```sh
-curl -q -fsSL <url>/install-macos.sh | sh -s -- --package <url>/umcodex-<version>-py3-none-any.whl --requirements <url>/requirements.txt
+curl -q -fsSL https://github.com/SripadaLab-UM/um-codex/releases/latest/download/install-macos.sh | sh
 ```
+
+A release's `install-macos.sh` has `RELEASE_BASE` (that release's download
+address) and `RELEASE_WHEEL` (its package's name) filled in by
+`scripts/build-release.sh`, so without `--package` it installs its own
+release's package and `requirements.txt`. In the repository both are empty,
+and `--package` is needed. (Options go after `sh -s --`.)
 
 Options: `--requirements <file or URL>` (found automatically beside a local
 package), `--install-docker` (answers yes to installing Docker Desktop),
@@ -193,9 +199,9 @@ Commits are in github.com/SripadaLab-UM/ihs-datalab.
 Profiles (real/practice) and the second app and icon, the lab settings file,
 the database password, the GitHub sign-in and repos sync, the practice
 (Oracle) database, Git, and the removal of an older `uv tool install` copy.
-Pruning old versions belongs to `um-codex update` (M3), as it did to
-DataLab's updater; the installer keeps `current` and `previous` and doesn't
-remove others.
+Pruning old versions belongs to `um-codex update`, as it did to DataLab's
+updater (docs/RELEASING.md); the installer keeps `current` and `previous`
+and doesn't remove others.
 
 Not a DataLab installer finding: the quarantine flag. DataLab sets it on
 exported files (`exports.py`), not in its installer. The app here is written
@@ -214,7 +220,11 @@ DataLab's at `6b6fdca`. They run from a file or straight from the web:
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Package <whl or https URL>] [-Requirements <file or URL>] [-ReplaceKey] [-AdminAccessUrl <https page>] [-Yes]
 ```
 
-The first part turns on TLS 1.2 (3072) for that window: Windows PowerShell
+A release's `install-windows.ps1` has `$ReleaseBase` and `$ReleaseWheel`
+filled in by `scripts/build-release.sh`, so with no `-Package` (and no
+package beside it) it installs its own release's package and
+`requirements.txt`; CI checks that path. The first part turns on TLS 1.2
+(3072) for that window: Windows PowerShell
 5.1 may not offer it by itself, and GitHub refuses older versions, so a bare
 `irm` can fail before the installer has even started (which turns it on for
 its own downloads).
@@ -344,5 +354,7 @@ job parses both under Windows PowerShell 5.1 and runs the parts that can run
 there. Still unverified until a Windows acceptance run: the full install and
 restart, the elevated part, the VM fix and Docker restart against a real
 Docker Desktop, the masked prompt in conhost and Windows Terminal, the
-Windows Terminal shortcut, the PATH change reaching new terminals, and the
-uninstaller with UM-Codex installed.
+Windows Terminal shortcut, the PATH change reaching new terminals, the
+uninstaller with UM-Codex installed, and `um-codex update` and `--rollback`
+(the copy of the new launcher into `bin`, renaming the running one aside),
+which are unit-tested only.

@@ -6,7 +6,8 @@ and shorter. Kept up to date as features land. **Check each claim against
 the code and docs/DESIGN.md at the commit you record from**, and mark
 anything still in "Not built yet" as left out.
 
-Last updated: 2026-10-01 (M1 launcher built; installers in progress).
+Last updated: 2026-10-01 (M1 launcher, M2 installers and M3 releases and
+updates built; no release published yet, so record installs once one is).
 
 ## Who it's for
 
@@ -66,6 +67,16 @@ Later, when built: the browser tool (M2b) and "On this computer" mode (M4).
   credentials. It explains why in plain words.
 - **Checking things:** `um-codex doctor` checks Docker, the key and the
   Toolkit and says what's wrong.
+- **Installing:** one command pasted into Terminal (Mac) or Windows
+  PowerShell, from the README; it needs no options. It sets up Docker
+  Desktop if needed, UM-Codex, the key, and the app (Mac: Applications and a
+  Desktop shortcut; Windows: Start menu and Desktop).
+- **Updates:** `um-codex update` installs the newest version beside the one
+  you have, only if it's signed by the UM-Codex release key, and never
+  while Codex is open; the version before is kept, and
+  `um-codex update --rollback` goes back to it. About once a day, starting
+  UM-Codex prints one line when a new version is out. Updates don't touch
+  your folders, setups or Codex history.
 
 ## Careful wording
 
@@ -88,7 +99,6 @@ Later, when built: the browser tool (M2b) and "On this computer" mode (M4).
 
 ## Not built yet (leave out until it is)
 
-- Installers and uninstallers (in progress), signed releases and updates.
 - The browser tool inside the environment (M2b).
 - "On this computer" mode, the person's own browser, computer control
   (M4; computer control depends on a spike).

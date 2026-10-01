@@ -6,8 +6,8 @@ on:
   push:
     branches: [main]
   pull_request:
-  # The release workflow (M3) runs all of this on the tagged commit before it
-  # publishes anything.
+  # The release workflow (release.yml) runs all of this on the tagged commit
+  # before it publishes anything.
   workflow_call:
 
 permissions:
@@ -42,8 +42,11 @@ jobs:
       - run: uv sync
       - name: The scripts are valid sh and shellcheck-clean
         run: |
-          sh -n installer/macos/install.sh && sh -n installer/macos/uninstall.sh
-          uvx --from shellcheck-py shellcheck -s sh installer/macos/install.sh installer/macos/uninstall.sh
+          for script in installer/macos/install.sh installer/macos/uninstall.sh scripts/build-release.sh scripts/release-version.sh; do
+            sh -n "$script"
+          done
+          uvx --from shellcheck-py shellcheck -s sh installer/macos/install.sh installer/macos/uninstall.sh \
+            scripts/build-release.sh scripts/release-version.sh
       - name: Installer tests
         run: uv run pytest -q tests/test_macos_installer.py
 

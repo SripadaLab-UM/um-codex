@@ -499,6 +499,54 @@ def test_from_a_pipe_nothing_it_runs_reads_the_rest_of_the_script(machine):
     assert (machine["apps"] / "UM-Codex.app" / "Contents" / "MacOS" / "UM-Codex").is_file()
 
 
+# A release's files, "downloaded": curl copies the file of that name from the
+# release folder (UMCODEX_TEST_RELEASE), and logs each address.
+FAKE_RELEASE_CURL = """#!/bin/sh
+echo "curl $*" >> "$UMCODEX_TEST_CURLLOG"
+out=""
+url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *) url="$1"; shift ;;
+  esac
+done
+cp "$UMCODEX_TEST_RELEASE/$(basename "$url")" "$out"
+"""
+
+
+def test_a_releases_installer_needs_no_arguments(machine, tmp_path):
+    """A release's install-macos.sh has its own release's address and package
+    written in (scripts/build-release.sh), so
+    `curl .../releases/latest/download/install-macos.sh | sh` needs nothing more."""
+    package_files(machine, "0.1.0a3")
+    base = "https://github.com/SripadaLab-UM/um-codex/releases/download/v0.1.0-alpha.3"
+    lines = INSTALLER.read_text(encoding="utf-8").splitlines(keepends=True)
+    stamped = {
+        'RELEASE_BASE=""\n': f'RELEASE_BASE="{base}"\n',
+        'RELEASE_WHEEL=""\n': 'RELEASE_WHEEL="umcodex-0.1.0a3-py3-none-any.whl"\n',
+    }
+    assert sum(line in stamped for line in lines) == 2
+    executable(machine["tools"] / "curl", FAKE_RELEASE_CURL)
+    curls = tmp_path / "curls"
+    done = subprocess.run(
+        ["sh"],
+        input="".join(stamped.get(line, line) for line in lines),
+        env=environment(
+            machine, "0.1.0a3", UMCODEX_TEST_RELEASE=str(machine["packages"]), UMCODEX_TEST_CURLLOG=str(curls)
+        ),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        start_new_session=True,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (root(machine) / "versions" / "0.1.0a3" / ".complete").is_file()
+    fetched = [line.split()[-1] for line in curls.read_text().splitlines()]
+    assert fetched == [f"{base}/umcodex-0.1.0a3-py3-none-any.whl", f"{base}/requirements.txt"]
+    assert all("--proto =https" in line for line in curls.read_text().splitlines())
+
+
 # ------------------------------------------------------------------ the um-codex command
 
 
