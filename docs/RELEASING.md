@@ -140,6 +140,62 @@ Not automated: Authenticode-signing the Windows scripts (needs the lab's
 certificate), and an install, update and rollback on a real Windows machine.
 `release.yml` marks both as TODOs.
 
+## For the install site
+
+An install website (made separately, like DataLab's) only needs to link to
+a release's files. Nothing about UM-Codex is configured by the site: there's
+no lab settings file, and the installers carry everything they need.
+
+**Files in every release** (`scripts/build-release.sh`), all listed in
+`SHA256SUMS`, which is signed as `SHA256SUMS.sig`:
+
+| File | What it is |
+|---|---|
+| `install-macos.sh` | Mac installer, stamped with its own release's address: needs no arguments |
+| `install-windows.ps1` | Windows installer, stamped the same way |
+| `uninstall-macos.sh` | Mac uninstaller (asks "Uninstall UM-Codex? [y/N]" first) |
+| `uninstall-windows.ps1` | Windows uninstaller (the same question) |
+| `umcodex-<version>-py3-none-any.whl` | The package, with the images pinned by digest inside |
+| `requirements.txt` | Every dependency by version and hash, and the package by its checksum |
+| `images.json` | The agent and gateway images, by digest |
+| `SHA256SUMS`, `SHA256SUMS.sig` | Checksums of all of the above; the signature (Ed25519, key pinned in `src/umcodex/release_keys.py`) |
+
+**Addresses.** `latest` always points at the newest release by version (the
+`publish` job decides; see "Making a release"):
+
+- Newest: `https://github.com/SripadaLab-UM/um-codex/releases/latest/download/<file>`
+- One version: `https://github.com/SripadaLab-UM/um-codex/releases/download/v<version-tag>/<file>`
+
+Releases are immutable, so a version's files never change once published.
+
+**Commands to show people:**
+
+- Install on a Mac (Terminal):
+  `curl -fsSL https://github.com/SripadaLab-UM/um-codex/releases/latest/download/install-macos.sh | sh`
+- Install on Windows (PowerShell; the first part turns on TLS 1.2, which
+  older Windows PowerShell needs for GitHub):
+  `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/SripadaLab-UM/um-codex/releases/latest/download/install-windows.ps1 | iex`
+- Uninstall on a Mac:
+  `curl -fsSL https://github.com/SripadaLab-UM/um-codex/releases/latest/download/uninstall-macos.sh | sh`
+- Uninstall on Windows:
+  `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/SripadaLab-UM/um-codex/releases/latest/download/uninstall-windows.ps1 | iex`
+- Update an installed UM-Codex: `um-codex update` (it checks the signature itself).
+
+A site that offers the files for download instead can link to them directly,
+and show how to check one: `shasum -a 256 -c SHA256SUMS --ignore-missing`
+on a Mac, or compare `Get-FileHash <file>` with `SHA256SUMS` on Windows.
+
+**What people need before installing:** a U-M GPT Toolkit API key for Codex
+(ITS's "Codex Setup" articles say how to get one); a Mac with macOS 14 or
+newer, or Windows 10/11 with virtualization on; about 10 GB free for Docker
+Desktop and the images. On a Michigan Medicine Windows computer, the
+installer's one administrator step needs temporary administrator access
+first. The installer says so, and its `-AdminAccessUrl` option takes that
+page's address so it can name it. Options can't follow `| iex`; this form
+passes them:
+`[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; & ([scriptblock]::Create((irm https://github.com/SripadaLab-UM/um-codex/releases/latest/download/install-windows.ps1))) -AdminAccessUrl "https://<the page>"`
+(the public repo never names the page; the site can).
+
 ## Release signing
 
 `SHA256SUMS` is signed with the release key (Ed25519, `src/umcodex/signing.py`,
