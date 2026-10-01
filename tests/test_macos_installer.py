@@ -39,16 +39,43 @@ case "$*" in
     # Reads its input, as a command that asks something might.
     if [ -n "${UMCODEX_TEST_PULL_READS:-}" ]; then cat > /dev/null; fi
     exit "${UMCODEX_TEST_PULL:-0}" ;;
-  "key --from-stdin")
-    IFS= read -r key || true
-    printf '%s\\n' "$key" >> "$UMCODEX_TEST_KEYS"
-    # The exit code for this try: UMCODEX_TEST_KEY_EXITS="1 0" is 1, then 0.
-    tries=$(wc -l < "$UMCODEX_TEST_KEYS")
-    code=$(echo "${UMCODEX_TEST_KEY_EXITS:-0}" | awk -v n="$tries" '{ print ($n == "" ? 0 : $n) }')
-    exit "$code" ;;
-  uninstall*) exit "${UMCODEX_TEST_UNINSTALL:-0}" ;;
+  key)
+    # The real `um-codex key` (its masked prompt, its checks), with the
+    # Toolkit and the keychain stood in for (KEY_TOOL).
+    env >> "$UMCODEX_TEST_ENVLOG"
+    exec "$UMCODEX_TEST_PYTHON" "$UMCODEX_TEST_KEYTOOL" ;;
+  uninstall*)
+    if [ -t 0 ]; then echo "uninstall read a terminal" >> "$UMCODEX_TEST_LOG"; fi
+    exit "${UMCODEX_TEST_UNINSTALL:-0}" ;;
 esac
 exit 0
+"""
+
+# `um-codex key` as installed, with the Toolkit's check and the keychain
+# stood in for: each key the Toolkit is asked about goes in
+# UMCODEX_TEST_KEYS, and UMCODEX_TEST_KEY_EXITS="1 0" makes it refuse the
+# first and accept the second.
+KEY_TOOL = """
+import os
+import sys
+
+from umcodex import cli
+
+codes = os.environ.get("UMCODEX_TEST_KEY_EXITS", "0").split()
+record = os.environ["UMCODEX_TEST_KEYS"]
+
+
+def check_key(key, timeout=15):
+    with open(record, "a", encoding="utf-8") as file:
+        file.write(key + "\\n")
+    with open(record, encoding="utf-8") as file:
+        tries = len(file.read().splitlines())
+    return "refused" if tries <= len(codes) and codes[tries - 1] == "1" else "ok"
+
+
+cli.toolkit.check_key = check_key
+cli.credentials.save_api_key = lambda key: None
+sys.exit(cli._key_command())
 """
 
 FAKE_UV = """#!/bin/sh
@@ -122,6 +149,8 @@ def machine(tmp_path, system_bin) -> dict[str, Path]:
     )
     executable(tools / "curl", "#!/bin/sh\necho 'no downloads in tests' >&2\nexit 1\n")
     executable(tools / "uv", FAKE_UV)
+    keytool = tmp_path / "key_tool.py"
+    keytool.write_text(KEY_TOOL)
     fake = tmp_path / "fake-um-codex"
     fake.write_text(FAKE_UMCODEX)
     packages = tmp_path / "release"
@@ -140,6 +169,8 @@ def machine(tmp_path, system_bin) -> dict[str, Path]:
         "log": tmp_path / "log",
         "uvlog": tmp_path / "uvlog",
         "keys": tmp_path / "keys",
+        "envlog": tmp_path / "envlog",
+        "keytool": keytool,
         "securitylog": tmp_path / "securitylog",
     }
 
@@ -167,6 +198,10 @@ def environment(machine, version: str, **extra_env: str) -> dict[str, str]:
         "UMCODEX_TEST_KEYS": str(machine["keys"]),
         "UMCODEX_TEST_SECURITYLOG": str(machine["securitylog"]),
         "UMCODEX_TEST_PYTHON": sys.executable,
+        "UMCODEX_TEST_KEYTOOL": str(machine["keytool"]),
+        "UMCODEX_TEST_ENVLOG": str(machine["envlog"]),
+        # Nothing a test runs reaches this computer's keychain.
+        "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring",
         "UMCODEX_SYSTEM_APPLICATIONS": str(machine["apps"]),
     }
 
@@ -200,6 +235,20 @@ def install(
 QUESTIONS = (b"] ", b"API key: ")
 
 
+def waiting_after_trace(text: bytes) -> bool:
+    """Whether `text` has a question (not inside a trace line) followed only
+    by trace lines."""
+    found = max(((text.rfind(q), q) for q in QUESTIONS), default=(-1, b""))
+    at, question = found
+    if at < 0:
+        return False
+    line_start = text.rfind(b"\n", 0, at) + 1
+    if text[line_start:].startswith(b"+ "):
+        return False
+    rest = text[at + len(question) :].replace(b"\r", b"")
+    return all(line.startswith(b"+ ") for line in rest.split(b"\n") if line)
+
+
 def in_terminal(
     command: list[str], env: dict[str, str], answers: list[str], timeout: float = 60
 ) -> subprocess.CompletedProcess[str]:
@@ -218,7 +267,13 @@ def in_terminal(
             os._exit(127)
     pending = list(answers)
     out = b""
-    asked = 0  # questions answered so far
+    mark = 0  # where the output since the last answer starts
+
+    def answer() -> None:
+        nonlocal mark
+        os.write(fd, ((pending.pop(0) if pending else "") + "\n").encode())
+        mark = len(out)
+
     deadline = time.monotonic() + timeout
     while True:
         if time.monotonic() > deadline:
@@ -227,6 +282,10 @@ def in_terminal(
             raise AssertionError("installer didn't finish:\n" + out.decode(errors="replace"))
         ready, _, _ = select.select([fd], [], [], 0.2)
         if not ready:
+            # Quiet after a question that more output followed (sh's xtrace
+            # lines, "+ ..."): it's waiting for an answer all the same.
+            if waiting_after_trace(out[mark:]):
+                answer()
             continue
         try:
             chunk = os.read(fd, 4096)
@@ -235,10 +294,8 @@ def in_terminal(
         if not chunk:
             break
         out += chunk
-        questions = sum(out.count(question) for question in QUESTIONS)
-        while asked < questions and out.endswith(QUESTIONS):
-            os.write(fd, ((pending.pop(0) if pending else "") + "\n").encode())
-            asked += 1
+        if out[mark:].endswith(QUESTIONS):
+            answer()
     os.close(fd)
     _, status = os.waitpid(pid, 0)
     text = out.decode("utf-8", errors="replace").replace("\r\n", "\n")
@@ -274,7 +331,9 @@ def test_it_installs_a_version_in_its_own_folder_then_pulls_the_images(machine):
     launcher = machine["apps"] / "UM-Codex.app" / "Contents" / "MacOS" / "UM-Codex"
     text = launcher.read_text()
     assert f"exec osascript - '{app}/bin/um-codex' <<'OSA'" in text
-    assert "do script (quoted form of item 1 of argv)\n" in text
+    assert 'set command to (quoted form of item 1 of argv) & " launch --from-app"' in text
+    # One window: a Terminal that wasn't running uses the window it opens with.
+    assert "do script command in window 1" in text
 
 
 def test_installing_a_newer_version_keeps_the_one_before(machine):
@@ -480,7 +539,7 @@ def test_without_a_terminal_the_key_isnt_asked_for(machine):
     assert done.returncode == 0, done.stdout + done.stderr
     assert "no terminal to type the key in" in done.stdout
     assert "um-codex key" in done.stdout
-    assert keys(machine) == [] and "key --from-stdin" not in asked(machine)
+    assert keys(machine) == [] and "key" not in asked(machine)
 
 
 def test_the_key_is_masked_and_handed_to_um_codex_key(machine):
@@ -491,7 +550,8 @@ def test_the_key_is_masked_and_handed_to_um_codex_key(machine):
     assert "*" * len(THE_KEY) in done.stdout
     assert f"Received {len(THE_KEY)} characters." in done.stdout
     assert "Removed 2 spaces from the start." in done.stdout
-    assert "key --from-stdin" in asked(machine)
+    assert "key" in asked(machine)
+    assert "The Toolkit accepted the key." in done.stdout
     # Only whether a key is saved was looked up, under um-codex's names.
     [lookup] = machine["securitylog"].read_text().splitlines()
     assert lookup == "security find-generic-password -s UM-Codex -a toolkit-api-key"
@@ -506,17 +566,19 @@ def test_a_key_the_toolkit_refuses_is_asked_for_again(machine):
 
 
 def test_three_refused_keys_go_on_without_one(machine):
-    done = install(machine, "0.1.0a3", answers=["a", "b", "c", "n", "n"], UMCODEX_TEST_KEY_EXITS="1 1 1")
+    tried = ["wrong-key-1", "wrong-key-2", "wrong-key-3"]
+    done = install(machine, "0.1.0a3", answers=[*tried, "n", "n"], UMCODEX_TEST_KEY_EXITS="1 1 1")
     assert done.returncode == 0, done.stdout
-    assert keys(machine) == ["a", "b", "c"]
+    assert keys(machine) == tried
     assert "asks for it the first time it opens" in done.stdout
     assert "6/6 Launcher" in done.stdout
 
 
-def test_cancelled_in_um_codex_key_goes_on(machine):
-    done = install(machine, "0.1.0a3", answers=[THE_KEY, "n", "n"], UMCODEX_TEST_KEY_EXITS="2")
+def test_something_that_isnt_a_key_is_refused_and_asked_again(machine):
+    done = install(machine, "0.1.0a3", answers=["two words", THE_KEY, "n", "n"])
     assert done.returncode == 0, done.stdout
-    assert keys(machine) == [THE_KEY] and "6/6 Launcher" in done.stdout
+    assert "doesn't look like an API key" in done.stdout and "Try again" in done.stdout
+    assert keys(machine) == [THE_KEY]
 
 
 def test_pressing_enter_skips_the_key(machine):
@@ -529,7 +591,7 @@ def test_pressing_enter_skips_the_key(machine):
 def test_ctrl_c_at_the_key_prompt_skips_the_key(machine):
     done = install(machine, "0.1.0a3", answers=["\x03", "n", "n"])
     assert done.returncode == 0, done.stdout
-    assert keys(machine) == [] and "Cancelled: no key was saved." in done.stdout
+    assert keys(machine) == [] and "Cancelled: nothing was saved." in done.stdout
     assert "6/6 Launcher" in done.stdout
 
 
@@ -562,19 +624,31 @@ def test_replace_key_asks_even_with_one_saved(machine):
     assert not machine["securitylog"].exists()
 
 
-def test_the_key_never_goes_into_an_argument_or_the_environment():
+def test_the_key_never_passes_through_the_installers_shell(machine):
+    """Even with every command traced and every variable exported (sh's
+    xtrace and allexport, on from the start through SHELLOPTS), the key isn't
+    in the trace or in the environment of anything the installer runs: it's
+    only ever read by `um-codex key`, from the terminal."""
+    done = install(
+        machine,
+        "0.1.0a3",
+        answers=[THE_KEY, "n", "n"],
+        SHELLOPTS="xtrace:allexport",
+    )
+    assert done.returncode == 0, done.stdout
+    assert keys(machine) == [THE_KEY]  # it was typed, and reached `um-codex key`
+    assert "+ " in done.stdout and "um-codex key" in done.stdout  # the trace is on (it's in the terminal)
+    assert THE_KEY not in done.stdout  # not in the trace, nor shown
+    environment_seen = machine["envlog"].read_text()
+    assert THE_KEY not in environment_seen
+    assert "\nUMCODEX=" not in environment_seen and "\nROOT=" not in environment_seen  # set +a
+
+
+def test_the_key_is_read_from_the_terminal_by_um_codex_key():
     text = INSTALLER.read_text(encoding="utf-8")
-    assert 'printf \'%s\\n\' "$KEY" | "$UMCODEX" key --from-stdin' in text
-    # The only values KEY ever holds: nothing, or what the masked prompt gave.
-    assigned = {line.strip() for line in text.splitlines() if re.search(r"\bKEY=", line)}
-    assert assigned == {'KEY=""', 'KEY="$(ask_key)" || got=$?'}
-    used = [line.strip() for line in text.splitlines() if re.search(r"\$\{?KEY\b", line)]
-    assert used == [
-        'if [ "$got" -ne 0 ] || [ -z "$KEY" ]; then',
-        'printf \'%s\\n\' "$KEY" | "$UMCODEX" key --from-stdin || saved=$?',
-    ]
-    assert "export KEY" not in text
-    assert '"$TARGET/bin/python" -I -' in text  # isolated: the environment can't change it
+    assert '"$UMCODEX" key < /dev/tty || saved=$?' in text
+    assert "--from-stdin" not in text.split('step "5/6 Toolkit key"')[1]
+    assert re.search(r"\{\nset -eu\n(#[^\n]*\n)*set \+a\n", text)  # nothing set is exported
 
 
 # ------------------------------------------------------------------ the app, where people look
@@ -597,8 +671,9 @@ def open_app(machine, launcher: Path, tmp_path: Path) -> tuple[str, str]:
     assert args[0] == "-" and len(args) == 2  # the script on its input, the path its argument
     script = "\n".join(line for line in lines if not line.startswith("ARG:"))
     assert "on run argv" in script and 'tell application "Terminal"' in script
+    assert 'set command to (quoted form of item 1 of argv) & " launch --from-app"' in script
     quoted = "'" + args[1].replace("'", "'\\''") + "'"  # AppleScript's quoted form
-    return args[1], quoted
+    return args[1], f"{quoted} launch --from-app"
 
 
 def run_in_terminal(machine, command: str, tmp_path: Path) -> str:
@@ -809,6 +884,8 @@ def test_uninstall_stops_if_um_codex_uninstall_does(machine):
     install(machine, "0.1.0a3")
     done = uninstall(machine, UMCODEX_TEST_UNINSTALL="1")
     assert done.returncode == 1
+    assert "Nothing else was removed." in done.stdout
+    assert "has been removed" not in done.stdout
     assert (root(machine) / "current").is_file()
     assert (machine["apps"] / "UM-Codex.app").is_dir()
 
@@ -832,6 +909,23 @@ def test_uninstall_without_an_install_still_tidies_up(machine):
     done = uninstall(machine)
     assert done.returncode == 0, done.stdout + done.stderr
     assert "program files weren't found" in done.stdout
+    # It says what may still be there.
+    assert "Toolkit key in your Keychain" in done.stdout and "saved setups" in done.stdout
+
+
+def test_uninstall_answers_in_the_terminal(machine):
+    """`um-codex uninstall` reads the terminal, even when the script's own
+    input is something else (a pipe); without one it reads nothing."""
+    install(machine, "0.1.0a3")
+    machine["log"].unlink()
+    command = ["sh", str(UNINSTALLER)]
+    done = in_terminal(command, environment(machine, "0.1.0a3"), [])
+    assert done.returncode == 0, done.stdout
+    assert asked(machine) == ["uninstall", "uninstall read a terminal"]
+    install(machine, "0.1.0a3")
+    machine["log"].unlink()
+    assert uninstall(machine).returncode == 0  # no terminal: stdin is /dev/null
+    assert asked(machine) == ["uninstall"]
 
 
 def test_uninstall_refuses_to_run_as_root(machine):
@@ -1738,3 +1832,11 @@ def test_at_a_terminal_it_offers_to_show_and_open_the_app(machine, tmp_path):
     assert done.returncode == 0, done.stdout
     app = machine["apps"] / "UM-Codex.app"
     assert opened.read_text().splitlines() == [f"open -R {app}", f"open {app}"]
+
+
+def test_every_curl_ignores_curlrc_and_python_is_uvs_own():
+    text = INSTALLER.read_text(encoding="utf-8")
+    code = [line for line in text.splitlines() if not line.lstrip().startswith(("#", "echo"))]
+    calls = [m for line in code for m in re.findall(r"(?<![\w-])curl (\S+)", line)]
+    assert calls and all(first == "-q" for first in calls), calls
+    assert "--python 3.13 --python-preference only-managed" in text

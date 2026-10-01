@@ -16,7 +16,7 @@ sh install-macos.sh --package umcodex-<version>-py3-none-any.whl
 or straight from the web (the release's URLs):
 
 ```sh
-curl -fsSL <url>/install-macos.sh | sh -s -- --package <url>/umcodex-<version>-py3-none-any.whl --requirements <url>/requirements.txt
+curl -q -fsSL <url>/install-macos.sh | sh -s -- --package <url>/umcodex-<version>-py3-none-any.whl --requirements <url>/requirements.txt
 ```
 
 Options: `--requirements <file or URL>` (found automatically beside a local
@@ -46,23 +46,33 @@ Steps:
    run it again.
 5. **Toolkit key:** if the Keychain has a key already (`security
    find-generic-password -s UM-Codex -a toolkit-api-key`, which doesn't read
-   the key) it's kept, unless `--replace-key`. Otherwise, at a terminal, a
-   masked prompt (below) asks for it and pipes it to `um-codex key
-   --from-stdin`: exit 0 saved, 1 refused by the Toolkit (asked again, three
-   tries), 2 cancelled. Skipping, cancelling or no terminal never stops the
-   install: `um-codex` asks for the key at its first launch.
+   the key) it's kept, unless `--replace-key`. Otherwise, at a terminal, it
+   runs `um-codex key < /dev/tty`: `um-codex`'s own masked prompt (below)
+   reads the terminal, so the key never passes through the installer's
+   shell (no variable, argument, environment or `set -x` trace; a test runs
+   the step under `SHELLOPTS=xtrace:allexport`). Exit 0 saved, 1 refused or
+   invalid (asked again, three tries), 2 cancelled. Skipping, cancelling or
+   no terminal never stops the install: `um-codex` asks for the key at its
+   first launch.
 6. **Launcher:** `UM-Codex.app` (bundle id `edu.umich.umcodex`, icon from
-   the package's `umcodex/branding/UM-Codex.icns`), which opens Terminal
-   running `bin/um-codex`; and a Desktop shortcut `~/Desktop/UM-Codex`.
+   the package's `umcodex/branding/UM-Codex.icns`), which opens one Terminal
+   window running `bin/um-codex launch --from-app` (so the working folder
+   offered is the last setup's, or `~/Documents/UM-Codex`, not Terminal's
+   home folder); and a Desktop shortcut `~/Desktop/UM-Codex`.
    Then "Done", where everything went, and the offer to show and open it.
 
-`installer/macos/uninstall.sh` runs `um-codex uninstall` (which asks about
-the data and the images; its options are passed on), and only if that
-succeeds removes the program files, then the `~/.local/bin/um-codex` link
+`installer/macos/uninstall.sh` runs `um-codex uninstall` (which first asks
+"Uninstall UM-Codex? [y/N]", then about the images and the data; its options
+are passed on, `--yes` included), reading `/dev/tty` when it can be opened
+(with no terminal a question reads end-of-input, which `um-codex` takes as
+no). If that stops or fails, it says "Nothing else was removed." and exits
+with its code. Only if it succeeds does it remove the program files, then the `~/.local/bin/um-codex` link
 (only if it points at this install), the app (only one with UM-Codex's
 bundle id), the Desktop shortcut (only a link to exactly one of the two app
 paths), and `~/Library/Caches/UM-Codex` (a kept Docker download). It leaves
-Docker Desktop and uv alone.
+Docker Desktop and uv alone. When the program files aren't there, it says
+what may be left (Docker's containers and images, the key, the saved
+setups) and removes the app, shortcut and command link.
 
 Tests: `tests/test_macos_installer.py` runs the real scripts against
 stand-ins for `docker`, `uv`, `open`, `osascript`, `security`, `curl`,
@@ -129,17 +139,18 @@ Commits are in github.com/SripadaLab-UM/ihs-datalab.
 **uv and the package**
 
 - uv is pinned (`0.12.19`) and installed only if missing. (`0ed6270`; UM-Codex adds `--proto =https --tlsv1.2` to that download)
+- Every `curl` starts with `-q`, so a `~/.curlrc` can't change it. (UM-Codex)
 - The package name carries the version, which must start with a digit and end with a letter or digit. (`1eb5673`, `0ed6270`)
 - `requirements.txt` pins every dependency by hash and names the package by its SHA-256; a package it doesn't name is refused. Found beside a local package, else `--requirements`. (`1eb5673`)
 - Downloads are https only (`--proto =https --proto-redir =https`). (`6ef0309`)
 - uv gets both files under plain names from a staging folder: it cuts a path at its first space ("Application Support"). (`40a455f`)
-- `uv venv --no-config --python 3.13`, then `uv pip install --no-config --require-hashes --only-binary :all: --default-index https://pypi.org/simple --link-mode copy`: only hashed wheels from PyPI, copied rather than hardlinked (hardlinks fail in cloud-synced or redirected folders). (`1eb5673`, `b0bf0b0`)
+- `uv venv --no-config --python 3.13 --python-preference only-managed` (UM-Codex adds the last: always uv's own Python build, never Homebrew's or python.org's, which could change or go from under it), then `uv pip install --no-config --require-hashes --only-binary :all: --default-index https://pypi.org/simple --link-mode copy`: only hashed wheels from PyPI, copied rather than hardlinked (hardlinks fail in cloud-synced or redirected folders). (`1eb5673`, `b0bf0b0`)
 - Per-version folders: a version is installed beside the one in use, checked (`--version` must say it), `sync`ed, then marked `.complete` with the package's checksum; the same version with another package is reinstalled. `current` and `previous` are switched by rename. (`40a455f`, `1eb5673`)
 - The shim `bin/um-codex` runs `current`, falls back to `previous` and says so, and sets `PYTHONUTF8=1`. (`1eb5673`, `0ed6270`)
 
 **The key**
 
-- The masked prompt is DataLab's `secret_prompt.py`: one * per character, typed or pasted (at most 64, then "…"), Backspace, Ctrl-U, Enter, Ctrl-C cancels; it says how many characters arrived (never any of them), removes spaces and line breaks at the ends and says so, and refuses a paste of more than one line (asks again). In UM-Codex it runs in the installed Python, isolated (`-I`), reads and writes `/dev/tty` itself, and turns echo off before the prompt shows. (`b603c25`)
+- The masked prompt is DataLab's `secret_prompt.py`, in `um-codex key`: one * per character, typed or pasted (at most 64, then "…"), Backspace, Ctrl-U, Enter, Ctrl-C cancels (ISIG off: exit 2, no traceback); it says how many characters arrived (never any of them), removes spaces and line breaks at the ends and says so, and refuses a paste of more than one line (asks again). UM-Codex turns echo off before writing the label, so a paste that arrives as the label shows is never echoed. (`b603c25`)
 
 **The launcher**
 
@@ -167,7 +178,11 @@ Commits are in github.com/SripadaLab-UM/ihs-datalab.
   on stdin, so they work under `curl … | sh`.
 - The `~/.local/bin/um-codex` link, replaced only if it's a link to this
   install's command; the uninstaller removes only that link.
-- The key step (DataLab's `datalab setup` asked for keys itself).
+- The key step runs `um-codex key < /dev/tty` (DataLab's `datalab setup`
+  asked for keys itself), and `set +a` follows `set -eu`, so nothing the
+  script sets is exported even if sh started with allexport.
+- The app runs `um-codex launch --from-app` in a single Terminal window (a
+  Terminal that wasn't running uses the window it opens with).
 - The uninstaller removes `~/Library/Caches/UM-Codex` and an empty data
   folder.
 

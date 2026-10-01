@@ -192,7 +192,7 @@ def test_uninstall_deleting_data_keeps_the_program_files(data_folder, docker_her
 def test_uninstall_asks_about_images_and_data_without_yes(data_folder, docker_here):
     fill(data_folder)
     run = UninstallDocker()
-    answers = iter(["n", "n"])
+    answers = iter(["y", "n", "n"])  # uninstall? yes; images? no; data? no
     said: list[str] = []
     uninstall.uninstall(delete_data=None, say=said.append, ask=lambda q: next(answers), run=run)
     assert not any(c[1] == "rmi" for c in run.calls)
@@ -268,7 +268,7 @@ def test_ctrl_c_while_checking_the_key_is_cancelled(monkeypatch):
 
 def test_only_the_first_double_dash_is_dropped(monkeypatch):
     seen = {}
-    monkeypatch.setattr(cli, "_launch", lambda args: seen.setdefault("args", args) and 0)
+    monkeypatch.setattr(cli, "_launch", lambda args, **_: seen.setdefault("args", args) and 0)
     cli.main(["launch", "--", "exec", "--", "echo"])
     assert seen["args"] == ["exec", "--", "echo"]
 
@@ -297,3 +297,57 @@ def test_an_upstream_override_off_this_computer_is_refused(monkeypatch, capsys):
     assert cli.main(["key", "--from-stdin"]) == 1
     assert "test stub on this computer" in capsys.readouterr().out
     assert not credentials.has_api_key()
+
+
+def test_uninstall_asks_first_and_no_removes_nothing(data_folder, memory_keychain, docker_here):
+    fill(data_folder)
+    credentials.save_api_key(FAKE_KEY)
+    run = UninstallDocker()
+    asked: list[str] = []
+    said: list[str] = []
+
+    def ask(question: str) -> str:
+        asked.append(question)
+        return ""  # Enter: the default, no
+
+    assert uninstall.uninstall(delete_data=None, say=said.append, ask=ask, run=run) == 1
+    assert asked == ["Uninstall UM-Codex? [y/N] "]
+    assert "Nothing was removed." in said
+    assert run.calls == [] and credentials.has_api_key()
+    assert (data_folder / "setups.toml").exists()
+
+
+def test_uninstall_with_no_terminal_to_answer_is_no(
+    data_folder, memory_keychain, docker_here, monkeypatch, capsys
+):
+    fill(data_folder)
+    credentials.save_api_key(FAKE_KEY)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))  # input() raises EOFError
+    assert cli.main(["uninstall"]) == 1
+    out = capsys.readouterr().out
+    assert "No answer" in out and "Traceback" not in out
+    assert credentials.has_api_key() and (data_folder / "setups.toml").exists()
+
+
+def test_uninstall_yes_asks_nothing(data_folder, docker_here):
+    fill(data_folder)
+    said: list[str] = []
+    assert (
+        uninstall.uninstall(
+            delete_data=False, yes=True, say=said.append, ask=_no_questions, run=UninstallDocker()
+        )
+        == 0
+    )
+
+
+def test_launch_from_the_app_doesnt_offer_the_current_folder(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        cli, "_launch", lambda args, from_app=False: seen.update(args=args, from_app=from_app) or 0
+    )
+    cli.main(["launch", "--from-app"])
+    assert seen == {"args": [], "from_app": True}
+    cli.main(["launch", "--", "--from-app"])  # after --, it's Codex's
+    assert seen == {"args": ["--from-app"], "from_app": False}
+    cli.main([])
+    assert seen == {"args": [], "from_app": False}

@@ -40,16 +40,22 @@ It follows ITS's "Codex Setup" articles for the model settings (the
       Credential Manager;
    5. adds a **UM-Codex** app to Applications and the Desktop (Mac), or to
       Start and the Desktop (Windows), with the logo.
-2. **Launch:** the app opens a terminal that runs `um-codex`, or the person
-   types `um-codex` in any terminal.
+2. **Launch:** the app (or its Desktop or Start menu shortcut) opens a
+   terminal that runs `um-codex launch --from-app`, or the person types
+   `um-codex` in any terminal.
    1. Docker check. If Docker Desktop is closed, it's opened and waited for.
       If Windows refuses its VM (the logon right), it offers DataLab's fix:
       one administrator prompt, then Docker Desktop is restarted.
    2. **Setup.** It lists the saved setups with the last one first ("Use
       *thesis* again? [Y/n]"), or asks for a new one:
       - **Name** (default: the working folder's name).
-      - **Working folder** (read, write, delete): Codex starts here. Default:
-        the folder `um-codex` was started in, or the Desktop app asks for one.
+      - **Working folder** (read, write, delete): Codex starts here. Asked as
+        "Drag a folder here, or press Enter for <default>". Default: the
+        folder `um-codex` was started in. With `--from-app` (the app and the
+        shortcuts pass it) the current folder is ignored, as it's only where
+        the terminal opened: the default is the last setup's working folder,
+        otherwise `~/Documents/UM-Codex`, which is created when it's chosen.
+        With no default, an empty Enter says to drag or type a folder.
       - **More folders to write** (read, write, delete). Optional; any number.
       - **Folders to read only.** Optional; any number.
       - **Internet: on or off.** Off means Codex can reach only the model.
@@ -73,9 +79,13 @@ It follows ITS's "Codex Setup" articles for the model settings (the
 
    The installers call some of these, so their names, flags and exit codes
    are an interface:
+   - `um-codex launch --from-app`: what the app and the shortcuts run (Mac
+     and Windows), so the folder the terminal opened in isn't offered as the
+     working folder (see the Setup step above).
    - `um-codex key [--from-stdin]`: exit 0 saved, 1 refused or invalid,
-     2 cancelled. `--from-stdin` reads one line (the installer's own masked
-     prompt).
+     2 cancelled (Ctrl-C at the masked prompt, or an empty entry). The Mac
+     installer runs `um-codex key < /dev/tty`, so the key never passes
+     through its shell; `--from-stdin` reads one line.
    - `um-codex pull`: pulls every image in `images.json`; a local `:dev`
      image that's already present is skipped. Nonzero on failure, and a plain
      message when Docker isn't running.
@@ -83,7 +93,8 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      one line on failure (a Toolkit that can't be reached, off the VPN, is a
      note there, not a failure; a refused key is a failure); `--fix-docker` opens Docker Desktop and, on
      Windows, offers the logon-right fix (as the launch does).
-   - `um-codex uninstall [--delete-data|--keep-data] [--yes]`: removes, by
+   - `um-codex uninstall [--delete-data|--keep-data] [--yes]`: first asks
+     "Uninstall UM-Codex? [y/N]" (no: nothing removed, exit 1). Then it removes, by
      label only, UM-Codex's containers and networks (and, with
      `--delete-data`, each setup's Codex home volume), the key, the images
      (asked first; the gateway's nginx only if no container uses it) and,
@@ -91,7 +102,8 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      program files (`<data folder>/app`, which the installers own and their
      uninstall scripts remove afterwards). From DataLab's `setup.uninstall`,
      with the #36 fixes. `--yes` asks nothing: images go, and data stays
-     unless `--delete-data`.
+     unless `--delete-data`. With no terminal to answer a question
+     (EOF), `um-codex` takes it as no and exits 1, without a traceback.
 
 ## How it runs (one launch)
 

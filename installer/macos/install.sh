@@ -9,7 +9,7 @@
 #
 # or, straight from the web:
 #
-#   curl -fsSL <url>/install-macos.sh | sh -s -- --package <url> --requirements <url>
+#   curl -q -fsSL <url>/install-macos.sh | sh -s -- --package <url> --requirements <url>
 #
 # requirements.txt comes with each release: every dependency pinned by version
 # and hash, and the package by its checksum. It's found automatically if it
@@ -29,10 +29,11 @@
 #      the one in use and the previous version is kept. The `um-codex` command
 #      goes in ~/.local/bin.
 #   4. Downloads the pinned container images (`um-codex pull`).
-#   5. Asks for your U-M GPT Toolkit API key (one * per character) and hands it
-#      to `um-codex key --from-stdin`, which saves it in your macOS Keychain. A
-#      key that's saved already is kept, unless --replace-key.
-#   6. Adds the UM-Codex app (it opens Terminal running `um-codex`) to
+#   5. Runs `um-codex key`, which asks for your U-M GPT Toolkit API key (one *
+#      per character) and saves it in your macOS Keychain. A key that's saved
+#      already is kept, unless --replace-key.
+#   6. Adds the UM-Codex app (it opens Terminal running `um-codex launch
+#      --from-app`) to
 #      /Applications, or to ~/Applications if you can't add to /Applications
 #      without sudo, and a shortcut to it on your Desktop. At the end it says
 #      where everything went and offers to show the app in Finder and open it.
@@ -44,6 +45,9 @@
 # command it runs can read the rest of the script as its input.
 {
 set -eu
+# Nothing this script sets goes into the environment of what it runs, even
+# if sh was started with allexport on (SHELLOPTS=allexport, or sh -a).
+set +a
 
 # Everything goes in your own user account: never run this as root.
 [ "$(id -u)" -ne 0 ] || { echo "Run this without sudo."; exit 1; }
@@ -459,7 +463,7 @@ install_docker_desktop() {
     echo "Downloading Docker Desktop…"
     got=0
     # Given up on if it stalls (under 10 kB/s for 2 minutes).
-    curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --connect-timeout 30 \
+    curl -q -fL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --connect-timeout 30 \
       --speed-limit 10240 --speed-time 120 --progress-bar -C - -o "$dmg.part" \
       "https://desktop.docker.com/mac/main/$arch/Docker.dmg" || got=$?
     if [ "$got" -ne 0 ]; then
@@ -751,7 +755,7 @@ fi
 step "2/6 uv"
 export PATH="$HOME/.local/bin:$PATH"
 if ! command -v uv >/dev/null 2>&1; then
-  curl -LsSf --proto '=https' --proto-redir '=https' --tlsv1.2 "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
+  curl -q -LsSf --proto '=https' --proto-redir '=https' --tlsv1.2 "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
 fi
 uv --version
 
@@ -779,7 +783,7 @@ fi
 STAGE="$(mktemp -d)"
 fetch() {
   case "$1" in
-    https://*) curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 -o "$2" "$1" ;;
+    https://*) curl -q -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 -o "$2" "$1" ;;
     *://*) echo "Only https downloads: $1"; exit 2 ;;
     *) cp "$1" "$2" ;;
   esac
@@ -794,6 +798,7 @@ if ! grep -qxF "./$WHEEL --hash=sha256:$SHA256" "$STAGE/requirements.txt"; then
   exit 1
 fi
 # Beside the data folder: versions/<version>/, current, previous, bin/um-codex.
+# UMCODEX_INSTALL_DIR is for tests only (a temporary folder in place of this one).
 ROOT="${UMCODEX_INSTALL_DIR:-$HOME/Library/Application Support/UM-Codex/app}"
 TARGET="$ROOT/versions/$VERSION"
 if [ -f "$TARGET/.complete" ] && grep -qF "\"wheel_sha256\": \"$SHA256\"" "$TARGET/.complete"; then
@@ -802,7 +807,10 @@ else
   # A folder without .complete (or with another package) is replaced.
   rm -rf "$TARGET"
   mkdir -p "$ROOT/versions"
-  uv venv -q --no-config --python 3.13 "$TARGET"
+  # uv's own Python build (downloaded once, kept by uv), never one found on
+  # this Mac (Homebrew's, python.org's, Xcode's), which an upgrade or
+  # uninstall elsewhere could change or remove from under UM-Codex.
+  uv venv -q --no-config --python 3.13 --python-preference only-managed "$TARGET"
   # Every file checked against requirements.txt's hashes, only wheels, and
   # only from PyPI. Copied, not hardlinked into uv's cache (which fails in a
   # cloud-synced or redirected folder).
@@ -887,143 +895,13 @@ key_saved() {
 }
 # A terminal to type in (not only one that exists: one this process can open).
 have_terminal() { ( : < /dev/tty ) 2>/dev/null; }
-# The masked prompt (DataLab's secret_prompt.py, for one key): one * per
-# character, typed or pasted (at most 64, then "…"), with Backspace, Ctrl-U
-# and Enter; Ctrl-C or an empty entry cancels. It says how many characters
-# arrived, never any of them, removes spaces and line breaks at the ends and
-# says so, and refuses a paste of more than one line (three tries). It reads
-# and writes the terminal itself; only the key goes to its output, which is
-# this script's variable and then `um-codex key --from-stdin`'s input: never a
-# file, an argument or the environment. Exit 0 with a key, 2 without one.
-# Python runs isolated (-I): nothing from the environment changes it.
-ask_key() {
-  "$TARGET/bin/python" -I - <<'PY'
-import codecs, os, select, sys, termios
-
-CAP = 64
-try:
-    tty = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
-except OSError:
-    sys.exit(2)
-
-
-def say(text):
-    os.write(tty, text.encode("utf-8"))
-
-
-decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-
-
-def read_char():
-    while True:
-        byte = os.read(tty, 1)
-        if not byte:
-            return decoder.decode(b"", final=True)
-        char = decoder.decode(byte)
-        if char:
-            return char
-
-
-def pending():
-    return bool(select.select([tty], [], [], 0.05)[0])
-
-
-def mask(count):
-    return "*" * min(count, CAP) + ("…" if count > CAP else "")
-
-
-def read_masked():
-    """(value, multiline, extra line breaks), or None for Ctrl-C."""
-    chars, shown = [], ""
-    while True:
-        char = read_char()
-        if char in ("", "\x04"):
-            return "".join(chars), False, 0
-        if char in ("\r", "\n"):
-            rest = []
-            while pending():
-                more = read_char()
-                if more == "":
-                    break
-                rest.append(more)
-            extra = "".join(rest)
-            breaks = extra.count("\n") + extra.count("\r") - extra.count("\r\n")
-            return "".join(chars), bool(extra.strip()), breaks
-        if char == "\x03":
-            return None
-        if char in ("\x7f", "\x08"):
-            if chars:
-                chars.pop()
-        elif char == "\x15":
-            chars.clear()
-        elif char == "\x1b":  # an escape sequence (an arrow key): skipped
-            if pending() and read_char() in ("[", "O"):
-                while pending():
-                    if "@" <= read_char() <= "~":
-                        break
-            continue
-        elif char == "\t" or (ord(char) >= 32 and ord(char) != 127):
-            chars.append(char)
-        else:
-            continue
-        new = mask(len(chars))
-        keep = 0
-        while keep < min(len(shown), len(new)) and shown[keep] == new[keep]:
-            keep += 1
-        say("\b \b" * (len(shown) - keep) + new[keep:])
-        shown = new
-
-
-def whitespace(text):
-    breaks = text.count("\n") + text.count("\r") - text.count("\r\n")
-    spaces = len(text.replace("\r\n", "").replace("\n", "").replace("\r", ""))
-    parts = []
-    if spaces:
-        parts.append("a space" if spaces == 1 else f"{spaces} spaces")
-    if breaks:
-        parts.append("a line break" if breaks == 1 else f"{breaks} line breaks")
-    return " and ".join(parts)
-
-
-saved = termios.tcgetattr(tty)
-quiet = termios.tcgetattr(tty)
-# No echo, a character at a time, Ctrl-C/Ctrl-U as plain characters.
-quiet[3] &= ~(termios.ECHO | termios.ICANON | termios.ISIG | termios.IEXTEN)
-quiet[6][termios.VMIN] = 1
-quiet[6][termios.VTIME] = 0
-for _ in range(3):
-    try:
-        # Quiet before the prompt shows, so nothing typed after it is echoed.
-        termios.tcsetattr(tty, termios.TCSANOW, quiet)
-        say("Toolkit API key: ")
-        entry = read_masked()
-    finally:
-        termios.tcsetattr(tty, termios.TCSANOW, saved)
-    say("\n")
-    if entry is None:
-        say("Cancelled: no key was saved.\n")
-        sys.exit(2)
-    raw, multiline, extra_breaks = entry
-    if multiline:
-        say("That paste had more than one line, so it wasn't used. "
-            "Copy just the one line and paste it again.\n")
-        continue
-    value = raw.strip()
-    if not value:
-        say("Nothing was entered, so nothing was saved.\n")
-        sys.exit(2)
-    start = raw[: len(raw) - len(raw.lstrip())]
-    end = raw[len(raw.rstrip()):] + "\n" * extra_breaks
-    say(f"✓ Received {len(value)} character{'' if len(value) == 1 else 's'}.\n")
-    for removed, where in ((start, "start"), (end, "end")):
-        if removed:
-            say(f"  Removed {whitespace(removed)} from the {where}.\n")
-    sys.stdout.write(value)
-    sys.exit(0)
-say("Nothing was saved.\n")
-sys.exit(2)
-PY
-}
+# The key is asked for by `um-codex key` itself (DataLab's masked prompt,
+# umcodex/secret_prompt.py): one * per character, typed or pasted, Backspace,
+# Ctrl-U, Enter; Ctrl-C or an empty entry cancels; it says how many
+# characters arrived, never any of them, and refuses a paste of more than one
+# line. It reads the terminal, never this script: the key never passes
+# through the shell (no variable, argument, environment or trace).
+# Exit 0: saved. 1: the Toolkit refused it (not saved). 2: cancelled.
 LATER="UM-Codex asks for it the first time it opens, or save it any time with: um-codex key"
 if [ "$REPLACE_KEY" != yes ] && key_saved; then
   echo "A Toolkit API key is saved already, so it was kept. To replace it, run: um-codex key"
@@ -1032,24 +910,12 @@ elif ! have_terminal; then
   echo "There's no terminal to type the key in, so it wasn't asked for."
   echo "$LATER"
 else
-  echo "Paste your U-M GPT Toolkit API key, then press Enter. Each character shows as *."
-  echo "It's saved in your macOS Keychain and never goes into the container."
-  echo "To skip this for now, press Enter on its own."
+  echo "Each character shows as *. To skip this for now, press Enter on its own."
   tries=0
   while :; do
     tries=$((tries + 1))
-    KEY=""
-    got=0
-    KEY="$(ask_key)" || got=$?
-    if [ "$got" -ne 0 ] || [ -z "$KEY" ]; then
-      KEY=""
-      echo "$LATER"
-      break
-    fi
-    # 0: saved. 1: the Toolkit refused it (not saved). 2: cancelled.
     saved=0
-    printf '%s\n' "$KEY" | "$UMCODEX" key --from-stdin || saved=$?
-    KEY=""
+    "$UMCODEX" key < /dev/tty || saved=$?
     case "$saved" in
       0) break ;;
       1) if [ "$tries" -ge 3 ]; then echo "$LATER"; break; fi
@@ -1057,7 +923,6 @@ else
       *) echo "$LATER"; break ;;
     esac
   done
-  unset KEY
 fi
 
 step "6/6 Launcher"
@@ -1118,6 +983,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 # UM-Codex runs in a Terminal window: Codex's own interface is its front end.
+# It runs `um-codex launch --from-app`: Terminal's folder (home) isn't offered
+# as the working folder; the last setup's is, or ~/Documents/UM-Codex.
 # The app runs bin/um-codex, never a version's own folder: that opens the
 # version `current` names, so the app (and the Desktop shortcut to it) keeps
 # working when another version is installed.
@@ -1129,9 +996,26 @@ cat > "$APP/Contents/MacOS/UM-Codex" <<LAUNCH
 #!/bin/sh
 exec osascript - '$QUOTED' <<'OSA'
 on run argv
+  set command to (quoted form of item 1 of argv) & " launch --from-app"
+  set wasRunning to application "Terminal" is running
   tell application "Terminal"
+    if wasRunning then
+      do script command
+    else
+      -- Starting Terminal opens its own first window: use that one, so
+      -- there's one window, not that one plus another for UM-Codex.
+      activate
+      repeat 50 times
+        if (count of windows) > 0 then exit repeat
+        delay 0.1
+      end repeat
+      if (count of windows) > 0 then
+        do script command in window 1
+      else
+        do script command
+      end if
+    end if
     activate
-    do script (quoted form of item 1 of argv)
   end tell
 end run
 OSA
@@ -1179,8 +1063,10 @@ if [ -n "$DESKTOP_LINK" ]; then echo "  Desktop shortcut:  $DESKTOP_LINK"; fi
 if [ "$LINKED" = 1 ]; then echo "  The command:       $COMMAND_LINK"; fi
 echo "  Program files:     $ROOT"
 echo "Open it with the Desktop shortcut, from Applications in Finder, or with Spotlight"
-echo "(Cmd-Space, then type $NAME). It opens a Terminal window, asks what Codex may"
-echo "see and do, then starts Codex there."
+echo "(Cmd-Space, then type $NAME). It opens a Terminal window and asks which folder"
+echo "Codex works in: drag a folder there, or press Enter for your last one (the first"
+echo "time, ~/Documents/UM-Codex, made for you). Then it asks what else Codex may see"
+echo "and do, and starts Codex there."
 echo "Or, in any Terminal window, in the folder you want to work in, run: $RUN_HOW"
 if [ "$LINKED" = 1 ] && [ "$ON_PATH" = 0 ]; then
   echo "(In a new Terminal window plain um-codex may work too: ~/.local/bin wasn't on"
