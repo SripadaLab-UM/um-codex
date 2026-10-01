@@ -16,6 +16,7 @@ at 6b6fdca); each copied file says so at the top.
 
 - [docs/DESIGN.md](docs/DESIGN.md): what it is, how a launch runs, the key, folder rules, layout, milestones.
 - [README.md](README.md): install and use, for people.
+- [docs/INSTALLING.md](docs/INSTALLING.md): how the installers work, and the DataLab findings they keep.
 
 If code and a document disagree, fix the document in the same change. Don't
 start new plan documents; update DESIGN.md.
