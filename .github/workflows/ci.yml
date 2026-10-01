@@ -27,7 +27,25 @@ jobs:
       - name: Type check
         run: uv run pyright
       - name: Unit tests
-        run: uv run pytest -q
+        run: uv run pytest -q --ignore=tests/test_macos_installer.py
+
+  mac-installer:
+    # The macOS installer's tests run the scripts with stand-ins for docker,
+    # uv, curl, hdiutil and sudo, on macOS's own /bin/sh, and type answers
+    # through a real terminal.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: The scripts are valid sh and shellcheck-clean
+        run: |
+          sh -n installer/macos/install.sh && sh -n installer/macos/uninstall.sh
+          uvx --from shellcheck-py shellcheck -s sh installer/macos/install.sh installer/macos/uninstall.sh
+      - name: Installer tests
+        run: uv run pytest -q tests/test_macos_installer.py
 
   windows-installer:
     # No Windows machine runs the full install in CI (Docker Desktop), but the
