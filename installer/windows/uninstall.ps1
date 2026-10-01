@@ -126,8 +126,13 @@ function Remove-Entry($item) {
             return
         } catch {
             # (PowerShell wraps an exception from a .NET call in its own.)
+            # Windows PowerShell's .NET reports a read-only folder as an
+            # IOException ("Access to the path is denied") and a read-only file
+            # as UnauthorizedAccessException: both get the retry.
+            $inner = $_.Exception.InnerException
             $denied = ($_.Exception -is [System.UnauthorizedAccessException]) -or
-                ($_.Exception.InnerException -is [System.UnauthorizedAccessException])
+                ($inner -is [System.UnauthorizedAccessException]) -or
+                ($_.Exception -is [System.IO.IOException]) -or ($inner -is [System.IO.IOException])
             $readOnly = [bool]($item.Attributes -band [System.IO.FileAttributes]::ReadOnly)
             if ($try -eq 2 -or -not $denied -or -not $readOnly -or (Test-Link $item)) {
                 Write-Verbose "Couldn't remove $($item.FullName): $_"
