@@ -1897,12 +1897,12 @@ if ($HasKey -and -not $ReplaceKey) {
 }
 
 Step "Step 7 of 7: Adding UM-Codex to the Start menu and the Desktop"
-# UM-Codex runs in a terminal: Windows Terminal if it's installed, otherwise
-# Windows PowerShell. The window runs the version `current` names (what an
-# update switches), with PYTHONUTF8, as `um-codex launch --from-app`: started
-# from the app, it asks for the working folder (the terminal's own folder, the
-# home folder, isn't one Codex may have). The window stays open afterwards
-# (-NoExit), to read what it said or run um-codex again.
+# The shortcuts open UM-Codex's launcher window: `um-codex ui --detach` starts
+# it in the background (no window of its own) and its page opens in the
+# browser; starting a setup there opens Windows Terminal (or Windows
+# PowerShell) with Codex in it. The shortcut runs Windows PowerShell with its
+# window hidden (it may show for a moment) and minimized, which runs the
+# version `current` names (what an update switches), with PYTHONUTF8.
 $StartMenu = Join-Path $Env:APPDATA "Microsoft\Windows\Start Menu\Programs"
 $LinkName = "UM-Codex"
 # The icon comes with the package, and is copied beside bin\ so an update
@@ -1920,24 +1920,11 @@ $QuotedRoot = [System.Management.Automation.Language.CodeGeneration]::EscapeSing
 $Marker = "'$QuotedRoot\current'"
 # (No double quotes in it: it goes inside -Command "...". [string] makes an
 # empty or missing first line "", not $null.)
-$Launch = "`$Host.UI.RawUI.WindowTitle = 'UM-Codex'; " +
-    "`$v = ([string](Get-Content -LiteralPath $Marker -TotalCount 1)).Trim(); `$Env:PYTHONUTF8 = '1'; " +
-    "& ('$QuotedRoot\versions\' + `$v + '\Scripts\um-codex.exe') launch --from-app"
-$PowerShellArguments = "-NoProfile -NoExit -Command `"$Launch`""
-# Windows Terminal, by its own command (an app execution alias), if it's there.
-$Terminal = Join-Path $Env:LOCALAPPDATA "Microsoft\WindowsApps\wt.exe"
+$Launch = "`$v = ([string](Get-Content -LiteralPath $Marker -TotalCount 1)).Trim(); `$Env:PYTHONUTF8 = '1'; " +
+    "& ('$QuotedRoot\versions\' + `$v + '\Scripts\um-codex.exe') ui --detach"
+$LinkTarget = $WindowsPowerShell
+$LinkArguments = "-NoProfile -WindowStyle Hidden -Command `"$Launch`""
 $UserHome = [Environment]::GetFolderPath("UserProfile")
-if (Test-Path -LiteralPath $Terminal) {
-    $LinkTarget = $Terminal
-    # Windows Terminal splits its command line at each ";" (its own command
-    # separator) unless it's written "\;"; "--" ends its own options.
-    $LinkArguments = ("-w new new-tab --title UM-Codex -d `"$UserHome`" -- `"$WindowsPowerShell`" $PowerShellArguments").Replace(";", "\;")
-    $TerminalName = "Windows Terminal"
-} else {
-    $LinkTarget = $WindowsPowerShell
-    $LinkArguments = $PowerShellArguments
-    $TerminalName = "Windows PowerShell"
-}
 $Desktop = [Environment]::GetFolderPath("Desktop")
 $Links = @(Join-Path $StartMenu "$LinkName.lnk")
 if ($Desktop) {
@@ -1960,10 +1947,11 @@ foreach ($path in $Links) {
     $Shortcut.Arguments = $LinkArguments
     $Shortcut.WorkingDirectory = $UserHome
     $Shortcut.Description = "UM-Codex: Codex on U-M GPT Toolkit, in a Docker container"
+    $Shortcut.WindowStyle = 7  # minimized: the hidden PowerShell window doesn't flash up
     if (Test-Path -LiteralPath $Icon -PathType Leaf) { $Shortcut.IconLocation = "$Icon,0" }
     $Shortcut.Save()
 }
-Good "Added $LinkName to the Start menu$(if ($Desktop) { ' and the Desktop' }) (it opens in $TerminalName)."
+Good "Added $LinkName to the Start menu$(if ($Desktop) { ' and the Desktop' }) (it opens UM-Codex's window in your browser)."
 Remove-Item $ResumeFile -ErrorAction SilentlyContinue
 Remove-Tree (Split-Path $ResumeScript -Parent)
 
@@ -1978,7 +1966,8 @@ Say "Program files:     $Root"
 Say "Command:           um-codex (in any new terminal window, and this one)"
 Say "Toolkit key:       $KeyState"
 Say "To open it: double-click $LinkName on your Desktop, or Start menu > type $LinkName"
-Say "> press Enter. Or type um-codex in a terminal, in the folder you want Codex to work in."
+Say "> press Enter. Its window opens in your browser: make a setup there, then Start opens"
+Say "Codex in a terminal. Or type um-codex in a terminal, in the folder you want Codex to work in."
 Say "To remove it later: run uninstall.ps1 from the same release (it runs um-codex uninstall)."
 } finally {
     if (-not $State.Finished -and -not $State.StoppedSaying) {

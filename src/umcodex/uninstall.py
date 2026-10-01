@@ -61,6 +61,11 @@ def uninstall(
         say("Nothing was removed.")
         return 1
 
+    # The launcher window's server, if it's open: its files are about to go.
+    from umcodex.ui.server import close_running
+
+    close_running(data)
+
     docker_ok = shutil.which("docker") is not None and _docker(run, "info", "--format", "x") is not None
     if docker_ok:
         say("Removing UM-Codex's containers and networks...")

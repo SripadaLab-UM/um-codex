@@ -56,7 +56,7 @@ WATCHDOG = (
     "while sleep 15; do "
     'if curl -fsS -m 5 -o /dev/null -H "Authorization: Bearer $UMCODEX_TOKEN" '
     "http://gateway/v1/_umcodex/alive; then fails=0; else fails=$((fails+1)); fi; "
-    '[ "$fails" -ge 4 ] && exit 0; '
+    '[ "$fails" -ge 4 ] && { echo "watchdog: launch gone, ending"; exit 0; }; '
     "done"
 )
 

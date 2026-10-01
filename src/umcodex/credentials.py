@@ -10,12 +10,17 @@ variable override: the key is never in an environment variable.
 from __future__ import annotations
 
 import contextlib
+import re
 
 import keyring
 from keyring.errors import KeyringError, PasswordDeleteError
 
 KEY_SERVICE = "UM-Codex"
 KEY_ACCOUNT = "toolkit-api-key"
+
+
+# What an API key looks like: printable ASCII, no spaces (checked before saving).
+KEY_SHAPE = re.compile(r"[\x21-\x7e]{8,512}")
 
 
 class MissingCredential(RuntimeError):

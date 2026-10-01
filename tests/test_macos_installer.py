@@ -349,10 +349,10 @@ def test_it_installs_a_version_in_its_own_folder_then_pulls_the_images(machine):
     ]
     launcher = machine["apps"] / "UM-Codex.app" / "Contents" / "MacOS" / "UM-Codex"
     text = launcher.read_text()
-    assert f"exec osascript - '{app}/bin/um-codex' <<'OSA'" in text
-    assert 'set command to (quoted form of item 1 of argv) & " launch --from-app"' in text
-    # One window: a Terminal that wasn't running uses the window it opens with.
-    assert "do script command in window 1" in text
+    # The launcher window, in the background: no Terminal window, no Dock icon.
+    assert text == f"#!/bin/sh\nexec '{app}/bin/um-codex' ui --detach\n"
+    plist = (machine["apps"] / "UM-Codex.app" / "Contents" / "Info.plist").read_text()
+    assert "<key>LSUIElement</key><true/>" in plist
 
 
 def test_installing_a_newer_version_keeps_the_one_before(machine):
@@ -722,25 +722,21 @@ def test_the_key_is_read_from_the_terminal_by_um_codex_key():
 
 
 def open_app(machine, launcher: Path, tmp_path: Path) -> tuple[str, str]:
-    """Run the app's launch script. Returns the program path it hands
-    AppleScript, and the command Terminal would then run (AppleScript's
-    `quoted form of` the path)."""
-    osa = tmp_path / "osa"
-    osa.unlink(missing_ok=True)
+    """Run the app's launch script, as macOS does when the app is opened.
+    Returns which um-codex program ran, and its arguments."""
+    who = tmp_path / "who"
+    who.unlink(missing_ok=True)
+    log = tmp_path / "app-log"
+    log.unlink(missing_ok=True)
     env = {
         **os.environ,
         "PATH": f"{machine['tools']}:{machine['system']}",
-        "UMCODEX_TEST_OSA": str(osa),
+        "UMCODEX_TEST_LOG": str(log),
+        "UMCODEX_TEST_WHO": str(who),
+        "UMCODEX_TEST_VERSION": "x",
     }
     subprocess.run([str(launcher)], env=env, check=True)
-    lines = osa.read_text().splitlines()
-    args = [line.removeprefix("ARG:") for line in lines if line.startswith("ARG:")]
-    assert args[0] == "-" and len(args) == 2  # the script on its input, the path its argument
-    script = "\n".join(line for line in lines if not line.startswith("ARG:"))
-    assert "on run argv" in script and 'tell application "Terminal"' in script
-    assert 'set command to (quoted form of item 1 of argv) & " launch --from-app"' in script
-    quoted = "'" + args[1].replace("'", "'\\''") + "'"  # AppleScript's quoted form
-    return args[1], f"{quoted} launch --from-app"
+    return who.read_text().strip(), log.read_text().strip()
 
 
 def run_in_terminal(machine, command: str, tmp_path: Path) -> str:
@@ -828,12 +824,12 @@ def test_the_app_and_its_shortcut_keep_working_after_a_newer_version(machine, tm
     # it, then the old one removed (as an updater would).
     install(machine, "0.1.0a4")
     subprocess.run(["rm", "-rf", str(app / "versions" / "0.1.0a3")], check=True)
-    # Open the app through the Desktop shortcut: it runs the shim...
-    shim, command = open_app(machine, launcher, tmp_path)
-    assert shim == str(app / "bin" / "um-codex")
-    # ...which runs the new version.
-    ran = run_in_terminal(machine, command, tmp_path)
+    # Open the app through the Desktop shortcut: it runs the shim, which runs
+    # the new version's launcher window.
+    assert f"exec '{app / 'bin' / 'um-codex'}' ui --detach" in launcher.read_text()
+    ran, args = open_app(machine, launcher, tmp_path)
     assert Path(ran) == app / "versions" / "0.1.0a4" / "bin" / "um-codex"
+    assert args == "ui --detach"
     assert (machine["apps"] / "UM-Codex.app" / "Contents" / "Resources" / "UM-Codex.icns").is_file()
 
 
@@ -846,9 +842,8 @@ def test_the_app_opens_from_a_home_folder_with_an_apostrophe(machine, tmp_path):
     assert done.returncode == 0, done.stdout + done.stderr
     launcher = machine["apps"] / "UM-Codex.app" / "Contents" / "MacOS" / "UM-Codex"
     subprocess.run(["sh", "-n", str(launcher)], check=True)  # the launch script parses
-    shim, command = open_app(machine, launcher, tmp_path)
-    assert shim == str(root(machine) / "bin" / "um-codex") and "o'brien" in shim
-    ran = run_in_terminal(machine, command, tmp_path)
+    ran, args = open_app(machine, launcher, tmp_path)
+    assert "o'brien" in ran and args == "ui --detach"
     assert Path(ran) == root(machine) / "versions" / "0.1.0a3" / "bin" / "um-codex"
     # And the command it says to run works as printed.
     how = done.stdout.split("folder you want to work in, run: ", 1)[1].split("\n", 1)[0]

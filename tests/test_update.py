@@ -190,6 +190,20 @@ def test_rollback_switches_back_and_forth(app, github, key, data_folder):
     assert pointer(app) == ("0.1.0a3", "0.1.0a1")
 
 
+def test_update_and_rollback_close_a_running_launcher_window(app, github, key, data_folder, monkeypatch):
+    from umcodex.ui import server
+
+    closed = []
+    monkeypatch.setattr(server, "close_running", lambda data: closed.append(data))
+    private, public = key
+    github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
+    up = updater(app, github, public, FakeTools(), [], data_folder)
+    assert up.update() == 0
+    assert closed == [data_folder]
+    assert up.rollback() == 0
+    assert closed == [data_folder, data_folder]
+
+
 def test_rollback_with_nothing_before_says_so(app, github, key, data_folder):
     _, public = key
     (app / "previous").unlink()

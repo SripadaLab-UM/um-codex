@@ -1,7 +1,8 @@
 """The `um-codex` command. With no command, it launches.
 
 um-codex            choose a setup and open Codex in a container
-um-codex launch --from-app   the same, from the UM-Codex app or shortcut
+um-codex ui         the launcher window (what the UM-Codex app and shortcuts open)
+um-codex launch --setup <id>   start a saved setup without asking (the launcher window's way)
 um-codex setups     list, edit and delete saved setups
 um-codex key        save or replace the Toolkit API key
 um-codex doctor     check Docker, the images, the key and the Toolkit
@@ -13,7 +14,6 @@ from __future__ import annotations
 import argparse
 import logging
 import logging.handlers
-import re
 import sys
 from pathlib import Path
 
@@ -21,10 +21,11 @@ from keyring.errors import KeyringError
 
 from umcodex import __version__, credentials, doctor, toolkit
 from umcodex.containers import Docker, DockerError, pull_images, volume_name
+from umcodex.folders import FolderRefused, Layout
 from umcodex.paths import data_dir
 from umcodex.relay import UpstreamRefused
 from umcodex.secret_prompt import ask_secret
-from umcodex.setups import Setup, SetupStore, choose, manage
+from umcodex.setups import Setup, SetupStore, check, choose, manage, moved
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -41,7 +42,20 @@ def main(argv: list[str] | None = None) -> int:
         help="opened from the UM-Codex app or shortcut: the current folder isn't offered as the working "
         "folder (the last setup's is, or ~/Documents/UM-Codex)",
     )
+    launch.add_argument(
+        "--setup",
+        metavar="SETUP",
+        help="start this saved setup (its id or name) without asking anything: what the launcher "
+        "window runs",
+    )
     launch.add_argument("codex_args", nargs=argparse.REMAINDER, help="passed to codex (after --)")
+    window = commands.add_parser("ui", help="open the launcher window (in your browser)")
+    window.add_argument(
+        "--detach", action="store_true", help="run it in the background, with no window (the app's way)"
+    )
+    window.add_argument(
+        "--no-browser", action="store_true", help="don't open the browser: print the sign-in link instead"
+    )
     commands.add_parser("setups", help="list, edit and delete saved setups")
     key = commands.add_parser("key", help="save or replace the Toolkit API key")
     key.add_argument(
@@ -68,6 +82,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command != "uninstall":  # it may delete the data folder the log is in
         _log_to_file()
     try:
+        if args.command == "ui":
+            from umcodex.ui import server
+
+            if args.detach:
+                return server.detach(open_browser=not args.no_browser)
+            return server.main(open_browser=not args.no_browser)
         if args.command == "setups":
             return _setups()
         if args.command == "key":
@@ -91,7 +111,9 @@ def main(argv: list[str] | None = None) -> int:
         codex_args = list(getattr(args, "codex_args", []))
         if codex_args[:1] == ["--"]:
             codex_args = codex_args[1:]
-        return _launch(codex_args, from_app=getattr(args, "from_app", False))
+        return _launch(
+            codex_args, from_app=getattr(args, "from_app", False), setup_name=getattr(args, "setup", None)
+        )
     except KeyboardInterrupt:
         print("\nStopped.")
         return 130
@@ -124,7 +146,7 @@ def _log_to_file() -> None:
 
 
 KEY_SAVED, KEY_REFUSED, KEY_CANCELLED = 0, 1, 2
-_KEY_SHAPE = re.compile(r"[\x21-\x7e]{8,512}")
+_KEY_SHAPE = credentials.KEY_SHAPE
 
 
 def _key_command(*, from_stdin: bool = False) -> int:
@@ -203,7 +225,7 @@ def _update_notice() -> None:
         logging.getLogger(__name__).warning("the update check at launch failed", exc_info=True)
 
 
-def _launch(codex_args: list[str], *, from_app: bool = False) -> int:
+def _launch(codex_args: list[str], *, from_app: bool = False, setup_name: str | None = None) -> int:
     from umcodex import launch
 
     print(f"UM-Codex {__version__}")
@@ -218,6 +240,11 @@ def _launch(codex_args: list[str], *, from_app: bool = False) -> int:
         print("First, UM-Codex needs your Toolkit API key.")
         if _key_command() != KEY_SAVED:
             return 1
+    if setup_name is not None:
+        chosen = _chosen_without_asking(SetupStore(), setup_name)
+        if chosen is None:
+            return 1
+        return launch.run(*chosen, codex_args=codex_args)
     # From the app, the current folder is wherever Terminal opened (home):
     # not a choice the person made, so it isn't offered.
     start_folder = None if from_app else Path.cwd()
@@ -227,6 +254,38 @@ def _launch(codex_args: list[str], *, from_app: bool = False) -> int:
         return 0
     setup, layout = chosen
     return launch.run(setup, layout, codex_args=codex_args)
+
+
+def _chosen_without_asking(store: SetupStore, wanted: str) -> tuple[Setup, Layout] | None:
+    """`launch --setup`: the saved setup (by id, else by name), its folders
+    checked again. The launcher window already showed the summary and, for a
+    folder that now leads somewhere else, had the person confirm it (and saved
+    the setup with the folder as it resolves), so nothing is asked here: a
+    refused or moved folder stops the launch."""
+    setups = store.all()
+    setup = next((s for s in setups if s.id == wanted), None) or next(
+        (s for s in setups if s.name == wanted), None
+    )
+    if setup is None:
+        print(f"There's no saved setup called “{wanted}”. Open UM-Codex to choose one.")
+        return None
+    print(f"Setup: {setup.name}")
+    try:
+        layout = check(setup)
+        changed = moved(setup)
+    except FolderRefused as refused:
+        print(f"This setup can't be used as it is: {refused}")
+        print("Open UM-Codex and edit the setup.")
+        return None
+    if changed:
+        print("A saved folder now leads somewhere else (a link was put in its path):")
+        for saved, now in changed:
+            print(f"  {saved}")
+            print(f"    now goes to {now}")
+        print("Not started. Open UM-Codex and start the setup there to check and confirm it.")
+        return None
+    store.mark_used(setup.id)
+    return setup, layout
 
 
 if __name__ == "__main__":

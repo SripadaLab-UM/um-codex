@@ -276,5 +276,8 @@ def test_the_watchdog_ends_when_the_relay_is_gone(tmp_path):
         ["sh", "-c", WATCHDOG, "sh", "true"],
         env={"PATH": f"{fake_bin}:/usr/bin:/bin", "UMCODEX_TOKEN": "umc_x"},
         timeout=20,
+        capture_output=True,
+        text=True,
     )
     assert done.returncode == 0
+    assert done.stdout.strip() == "watchdog: launch gone, ending"  # in `docker logs`, for the launch's log

@@ -21,7 +21,8 @@ From 64 pixels up the icon is the whole design; at 32 the M and its spark,
 drawn bigger for its size so it reads; at 16 the M alone.
 
 This script writes branding/um-codex-mark.svg and its 1024 px PNG (on Apple's
-icon grid), and the launchers' icons, src/umcodex/branding/UM-Codex.icns (with
+icon grid), its copy for the launcher window's page
+(src/umcodex/ui/static/mark.svg), and the launchers' icons, src/umcodex/branding/UM-Codex.icns (with
 iconutil where there is one) and UM-Codex.ico. The bitmaps are drawn with
 Pillow at 4x, then scaled down. Run it again after changing anything here, and
 commit what it writes.
@@ -415,6 +416,7 @@ def main() -> None:
     PACKAGE.mkdir(parents=True, exist_ok=True)
     written: dict[Path, bytes] = {
         REPO / "branding" / "um-codex-mark.svg": icon_svg().encode(),
+        REPO / "src" / "umcodex" / "ui" / "static" / "mark.svg": icon_svg().encode(),  # the launcher window's
         REPO / "branding" / "um-codex-mark-1024.png": png(draw(1024, mac=True)),
         PACKAGE / "UM-Codex.icns": icns(),
         PACKAGE / "UM-Codex.ico": ico(),

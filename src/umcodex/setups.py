@@ -23,7 +23,7 @@ from pathlib import Path
 
 import tomli_w
 
-from umcodex import folders
+from umcodex import folders, locks
 from umcodex.codex_config import Approvals
 from umcodex.folders import FolderRefused
 from umcodex.paths import data_dir
@@ -31,6 +31,9 @@ from umcodex.toolkit import DEFAULT_MODEL
 
 Ask = Callable[[str], str]
 Say = Callable[[str], None]
+
+# Where a launch from the launcher window opens Codex (ui/opener.py).
+OPEN_IN = ("terminal", "codex-app")
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,9 @@ class Setup:
     # it existed have neither key, which means off.
     browser: bool = False
     browser_asks: bool = True  # approve each browser action
+    # Where Codex opens when started from the launcher window (M5): only
+    # "terminal" for now; "codex-app" is being tried on another branch.
+    open_in: str = "terminal"
 
     def to_toml(self) -> dict:
         return {
@@ -60,6 +66,7 @@ class Setup:
             "approvals": self.approvals,
             "browser": self.browser,
             "browser_asks": self.browser_asks,
+            "open_in": self.open_in,
         }
 
     @classmethod
@@ -79,6 +86,7 @@ class Setup:
             approvals=approvals,
             browser=internet and raw.get("browser", False) is True,
             browser_asks=raw.get("browser_asks", True) is not False,
+            open_in=str(raw["open_in"]) if raw.get("open_in") in OPEN_IN else "terminal",
         )
 
 
@@ -100,10 +108,25 @@ class SetupStore:
             return {}
 
     def _write(self, raw: dict) -> None:
+        """Write the file whole: a temporary file of this write's own, then
+        a rename, so a reader never sees half of it."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".toml.tmp")
-        temporary.write_text(tomli_w.dumps(raw), encoding="utf-8", newline="\n")
-        os.replace(temporary, self.path)
+        temporary = self.path.with_name(f".{self.path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+        try:
+            temporary.write_text(tomli_w.dumps(raw), encoding="utf-8", newline="\n")
+            os.replace(temporary, self.path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    @contextlib.contextmanager
+    def _changing(self):
+        """Read, change and write the setups under one lock, across this
+        process's threads and other processes (a launch's mark_used, the
+        launcher window's saves): no change is lost to another's."""
+        with locks.held(self.path.with_name(self.path.name + ".lock")):
+            raw = self._read()
+            yield raw
+            self._write(raw)
 
     def all(self) -> list[Setup]:
         """Every setup, the last one used first."""
@@ -122,25 +145,22 @@ class SetupStore:
         return next((s for s in self.all() if s.id == setup_id), None)
 
     def save(self, setup: Setup, *, used: bool = False) -> None:
-        raw = self._read()
-        entries = [e for e in raw.get("setup", []) if e.get("id") != setup.id]
-        entries.append(setup.to_toml())
-        raw["setup"] = entries
-        if used:
-            raw["last_used"] = setup.id
-        self._write(raw)
+        with self._changing() as raw:
+            entries = [e for e in raw.get("setup", []) if e.get("id") != setup.id]
+            entries.append(setup.to_toml())
+            raw["setup"] = entries
+            if used:
+                raw["last_used"] = setup.id
 
     def mark_used(self, setup_id: str) -> None:
-        raw = self._read()
-        raw["last_used"] = setup_id
-        self._write(raw)
+        with self._changing() as raw:
+            raw["last_used"] = setup_id
 
     def delete(self, setup_id: str) -> None:
-        raw = self._read()
-        raw["setup"] = [e for e in raw.get("setup", []) if e.get("id") != setup_id]
-        if raw.get("last_used") == setup_id:
-            raw.pop("last_used")
-        self._write(raw)
+        with self._changing() as raw:
+            raw["setup"] = [e for e in raw.get("setup", []) if e.get("id") != setup_id]
+            if raw.get("last_used") == setup_id:
+                raw.pop("last_used")
 
     def last_used(self) -> Setup | None:
         raw = self._read()
@@ -185,6 +205,9 @@ def resolved(setup: Setup, layout: folders.Layout) -> Setup:
 # --- Asking -----------------------------------------------------------------
 
 
+WRITES_ARE_REAL = (
+    "These are your real files: changes and deletions there happen straight away, with no undo."
+)
 BROWSER_PLAIN = "Codex can open websites in a fresh browser inside the sandbox; it has none of your logins."
 BROWSER_QUESTION = f"Browser tool on? ({BROWSER_PLAIN})"
 BROWSER_ASKS_QUESTION = "Approve each browser action (opening pages, clicking, typing)?"
@@ -348,6 +371,7 @@ def ask_setup(
         approvals=approvals,
         browser=browser,
         browser_asks=browser_asks,
+        open_in=base.open_in if base else "terminal",
     )
     return setup
 
@@ -369,6 +393,7 @@ def summary(setup: Setup, layout: folders.Layout) -> list[str]:
         f"  {layout.working}   (its working folder, /work)",
     ]
     lines += [f"  {host}   ({target})" for host, target in layout.writes]
+    lines.append(WRITES_ARE_REAL)
     if layout.reads:
         lines += ["", "Codex can only read:"]
         lines += [f"  {host}   ({target})" for host, target in layout.reads]

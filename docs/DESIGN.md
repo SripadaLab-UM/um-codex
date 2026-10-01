@@ -43,9 +43,11 @@ It follows ITS's "Codex Setup" articles for the model settings (the
       Credential Manager;
    5. adds a **UM-Codex** app to Applications and the Desktop (Mac), or to
       Start and the Desktop (Windows), with the logo.
-2. **Launch:** the app (or its Desktop or Start menu shortcut) opens a
-   terminal that runs `um-codex launch --from-app`, or the person types
-   `um-codex` in any terminal.
+2. **Launch:** the app (or its Desktop or Start menu shortcut) opens the
+   launcher window in the browser (`um-codex ui`, M5 below): saved setups
+   as cards, a form for a new one, the summary, then Start opens a terminal
+   with Codex in it. Or the person types `um-codex` in any terminal, which
+   asks the questions below in the terminal.
    1. Docker check. If Docker Desktop is closed, it's opened and waited for.
       If Windows refuses its VM (the logon right), it offers DataLab's fix:
       one administrator prompt, then Docker Desktop is restarted.
@@ -88,9 +90,17 @@ It follows ITS's "Codex Setup" articles for the model settings (the
 
    The installers call some of these, so their names, flags and exit codes
    are an interface:
-   - `um-codex launch --from-app`: what the app and the shortcuts run (Mac
-     and Windows), so the folder the terminal opened in isn't offered as the
-     working folder (see the Setup step above).
+   - `um-codex ui [--detach] [--no-browser]`: the launcher window (M5).
+     `--detach` (what the app and the shortcuts run) starts it in the
+     background and returns at once; `--no-browser` prints the sign-in link
+     instead of opening the browser. A second one opens the first one's
+     page again. Exit 0.
+   - `um-codex launch --setup <id or name>`: what the launcher window runs
+     in the terminal it opens: no questions; 1 when the setup isn't there,
+     or a folder is refused or now leads somewhere else.
+   - `um-codex launch --from-app`: what the app and the shortcuts ran before
+     M5 (kept working for them), so the folder the terminal opened in isn't
+     offered as the working folder (see the Setup step above).
    - `um-codex key [--from-stdin]`: exit 0 saved, 1 refused or invalid,
      2 cancelled (Ctrl-C at the masked prompt, or an empty entry). The Mac
      installer runs `um-codex key < /dev/tty`, so the key never passes
@@ -294,6 +304,8 @@ um-codex/
   pyproject.toml            package "umcodex", command "um-codex", Python ≥3.13
   src/umcodex/
     cli.py                  argument parsing; launch is the default command
+    ui/                     the launcher window (M5): server.py (the API), protection.py (from DataLab
+                            web.py), picker.py (from DataLab), opener.py (where Codex opens), static/ (the page)
     setups.py               saved setups (TOML in the data folder), prompts, validation
     folders.py              folder rules (from DataLab mounts/inputs)
     launch.py               one launch: relay, network, gateway, agent, exec, cleanup
@@ -555,7 +567,188 @@ modes, rigor, and the frontend.
      on this computer.
    - Docker becomes optional in the installer for people who use only this
      mode.
-6. **Acceptance, on a fresh Mac and a fresh Windows machine:**
+6. **M5, launcher window (asked for on 2026-10-01: the terminal's setup
+   questions weren't friendly enough).** The UM-Codex app (Mac) and the
+   Start menu and Desktop shortcuts (Windows) open a small page in the
+   person's browser instead of a terminal full of questions. Typing
+   `um-codex` in a terminal still asks the questions as before.
+   - **`um-codex ui`** starts a small web server in the `um-codex` process
+     (aiohttp, already a dependency), on 127.0.0.1 and a free port, and opens
+     its page in the default browser. Plain HTML, CSS and JavaScript shipped
+     in the package (`src/umcodex/ui/`), no build step. `--detach` starts it
+     in the background with no window and returns at once (what the app and
+     the shortcuts run). One at a time per data folder: the server holds a
+     lock (`ui.lock`) and writes its port and a private control secret to
+     `ui.json` (readable by the person only: mode 0600 on a Mac; on Windows,
+     where that mode does nothing, the file takes `%LOCALAPPDATA%`'s
+     permissions, which give the person, SYSTEM and administrators access
+     and no other account); a second `um-codex ui` asks the
+     running one, with that secret, for a new sign-in link and opens that.
+     `--detach` waits up to 10 s for the background server's `ui.json`
+     (carrying a nonce of that start) or for it to hand over to one already
+     running; otherwise it says so in a native message box (`osascript
+     display dialog` on a Mac, `MessageBoxW` on Windows) pointing to
+     `um-codex.log`, where what the server printed and any exception are
+     logged.
+     The server ends after 15 minutes with no request from the page (the page
+     asks every few seconds while it's open). Launches it started go on: each
+     runs in its own terminal.
+   - **Protection,** adapted from DataLab's `web.py` (`BrowserSession`,
+     `ApiProtection`, `refuse_cross_site`) at 6b6fdca:
+     - the opened URL carries a one-time sign-in token, exchanged for an
+       HttpOnly, SameSite=Strict cookie named for the port; every `/api`
+       request needs that cookie;
+     - the Host header must be `127.0.0.1:<port>` or `localhost:<port>`
+       (a DNS-rebinding page has another host name);
+     - every request that changes something must be JSON, carry no
+       `Sec-Fetch-Site` other than `same-origin`, and, if it has an `Origin`,
+       be from this very origin;
+     - no CORS headers, ever, so other pages can't read answers; DataLab's
+       Content Security Policy (only the page's own files; `connect-src
+       'self'`) and the other security headers on every response;
+     - the access log is off (the sign-in URL holds the token), and nothing
+       logs a request body (the key form posts the key).
+   - **The page** (DataLab's "paper" look: white paper or dark, warm ink,
+     hairline rules, serif headings; Maize and Blue only as small accents and
+     in the mark):
+     - a status line: Docker running or not ("Open Docker Desktop"; on
+       Windows, when the virtual machine is refused, "Fix it" with the same
+       explanation the terminal gives, then one administrator prompt);
+       the key saved or not ("Replace key…": a small masked form posted to
+       the local API, checked against the Toolkit's `/models`, saved in the
+       keychain, never echoed or logged); an update when the daily check
+       found one ("run um-codex update in a terminal");
+     - running launches: "*setup* · Running since 14:05 · Stop";
+     - saved setups as cards (name, working folder, other folders as chips
+       marked read or read & write, internet, browser tool, approvals, "Open
+       in"), with Start, Edit, Duplicate and Delete, and "New setup";
+     - the setup form: name; working folder and more folders, each chosen with
+       "Choose folder…" (the computer's own folder picker, from DataLab's
+       `sessions/picker.py`, with its Windows bring-to-front fix: a web page
+       can't name a path itself), each more folder a chip with a "Read only /
+       Read & write" toggle; refusals shown in plain words under the folder
+       (`folders.py`'s own reasons); Internet; Browser tool (only with the
+       internet on) and "Approve each browser action"; "Ask me before
+       commands"; the model (the Toolkit's list, default `gpt-5.6-terra`);
+       "Open in": Terminal, or Codex app (shown, disabled, "coming soon":
+       branch `spike-codex-app` is testing it);
+     - before a start, the terminal's own summary (`setups.summary`) with
+       Start and Back. If a saved folder now resolves somewhere else, the
+       page shows both places and Start needs a tick in "Use them where they
+       go now"; the setup is then saved with the folders as they resolve.
+   - **Start** saves the setup as used and opens a new terminal window
+     running `um-codex launch --setup <id>`: no questions; the setup's
+     folders are checked again, and a refused or moved folder stops it with a
+     plain message ("open UM-Codex to change it"). Docker and the key are
+     still checked there (opening Docker Desktop, or on Windows offering the
+     fix, and asking for a key if none is saved), as a fallback for what the
+     page already shows. How it opens sits behind an `Opener` (`ui/opener.py`):
+     - Terminal: on a Mac, `open -a Terminal` on a `.command` file written
+       for that start (in the data folder's `ui/`, owner-only; it removes
+       itself when it runs), holding one line with every part
+       `shlex`-quoted. Opening a file needs no permission to control
+       Terminal (AppleScript would ask for one), and a Terminal that wasn't
+       running opens just that window. On Windows, Windows Terminal if it's
+       installed, else Windows PowerShell in a new console, each with the
+       command as `-EncodedCommand` (each part a single-quoted PowerShell
+       string; no Windows or Windows Terminal quoting to get wrong).
+       Windows PowerShell 5.1 can't pass a double quote inside an argument
+       on reliably, so one is refused (no Windows path has one), and a part
+       with a space that ends in backslashes gets them doubled. The setup's
+       id must be Docker-safe, as `new_id` makes it (it names the setup's
+       volume too), or the start is refused.
+       The command runs the server's own Python (`-m umcodex`), so it's the
+       same version, and carries the development variables (`UMCODEX_*`) the
+       server was started with, and keyring's `PYTHON_KEYRING_BACKEND` (the
+       launch must read the key from the store the page checked).
+     - Codex app: a stub until that branch lands.
+   - **Running launches** are the launch folders whose lock is held. Each
+     launch writes `launch.json` there (setup id and name, start time).
+     Stop removes that launch's containers and networks by label (instance
+     and launch), as cleanup does; Codex's `docker exec` then ends, and
+     that launch's `um-codex` cleans up the rest and says so in its window.
+   - **The app and shortcuts:** the Mac app runs `um-codex ui --detach`
+     and has no Dock icon of its own (`LSUIElement`), so no Terminal window
+     opens until a setup is started. The Windows shortcuts run Windows
+     PowerShell with a hidden window (minimized; it may flash for a moment)
+     that runs `um-codex.exe ui --detach`; the server then has a console
+     that's never shown, which the Docker commands it runs share (so they
+     don't flash windows either).
+   - `um-codex uninstall`, `um-codex update` and `--rollback` close a
+     running launcher window first (over its control link): its files are
+     about to go or be replaced. If the installed version still changes
+     under a running window (an installer run again), the page says "UM-Codex
+     X is installed; this window is still Y" with Reopen, which ends this
+     server and starts the installed version's (`bin/um-codex ui --detach`).
+   - Saved setups are changed under a lock (`setups.toml.lock`: a thread
+     lock and an OS file lock), each write through a temporary file of its
+     own and a rename, so neither the page's parallel requests nor a
+     launch's `mark_used` loses another's change.
+   - Start is refused while Docker isn't running ("Docker Desktop isn't
+     running. Open it first."), with Open Docker Desktop (or, on Windows,
+     Fix it…) on the summary page. While a start runs its button is
+     disabled; the card says "Starting…" until the launch's `launch.json`
+     shows it running, then "Running · Stop" in place of Start.
+   - The page: paths show the folder's name in bold with its parent
+     shortened (`~`, a middle ellipsis), the whole path in the tooltip and a
+     Copy button; the summary shows each folder as `/work ← ~/…/thesis`.
+     The first run shows three steps (add the key, Docker running, a new
+     setup), and a new setup opens on "Choose working folder…". The form
+     reports every problem at once, in its order, each tied to its field
+     (`aria-describedby`), and focuses the first; focus stays put when the
+     form redraws; questions before Delete and Stop start on Cancel. The key
+     field shows dots but isn't a password field (`-webkit-text-security`;
+     `type=password` with `autocomplete=new-password` where that's not
+     supported), so browsers don't offer to save it, and it's emptied
+     whenever its box closes. The page keeps asking for the state while a
+     box is open, so an open box never counts as the page being gone.
+   - Diagnostics: before a launch removes its containers it logs the
+     agent's state (status, exit code, OOM-killed, finish time) and the last
+     lines it printed; the watchdog prints "watchdog: launch gone, ending"
+     before it ends one; the server logs each Stop it's asked for, and
+     whether the native picker was cancelled (osascript's -128) or failed
+     (shown on the page).
+   - The setup's `open_in` ("terminal" or "codex-app") is saved with it;
+     setups saved before M5 have none, which means Terminal. The summary
+     (both ways) now also says "These are your real files: changes and
+     deletions there happen straight away, with no undo."
+   - **Live check** (this Mac, 2026-10-01; `uv run um-codex ui --no-browser`
+     with `UMCODEX_DATA_DIR` in a scratch folder, `um-codex-agent:dev`, a
+     stub upstream on 127.0.0.1, and a stand-in key store holding a fake
+     key, so neither the real key nor the real keychain was used): the page
+     in the browser pane, light and dark; a fake key saved through "Add
+     key…" (checked against the stub); a setup made through the API (the
+     native picker needs a person), shown as a card and opened in the form;
+     the summary; "Start in Terminal" opened one Terminal window running
+     the launch (containers with `/work` rw and `/mnt/read/reference` ro;
+     the fake key not in `docker inspect`, the container's environment or
+     its files); the page showed it as running; Stop removed that launch's
+     containers and networks only (another session's launch, of another data
+     folder, was left running), and the launch's own `um-codex` cleaned up
+     and logged Codex's exit. A setup saved with a link in its path showed
+     the warning and kept Start disabled until "Use them where they go now"
+     was ticked. A stand-in app bundle running `ui --detach` left its server
+     running on its own (no Terminal window), and `close_running` ended it.
+     In two earlier tries the launch in Terminal ended after about 40 s
+     with nothing in the log (consistent with its window being closed; the
+     cause wasn't found). The launch now logs Codex's exit code, and the
+     signal when its terminal closes, so a repeat can be told apart.
+   - **Live check after the review fixes** (same stand-ins, a fresh data
+     folder): the first-run checklist; the key box shows dots in a text
+     field and Escape empties it (whether a browser offers to save it can't
+     be seen in the test browser); an empty new setup reported both
+     problems at once and focused "Choose working folder…"; focus stayed on
+     the Internet switch through its redraw; cards and the summary showed
+     short paths and `/work ← …`; Start went "Starting…" then "Running ·
+     Stop" on the card; Stop's question started on Cancel; the log had the
+     Stop request and the agent's state. The Docker-stopped summary was
+     checked by setting the page's state (Docker itself wasn't stopped:
+     other sessions use it). `ui --detach` returned at once with its
+     server up, and a second one handed over to it.
+   - Not checked: Windows (the shortcut, the hidden console, Windows
+     Terminal and PowerShell windows, the picker), and the picker itself on
+     a Mac (it needs a person); the real Mac installer's app.
+7. **Acceptance, on a fresh Mac and a fresh Windows machine:**
    1. install from the README in under 20 minutes;
    2. launch with internet off: Codex answers, `curl https://example.com`
       fails, and it can write in the working folder but not in a read-only

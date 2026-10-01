@@ -26,7 +26,12 @@ def default_data_dir(platform: str = sys.platform) -> Path:
 
 
 def data_dir() -> Path:
-    return Path(os.environ.get("UMCODEX_DATA_DIR") or default_data_dir())
+    override = os.environ.get("UMCODEX_DATA_DIR")
+    if override:
+        # Resolved, so a relative or linked folder means the same place to
+        # every process (a launch started from the launcher window, too).
+        return Path(os.path.realpath(os.path.expanduser(override)))
+    return default_data_dir()
 
 
 def app_dir(platform: str = sys.platform) -> Path:
