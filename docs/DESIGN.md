@@ -166,11 +166,13 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
   - analytics, feedback and update checks off.
 
   Codex's other features stay at Codex's defaults: full power.
-- **AGENTS.md** in the image tells Codex to read `/etc/um-codex/launch.md`
-  first. That's a plain-text note written by the host for each launch and
-  mounted read-only as one file: the setup's name, `/work` and each
-  `/mnt/write/*` and `/mnt/read/*` with its folder on the computer, internet
-  on or off, and the approval policy.
+- **AGENTS.md** in the image tells Codex where things are: the folders, what's
+  read-only, and that it has `sudo`. The container copies it into
+  `$CODEX_HOME/AGENTS.md` at every start (it's the app's file). It tells
+  Codex to read `/etc/um-codex/launch.md` first. That's a plain-text note
+  written by the host for each launch and mounted read-only as one file: the
+  setup's name, `/work` and each `/mnt/write/*` and `/mnt/read/*` with its
+  folder on the computer, internet on or off, and the approval policy.
 - **The launch's files** (`config.toml`, `launch.md`, `gateway.conf`, and the
   env file with the token, deleted once the agent has started) are in
   `launches/<id>/` in UM-Codex's data folder, never in a folder the agent can
@@ -325,9 +327,52 @@ modes, rigor, and the frontend.
    - uninstallers;
    - CI with Windows tests and the installer parse and run steps;
    - the agent image built and pushed to GHCR.
-3. **M3, releases:** signed releases (Ed25519, the `release` environment,
+3. **M2b, browser tool (asked for on 2026-10-01):**
+   - A launch question, offered only when the internet is on: "Browser
+     tool: on/off" (default off). It's saved with the setup.
+   - When it's on, Codex gets the Playwright MCP server as a tool. It runs
+     inside the agent container with headless Chromium, so the browser is a
+     fresh one with none of the person's logins. It can open pages, click,
+     fill in forms, read pages and take screenshots, and screenshots are
+     saved under /work if the person asks.
+   - Each browser action needs the person's approval by default (MCP
+     `default_tools_approval_mode = "prompt"`). The setup can change that to
+     "don't ask".
+   - The image gets Chromium and the pinned Playwright MCP package. Its size
+     cost is reported in the PR.
+   - It never controls the person's own computer, desktop or browser: the
+     container can't reach them (see the end of this document).
+   - Acceptance: with internet on and the tool on, "open example.com and
+     tell me its heading" works after approval. With internet off, the
+     question isn't offered.
+4. **M3, releases:** signed releases (Ed25519, the `release` environment,
    the tag rules) and `um-codex update` with rollback.
-4. **Acceptance, on a fresh Mac and a fresh Windows machine:**
+5. **M4, "On this computer" mode (asked for on 2026-10-01):**
+   - The first launch question becomes "Where should Codex run? In a
+     sandbox (container) / On this computer". It's saved with the setup.
+     The group is expected to use both.
+   - On this computer:
+     - A native Codex, pinned and installed by UM-Codex in its program
+       folder, not whatever `codex` is on PATH.
+     - The same localhost relay, so the key stays in the keychain and is
+       never put in `auth.json`.
+     - A working folder, and Codex's own sandbox as a choice: "full access"
+       (the default) or "this folder only".
+   - Browser control in the person's own browser: the Playwright MCP server
+     connected to their running Chrome or Edge through its extension. Each
+     action asks for approval by default.
+   - Computer control:
+     - First, a short spike on the pinned Codex: do `computer_use`,
+       `browser_use` and `in_app_browser` work in the terminal Codex?
+     - If they don't, add a computer-control MCP tool (screenshots, mouse,
+       keyboard), with approval for each action.
+     - On a Mac, this needs one-time Screen Recording and Accessibility
+       permission.
+   - The summary says plainly that Codex can do anything the person can do
+     on this computer.
+   - Docker becomes optional in the installer for people who use only this
+     mode.
+6. **Acceptance, on a fresh Mac and a fresh Windows machine:**
    1. install from the README in under 20 minutes;
    2. launch with internet off: Codex answers, `curl https://example.com`
       fails, and it can write in the working folder but not in a read-only
@@ -344,3 +389,10 @@ modes, rigor, and the frontend.
 - An install site like DataLab's: later. Until then, the README has the two
   install commands.
 - Codex version: pinned in the image, and updated by a release.
+- Controlling the person's own computer (desktop, apps, their browser): out
+  of scope. The container can't reach the host by design. Codex's own
+  `browser_use`, `in_app_browser` and `computer_use` features target its
+  desktop and IDE apps. Whether any of them works in the terminal Codex
+  inside the container is to be checked with the pinned version, and noted
+  here. A virtual desktop inside the container that the person watches
+  (noVNC) is a possible later option, if the group needs GUI apps.
