@@ -153,6 +153,11 @@ class LaunchSpec:
         return f"{self.prefix}-agent"
 
     @property
+    def models_container(self) -> str:
+        """The throwaway container that prints Codex's model list."""
+        return f"{self.agent}-models"
+
+    @property
     def volume(self) -> str:
         return volume_name(self.setup_id)
 
@@ -243,14 +248,14 @@ class LaunchSpec:
         catalog's source, codex_config.model_catalog). No network, removed
         when done."""
         return _guarded([
-            "run", "--rm", *self.labels(), "--network", "none",
+            "run", "--rm", "--name", self.models_container, *self.labels(), "--network", "none",
             self.agent_image, "codex", "debug", "models", "--bundled",
         ])  # fmt: skip
 
     def remove_commands(self) -> list[list[str]]:
         networks = [self.internal_network, self.gateway_network]
         networks += [self.internet_network] if self.internet else []
-        return [["rm", "-f", self.agent, self.gateway], ["network", "rm", *networks]]
+        return [["rm", "-f", self.agent, self.gateway, self.models_container], ["network", "rm", *networks]]
 
 
 def exec_command(agent: str, *, tty: bool, term: str, args: Sequence[str] = ()) -> list[str]:

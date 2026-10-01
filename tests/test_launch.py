@@ -77,6 +77,7 @@ def test_a_live_launch_holds_its_lock(data_folder):
 
 # `codex debug models --bundled` in the agent image (shortened; see test_codex_config.py).
 BUNDLED = (Path(__file__).parent / "data" / "codex-0.157.1-bundled-models.json").read_text()
+IMAGE_ID = "ab" * 32
 CODEX_FILES = ("codex/requirements.toml", "codex/managed_config.toml", "codex/models.json")
 
 
@@ -111,6 +112,8 @@ class FakeDocker:
         if args[-3:] == ["debug", "models", "--bundled"]:
             ok = self.bundled is not None
             return subprocess.CompletedProcess(command, 0 if ok else 125, self.bundled or "", "")
+        if args[:2] == ["image", "inspect"] and "{{.Id}}" in args:
+            return subprocess.CompletedProcess(command, 0, f"sha256:{IMAGE_ID}\n", "")
         out = "true\n" if args[:2] == ["inspect", "-f"] else ""
         code = 1 if args[:2] == ["volume", "inspect"] else 0  # a new setup: no volume yet
         return subprocess.CompletedProcess(command, code, out, "")
@@ -210,6 +213,23 @@ def test_the_model_catalog_is_the_toolkits_models_codex_knows(folders, data_fold
     # Codex's own list came from a throwaway container with no network.
     [listing] = [c for c in fake.calls if c[-3:] == ["debug", "models", "--bundled"]]
     assert listing[1:3] == ["run", "--rm"] and listing[listing.index("--network") + 1] == "none"
+
+
+def test_codexs_model_list_is_kept_per_image(folders, data_folder):
+    _, fake, _, _ = run_launch(folders, data_folder)
+    assert (data_folder / "codex-models" / f"{IMAGE_ID}.json").read_text() == BUNDLED
+    assert any(c[-3:] == ["debug", "models", "--bundled"] for c in fake.calls)
+    _, fake, _, _ = run_launch(folders, data_folder)
+    assert not any(c[-3:] == ["debug", "models", "--bundled"] for c in fake.calls)
+    assert json.loads(fake.files["codex/models.json"])["models"]
+    # The throwaway container is removed with the launch's others.
+    [removal] = [c for c in fake.calls if c[1:3] == ["rm", "-f"]]
+    assert removal[-1].endswith("-agent-models")
+
+
+def test_an_unreadable_model_list_isnt_kept(folders, data_folder):
+    run_launch(folders, data_folder, bundled="not json")
+    assert not (data_folder / "codex-models").exists()
 
 
 def test_a_launch_without_codexs_model_list_runs_without_a_catalog(folders, data_folder):

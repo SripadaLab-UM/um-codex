@@ -203,11 +203,22 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
     - `model_catalog_json` (see "Models" below), `check_for_update_on_startup
       = false`, feedback off;
     - `allowed_sandbox_modes = ["read-only", "danger-full-access"]` (Codex
-      requires read-only in the list) and, with the internet off,
+      requires read-only in the list; managed_config.toml's `sandbox_mode`
+      already limits the modes the same way, so this is defence in depth in
+      case that legacy file goes) and, with the internet off,
       `allowed_web_search_modes = ["disabled"]`.
-  - **`managed_config.toml`**, a config layer above all the others (the
-    person's `config.toml`, profiles, `-c` flags); on Unix this is Codex's
-    "legacy managed config", still read by 0.157.1:
+  - **`managed_config.toml`**, the top config *layer*, above the person's
+    `config.toml`, profiles and `-c` flags; on Unix this is Codex's "legacy
+    managed config", still read by 0.157.1. It isn't above everything:
+    options passed as overrides rather than config (`codex -m/-s/-a`, the
+    app server's `thread/start` parameters, `/model` for a session) win over
+    it. For the model that's harmless: every model goes through the gateway.
+    For the sandbox it isn't a way out either: a mode the requirements don't
+    allow (`-s workspace-write`, or a client sending it) is refused and
+    Codex falls back to **read-only**, where every command fails (Codex's
+    own sandbox, bwrap, can't run in the container). M6 (the Codex app) must
+    check what the app sends in `thread/start`; the hands-on test showed
+    "Full access" in the app, so it looks fine. This layer holds:
     - `model`: the setup's;
     - `sandbox_mode = "danger-full-access"`, because the container is the
       sandbox;
@@ -215,12 +226,21 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
       (with "never" and browser actions to approve, a `granular` policy that
       behaves as "never" for commands: see M2b). Codex also makes this the
       only allowed policy, so `/permissions` can't change it, and `codex
-      exec` (which asks for "never") falls back to it with a warning;
+      exec` (which asks for "never") falls back to it with a warning. With
+      the granular policy the TUI shows the same warning ("Configured value
+      for `approval_policy` is disallowed by requirements; falling back to
+      required value Granular…") once a turn starts: harmless, the policy
+      stays the setup's and browser actions are still asked about (checked
+      live);
     - `web_search = "live"` when the internet is on, otherwise `disabled`;
     - with the browser tool on (internet on only), `[mcp_servers.browser]`
-      (see M2b);
-    - analytics off; the two "switch to a newer model" prompts Codex knows by
-      name hidden; `/work` trusted.
+      (see M2b), each of its tools' approval pinned, and
+      `[features.code_mode] direct_only_tool_namespaces = ["mcp__browser"]`
+      (below);
+    - analytics off; `/work` trusted; `[notice.model_migrations]
+      "gpt-5.4-mini" = "gpt-6-luna"`, marking as seen the one "switch to a
+      newer model" prompt built into Codex 0.157.1 (every other one comes
+      from a catalog's upgrade offers, and UM-Codex's catalog has none).
   - **`models.json`**: the model catalog (below).
 
   `$CODEX_HOME/config.toml`, in the setup's volume, is the person's own
@@ -260,7 +280,11 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
   asks for `/models` (its static model manager) and lists only these. A
   Toolkit model Codex has no entry for (`gpt-4.1`, `o3`, …) isn't listed in
   `/model`, but still works as a setup's model, with Codex's fallback
-  settings. If the Toolkit can't be reached the catalog is the setup's model
+  settings; Codex then warns "Model metadata for `<model>` not found.
+  Defaulting to fallback metadata; this can degrade performance and cause
+  issues." Codex's list is read once per agent image (kept in the data
+  folder's `codex-models/`, by image ID); the throwaway container is named
+  `<agent>-models` and removed with the launch's other containers. If the Toolkit can't be reached the catalog is the setup's model
   alone; if Codex's list can't be read the launch runs without a catalog.
 - **AGENTS.md** in the image tells Codex where things are: the folders, what's
   read-only, and that it has `sudo`. The container copies it into
@@ -476,7 +500,33 @@ modes, rigor, and the frontend.
      startup_timeout_sec = 60
      tool_timeout_sec = 180
      default_tools_approval_mode = "writes"   # "approve" when the person said no
+
+     [mcp_servers.browser.tools.browser_navigate]   # and each of the 25 tools
+     approval_mode = "prompt"   # read-only tools, or the person said no: "approve"
+
+     [features.code_mode]
+     direct_only_tool_namespaces = ["mcp__browser"]
      ```
+     - **Each tool's approval is pinned** (from `src/umcodex/browser_tools.json`,
+       the pinned server's `tools/list`; a test checks it against the image
+       when Docker and the image are there). A per-tool `approval_mode` beats
+       `default_tools_approval_mode` (`core/src/mcp_tool_call.rs`), and
+       config.toml is the person's (so the agent's) to write: without the
+       pins, the agent could switch off the approvals for later launches.
+       This layer beats config.toml. It's a soft control all the same: with
+       full access in the container, the agent could drive Chromium itself
+       with shell commands, unasked.
+     - **Code-mode models.** gpt-5.6-* and gpt-6-* run "code mode only":
+       their tools are nested in one `exec` tool, and MCP tools are
+       deferred, missing from its description. `direct_only_tool_namespaces`
+       (`features/src/feature_configs.rs`; tested upstream in
+       `core/tests/suite/mcp_tool_exposure.rs`) keeps the browser's tools as
+       direct, top-level model tools. Checked live (stub upstream,
+       gpt-5.6-terra): the first request carried the `mcp__browser`
+       namespace with its 25 tools; and with `approval_mode = "approve"`
+       written into config.toml for `browser_navigate` (and as the default),
+       Codex still asked "Allow the browser MCP server to run tool
+       browser_navigate?", and ran it once allowed.
      - It runs inside the agent container over stdio, as `agent`, with no
        display. `--browser chromium` is Playwright's Chromium (the default
        is Google Chrome, which isn't installed and has no arm64 Linux

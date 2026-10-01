@@ -4,6 +4,8 @@ managed_config.toml and the model catalog."""
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -15,6 +17,7 @@ from umcodex.codex_config import (
     BROWSER_COMMAND,
     BROWSER_ENV,
     TOKEN_ENV,
+    browser_tools,
     model_catalog,
     render,
     render_requirements,
@@ -101,11 +104,11 @@ def test_web_search_follows_the_internet_switch():
     assert parsed(internet=False)["web_search"] == "disabled"
 
 
-def test_analytics_is_off_and_no_model_switch_prompts():
+def test_analytics_is_off_and_the_built_in_model_switch_is_marked_seen():
     config = parsed()
     assert config["analytics"]["enabled"] is False
-    assert config["notice"]["hide_gpt5_1_migration_prompt"] is True
-    assert config["notice"]["hide_gpt-5.1-codex-max_migration_prompt"] is True
+    # Codex 0.157.1's one built-in migration (tui/src/app/startup_prompts.rs).
+    assert config["notice"]["model_migrations"] == {"gpt-5.4-mini": "gpt-6-luna"}
 
 
 def test_no_key_or_auth_file_settings():
@@ -229,6 +232,66 @@ def test_browser_approvals(approvals, asks, mode, policy):
     config = parsed(internet=True, browser=True, browser_asks=asks, approvals=approvals)
     assert config["mcp_servers"]["browser"]["default_tools_approval_mode"] == mode
     assert config["approval_policy"] == policy
+
+
+def test_the_browser_tools_stay_direct_for_code_mode_models():
+    config = parsed(internet=True, browser=True)
+    assert config["features"]["code_mode"]["direct_only_tool_namespaces"] == ["mcp__browser"]
+    assert "features" not in parsed(internet=True)
+
+
+@pytest.mark.parametrize("asks", [True, False])
+def test_every_browser_tools_approval_is_pinned(asks):
+    tools = parsed(internet=True, browser=True, browser_asks=asks)["mcp_servers"]["browser"]["tools"]
+    assert set(tools) == set(browser_tools()) and len(tools) == 25
+    for name, read_only in browser_tools().items():
+        expected = "prompt" if asks and not read_only else "approve"
+        assert tools[name] == {"approval_mode": expected}, name
+    if asks:
+        assert tools["browser_navigate"]["approval_mode"] == "prompt"
+        assert tools["browser_snapshot"]["approval_mode"] == "approve"
+
+
+def image_tools_list(image: str) -> dict[str, bool] | None:
+    """The browser server's tools/list in the agent image, or None without Docker or the image."""
+    if not shutil.which("docker"):
+        return None
+    try:
+        if subprocess.run(["docker", "image", "inspect", image], capture_output=True, timeout=30).returncode:
+            return None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    client = (
+        "import json,subprocess,sys\n"
+        "p=subprocess.Popen(sys.argv[1:],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)\n"
+        "def send(m): p.stdin.write(json.dumps(m)+'\\n'); p.stdin.flush()\n"
+        "def recv(i):\n"
+        "    while True:\n"
+        "        m=json.loads(p.stdout.readline())\n"
+        "        if m.get('id')==i: return m\n"
+        "send({'jsonrpc':'2.0','id':1,'method':'initialize','params':{'protocolVersion':'2025-06-18',"
+        "'capabilities':{},'clientInfo':{'name':'t','version':'0'}}})\n"
+        "recv(1); send({'jsonrpc':'2.0','method':'notifications/initialized'})\n"
+        "send({'jsonrpc':'2.0','id':2,'method':'tools/list'})\n"
+        "print(json.dumps({t['name']:bool((t.get('annotations') or {}).get('readOnlyHint'))"
+        " for t in recv(2)['result']['tools']})); p.kill()\n"
+    )
+    done = subprocess.run(
+        ["docker", "run", "--rm", "--network", "none", "--label", "umcodex.app=um-codex-test", image,
+         "python3", "-c", client, BROWSER_COMMAND, *BROWSER_ARGS],
+        capture_output=True, text=True, timeout=180,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+def test_the_browser_tool_list_matches_the_agent_images():
+    from umcodex.containers import agent_image
+
+    found = image_tools_list(agent_image())
+    if found is None:
+        pytest.skip("needs Docker and the agent image")
+    assert found == browser_tools()
 
 
 def test_the_smoke_test_starts_the_browser_the_same_way():
