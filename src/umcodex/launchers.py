@@ -9,6 +9,12 @@ switched to. So the two can't drift apart.
   own copy of the icon, and a script that runs `<root>/bin/um-codex ui
   --detach` (the launcher window, in the browser). The Desktop shortcut is a
   link to the app, so it never needs rewriting.
+- **Mac's command**: `<root>/bin/um-codex`, a shell script that runs the
+  version `current` names (the app runs it, and the typed `um-codex` is a
+  link to it in ~/.local/bin). Its folder is written in, never worked out
+  from $0, which through the link is the link. The installer writes it with
+  `um-codex launchers --write-command`; a refresh rewrites it in an install
+  where it differs (alpha.1's and alpha.2's didn't work through the link).
 - **Windows**: `UM-Codex.lnk` in the Start menu and on the Desktop: Windows
   PowerShell, hidden, runs `<root>\\bin\\um-codex.exe ui --detach`. Written
   and read through WScript.Shell, in a Windows PowerShell this starts
@@ -57,8 +63,10 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 
 # 1: alpha.1's (Terminal, `launch --from-app`). 2: the launcher window, `ui --detach`.
-FORMAT = 2
-FORMATS = (1, 2)
+# 3: as 2, and the Mac's bin/um-codex has its folder written in (mac_command_file),
+# so it works through the ~/.local/bin/um-codex link (alpha.1's and alpha.2's didn't).
+FORMAT = 3
+FORMATS = (1, 2, 3)
 NAME = "UM-Codex"
 BUNDLE_ID = "edu.umich.umcodex"
 FORMAT_KEY = "UMCodexLauncherFormat"
@@ -99,6 +107,31 @@ def ps_quote(text: str) -> str:
 
 def mac_command(root: Path) -> Path:
     return root / "bin" / "um-codex"
+
+
+def mac_command_file(root: Path) -> bytes:
+    """`<root>/bin/um-codex`, the Mac's command: runs the version `current`
+    names, or `previous` if that one can't run. Its folder is written in,
+    single-quoted, never worked out from $0: the typed `um-codex` is a link
+    to it in ~/.local/bin, and through the link $0 is the link (alpha.1's and
+    alpha.2's worked out ~/.local from it, and failed). The same whatever the
+    launcher format: any version runs from it."""
+    folder = sh_quote(os.path.abspath(root))
+    return f"""#!/bin/sh
+# Written by UM-Codex; its installer and `um-codex update` rewrite it.
+# Runs the UM-Codex version named in current, or the one before (previous)
+# if that one can't run. The folder is written in, not worked out from $0:
+# ~/.local/bin/um-codex is a link to this file.
+# UTF-8 for Python's own text files and console, whatever the locale.
+export PYTHONUTF8=1
+root={folder}
+version="$(head -n 1 "$root/current" 2>/dev/null || true)"
+if [ -z "$version" ] || [ ! -x "$root/versions/$version/bin/um-codex" ]; then
+  echo "UM-Codex ${{version:-(none)}} can't be opened; opening the version before it." >&2
+  version="$(head -n 1 "$root/previous" 2>/dev/null || true)"
+fi
+exec "$root/versions/$version/bin/um-codex" "$@"
+""".encode()
 
 
 def mac_icon() -> bytes | None:
@@ -699,7 +732,66 @@ class Launchers:
                 f"There's no {NAME} app in /Applications or ~/Applications, so there was nothing to "
                 "bring up to date. (The UM-Codex installer adds it.)"
             )
+        self._refresh_command(report, dry_run=dry_run, quiet=quiet)
         return report
+
+    def write_command(self) -> Report:
+        """The Mac installer's: `<root>/bin/um-codex` (mac_command_file),
+        whatever is there."""
+        path = mac_command(self.root)
+        if self.platform != "darwin":
+            self.say("Only the Mac's um-codex command is written this way.")
+            return Report(failed=[path])
+        error = self._write_command(path)
+        if error:
+            self.say(f"The um-codex command, {path}, couldn't be written ({error}).")
+            return Report(failed=[path])
+        return Report(changed=[path])
+
+    def _refresh_command(self, report: Report, *, dry_run: bool, quiet: bool) -> None:
+        """`<root>/bin/um-codex`, in an install (`current` is there), rewritten
+        if it isn't what mac_command_file says: alpha.1's and alpha.2's worked
+        out their folder from $0, so the typed `um-codex` (a link to it in
+        ~/.local/bin) never worked. Ours whatever is there: it's in this
+        install's own folder."""
+        if not (self.root / "current").is_file():
+            return
+        path = mac_command(self.root)
+        wanted = mac_command_file(self.root)
+        try:
+            same = _read_inside(self.root, "bin/um-codex") == wanted and os.access(path, os.X_OK)
+        except OSError:
+            same = False
+        if same:
+            report.current.append(path)
+            if not quiet:
+                self.say(f"The um-codex command, {path}, is up to date.")
+            return
+        if dry_run:
+            report.changed.append(path)
+            self.say("Would bring the um-codex command up to date (it would work through ~/.local/bin):")
+            self._show_change(self.root, "bin/um-codex", wanted)
+            return
+        error = self._write_command(path)
+        if error:
+            report.failed.append(path)
+            self.say(f"The um-codex command, {path}, couldn't be brought up to date ({error}).")
+        else:
+            report.changed.append(path)
+            self.say(
+                f"Brought the um-codex command up to date ({path}): it works through "
+                "~/.local/bin/um-codex now."
+            )
+
+    def _write_command(self, path: Path) -> str:
+        """Empty when written, else what went wrong. Never through a link: `bin`
+        must be a folder itself, and a link there is replaced, not followed."""
+        try:
+            write_file(path, mac_command_file(self.root), 0o755)
+        except OSError as error:
+            log.warning("writing %s failed", path, exc_info=True)
+            return f"{type(error).__name__}: {error}"
+        return ""
 
     @staticmethod
     def _mac_differences(app: Path, files: dict[str, bytes]) -> list[str]:
