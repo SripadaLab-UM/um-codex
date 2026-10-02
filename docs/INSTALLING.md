@@ -67,7 +67,11 @@ Steps:
    `bin/um-codex ui --detach`: UM-Codex's launcher window (DESIGN.md, M5)
    starts in the background and opens in the browser. No Terminal window
    opens until a setup is started there, and `LSUIElement` keeps the app
-   out of the Dock. And a Desktop shortcut `~/Desktop/UM-Codex`.
+   out of the Dock. The installer chooses where it goes and makes the
+   bundle folder; what's in it is written by the new version itself, `um-codex
+   launchers --write <app>` (`src/umcodex/launchers.py`, the same code `um-codex
+   update` uses to bring it up to date: see "Keeping the app and shortcuts up
+   to date" below). And a Desktop shortcut `~/Desktop/UM-Codex`.
    Then "Done", where everything went, and the offer to show and open it.
 
 `installer/macos/uninstall.sh` runs `um-codex uninstall` (which first asks
@@ -167,7 +171,7 @@ Commits are in github.com/SripadaLab-UM/ihs-datalab.
 - An earlier installer's copy in the other Applications folder is removed. (`627383c`)
 - The app runs `bin/um-codex`, never a version's folder, so it keeps working when `current` changes. (`627383c`)
 - The program's path is single-quote escaped in the app's script, so a home folder like `/Users/o'brien` works. (`86efba7`; DataLab handed it to AppleScript as an argument, as UM-Codex did before M5.)
-- The icon is copied out of the package into the bundle, so removing an old version doesn't take it; `touch` the app so Finder notices. (`627383c`)
+- The icon is copied out of the package into the bundle, so removing an old version doesn't take it; `touch` the app so Finder notices. (`627383c`; now done by `um-codex launchers --write`.)
 - A Desktop shortcut: a link to the app, replacing only a link to exactly `~/Applications/UM-Codex.app` or `/Applications/UM-Codex.app`; anything else there is left alone. The uninstaller removes only such a link. (`627383c`, `86efba7`)
 - "Done" says where the app, the shortcut, the command and the program files are, then, only with someone at a terminal, offers "Show in Finder" (`open -R`) and "Open now". (`627383c`)
 - Ctrl-C at those two questions just ends ("OK.", exit 0): the install has finished by then. (`ba4bcf1`)
@@ -214,6 +218,83 @@ by the script, so it carries no quarantine flag and Gatekeeper doesn't
 question it; Docker's download is checked with `codesign` and `spctl`
 instead.
 
+## Keeping the app and shortcuts up to date
+
+What the launchers contain is said in one place, `src/umcodex/launchers.py`,
+and both the installers and the updater use it, so they can't drift apart:
+
+- The installers decide where the launchers go (as above) and then run the
+  new version's `um-codex launchers --write <paths>`: on a Mac the app's
+  `Info.plist`, its script and its icon, then `lsregister -f` so macOS reads
+  it again (skipped if lsregister isn't there); on Windows the `.lnk` files
+  (through WScript.Shell, in a Windows PowerShell it starts, with
+  `PYTHONUTF8`) and the icon in `<app>\icons`. If the Mac app can't be
+  written, the installer removes the half-made one it had just prepared, so
+  the next run isn't blocked.
+- `um-codex update` and `--rollback`, once `current` names the version
+  switched to, run that version's `um-codex launchers --refresh`. It rewrites
+  only this install's own launchers, only where they already are
+  (`/Applications` or `~/Applications`; the Start menu, and the Desktop as
+  Windows says where it is, OneDrive included), and only if they differ from
+  what that version writes. Anything else of that name, or a launcher the
+  person removed, is left alone.
+  - Mac: the app's bundle id, *and* a script naming this install's command
+    (`'<app folder>/bin/um-codex'`, single-quoted; alpha.1's names it too), so
+    another account's UM-Codex in a shared `/Applications` is never taken for
+    ours. The installer's `ours()` and the uninstaller check the same.
+  - Windows: a shortcut whose command line names `'<app folder>\`,
+    single-quoted.
+  - Never through a link: the app, `Contents` and `Contents/MacOS` must be
+    folders themselves, and each file is written under a name of its own
+    (`mkstemp`, so `O_CREAT|O_EXCL`) and renamed into place (which replaces a
+    link there rather than writing through it); the same for
+    `<app>/launchers` and the Windows icon.
+  - On a Mac the Desktop shortcut is a link to the app, so it never needs
+    rewriting. An older copy that can't be changed while another copy is up
+    to date is skipped, with a note that it can go to the Trash.
+  - If one can't be rewritten, the update still stands, and it says to run
+    the installer again (or `um-codex launchers --refresh` later, or
+    `um-codex` in a terminal).
+- Rolling back to a version from before this (0.1.0-alpha.1, which has no
+  `launchers` command): the newer code doing the rollback writes alpha.1's
+  launchers itself (format 1: the app runs `launch --from-app` in Terminal;
+  the shortcut runs it in Windows Terminal or Windows PowerShell), so
+  alpha.1 still opens. If even that fails, it says the app won't open it and
+  gives the command to run in a terminal.
+- `<app>/launchers` records the launcher format they were last written in
+  (`launchers.FORMAT`; the Mac app's `Info.plist` has it too, as
+  `UMCodexLauncherFormat`), whether that worked, and when. An update made by
+  alpha.1's own updater doesn't refresh them, so the first `um-codex` or
+  `um-codex ui` of a newer version whose format differs from the record (or
+  finds none) refreshes them. That's how alpha.1's app becomes the launcher
+  window's: opened once more, it runs the new version's `um-codex launch
+  --from-app`, which rewrites it and carries on in Terminal; from then on it
+  opens in the browser. If that refresh fails, it says so once; after that
+  it tries again at most once a day, and says so only in the log.
+- Both launchers run the command in `<app>/bin` (the Mac shim, the Windows
+  `um-codex.exe` copy), never a version's folder, so an ordinary update
+  changes nothing in them. A change to what they contain bumps `FORMAT`.
+- A shortcut pinned to the Windows taskbar is Windows' own copy (in
+  `%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar`),
+  which UM-Codex doesn't touch: after an update that changes the launchers,
+  an alpha.1 pin still opens a terminal. Unpin it and pin UM-Codex again from
+  the Start menu. (The same for a Mac Dock item: it follows the app, so it
+  needs nothing.)
+- `um-codex launchers --refresh --dry-run` says what would change (for the
+  Mac app, the lines of each file) and changes nothing.
+
+Tests: `tests/test_launchers.py` (the Mac app in temporary folders, links
+and another account's app included; the Windows shortcuts through a
+stand-in for WScript.Shell, and, on CI's `windows-installer` job, real ones
+in a temporary Start menu and Desktop, and a Desktop redirected as OneDrive
+does it), `tests/test_update.py` (the update and rollback run it, carry on
+when it fails, and a rollback to alpha.1 writes its launchers), and
+`tests/test_macos_installer.py` (its fake `um-codex` runs the real
+`launchers` command). The tests point `/Applications`, the Start menu, the
+Desktop and the home folder at temporary folders
+(`UMCODEX_SYSTEM_APPLICATIONS`, `UMCODEX_START_MENU`, `UMCODEX_DESKTOP`,
+`HOME`), and turn lsregister off (`UMCODEX_LSREGISTER=`).
+
 ## Windows
 
 `installer/windows/install.ps1` and `uninstall.ps1`, adapted from IHS
@@ -242,9 +323,12 @@ right if a policy took it; (3) the pinned uv; (4) UM-Codex in
 Toolkit key, read masked and piped to `um-codex key --from-stdin` (0 saved,
 1 invalid: asked again up to 3 times, 2 cancelled), kept if one is saved
 unless `-ReplaceKey`, skipped under `-Yes`; (7) "UM-Codex" in the Start menu
-and on the Desktop with `UM-Codex.ico`, running Windows PowerShell with its
+and on the Desktop with `UM-Codex.ico`, written by `um-codex launchers --write
+<.lnk files>` (`src/umcodex/launchers.py`, which `um-codex update` also uses;
+the installer only decides which: the Start menu's, and the Desktop's unless
+one of that name there isn't UM-Codex's), running Windows PowerShell with its
 window hidden (and the shortcut minimized, so it at most flashes), which runs
-`um-codex.exe ui --detach`: the launcher window (DESIGN.md, M5) starts in the
+`bin\um-codex.exe ui --detach`: the launcher window (DESIGN.md, M5) starts in the
 background with a console that's never shown (the Docker commands it runs
 share it) and opens in the browser. A setup started there opens Windows
 Terminal if it's installed, else Windows PowerShell. Then "All done!" with
@@ -254,7 +338,7 @@ a summary.
 refused, exit 2) runs `um-codex uninstall` (containers, networks, images, the
 key, and the data if asked). Only once that has succeeded does it remove uv,
 the installer's folders and the program files (`versions`, `bin`, `icons`, `downloads`, `current`,
-`previous`), the shortcuts, the PATH entry and the installer's leftovers, and
+`previous`, `launchers`), the shortcuts, the PATH entry and the installer's leftovers, and
 lists anything it couldn't remove.
 
 Left out from DataLab (DataLab only): lab settings files, profiles and
@@ -346,7 +430,7 @@ Uninstalling
 - `irm | iex` and `& ([scriptblock]::Create((irm ...))) -Options`: the installer is one script block (`$UmCodexInstaller`), so the administrator part and the after-restart copy use its exact text however it was started; a stop ends only the installer (`Stop-Run` throws to the runner instead of `exit`, which would close the person's window); the environment and window title it changes are put back. CI checks both.
 - The after-restart run uses a saved copy of the installer (`%LOCALAPPDATA%\UM-Codex\installer\install.ps1`).
 - The `um-codex` command: `bin` is added to the user PATH as stored (REG_EXPAND_SZ entries kept unexpanded), announced with WM_SETTINGCHANGE, and removed on uninstall.
-- No `.cmd` shim: cmd.exe asks "Terminate batch job (Y/N)?" after every Ctrl-C. The typed `um-codex` is `bin\um-codex.exe`, a copy of the current version's own uv launcher (which names that version's `python.exe` by full path), recopied on every switch, before `current` is written: copied beside it as `.um-codex.exe.new`, then a running copy is renamed aside rather than overwritten and the new one moved into place; old copies are removed later. `um-codex update` does the same. The shortcut runs the version `current` names directly. A `.cmd` beside the `.exe` would never run (PATHEXT prefers `.exe`), so an earlier one is removed.
+- No `.cmd` shim: cmd.exe asks "Terminate batch job (Y/N)?" after every Ctrl-C. The typed `um-codex` is `bin\um-codex.exe`, a copy of the current version's own uv launcher (which names that version's `python.exe` by full path), recopied on every switch, before `current` is written: copied beside it as `.um-codex.exe.new`, then a running copy is renamed aside rather than overwritten and the new one moved into place; old copies are removed later. `um-codex update` does the same. The shortcut runs `bin\um-codex.exe` (before, it read `current` and ran that version's own `um-codex.exe`). A `.cmd` beside the `.exe` would never run (PATHEXT prefers `.exe`), so an earlier one is removed.
 - In Windows Terminal, `--` ends wt's own options; the launcher window gives
   PowerShell its command as `-EncodedCommand`, so there's no `;` for wt to
   split at (before M5 the shortcut escaped it as `\;`, and the uninstaller

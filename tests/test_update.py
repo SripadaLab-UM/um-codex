@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -26,6 +28,9 @@ class FakeTools:
         self.pull_code = 0
         self.says: str | None = None  # what --version says, if not the folder's version
         self.pip_code = 0
+        # What the new version's `um-codex launchers --refresh` does.
+        brought = "Brought /Applications/UM-Codex.app up to date.\n"
+        self.launchers = subprocess.CompletedProcess([], 0, brought, "")
 
     def __call__(
         self, command: Sequence[str], *, timeout: float, cwd: Path | None = None, capture: bool = True
@@ -47,6 +52,8 @@ class FakeTools:
             return self.done(out=f"UM-Codex {self.says or program.parent.parent.name}\n")
         if program.name.startswith("um-codex") and command[1:] == ["pull"]:
             return self.done(self.pull_code)
+        if program.name.startswith("um-codex") and command[1:] == ["launchers", "--refresh"]:
+            return self.launchers
         raise AssertionError(f"unexpected command {command}")
 
     @staticmethod
@@ -142,10 +149,13 @@ def test_an_update_installs_beside_pulls_switches_and_prunes(app, github, key, d
         "--default-index", "https://pypi.org/simple", "--link-mode", "copy",
         "--python", str(new / "bin" / "python"), "-r", "requirements.txt",
     ]  # fmt: skip
-    # The new version checks itself, then pulls its own images, showing Docker's progress.
-    [version, pull] = tools.ran("um-codex")
+    # The new version checks itself, then pulls its own images, showing Docker's
+    # progress; once it's the one in use, it brings the app up to date.
+    [version, pull, refresh] = tools.ran("um-codex")
     assert version == [str(new / "bin" / "um-codex"), "--version"]
     assert pull == [str(new / "bin" / "um-codex"), "pull"]
+    assert refresh == [str(new / "bin" / "um-codex"), "launchers", "--refresh"]
+    assert "Brought /Applications/UM-Codex.app up to date." in said
     assert [capture for c, _, capture in tools.commands if c[-1] == "pull"] == [False]
     assert "Updated to UM-Codex 0.1.0a3" in "\n".join(said)
     assert json.loads((data_folder / "update-check.json").read_text())["available"] is None
@@ -174,6 +184,88 @@ def test_windows_gets_a_copy_of_the_new_versions_launcher_in_bin(tmp_path, githu
     assert (root / "bin" / "um-codex.exe").read_text() == "launcher of 0.1.0a1"
     # The copy moved aside earlier is gone once nothing runs it.
     assert not aside.exists() and len(list((root / "bin").glob("um-codex.exe.old-*"))) == 1
+
+
+def test_the_launchers_are_refreshed_by_the_version_switched_to(app, github, key, data_folder):
+    private, public = key
+    github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
+    tools, said = FakeTools(), []
+    up = updater(app, github, public, tools, said, data_folder)
+
+    def switched_first(command, **kw):
+        if command[1:] == ["launchers", "--refresh"]:
+            assert pointer(app)[0] == Path(command[0]).parent.parent.name  # `current` names it already
+        return tools(command, **kw)
+
+    up._run = switched_first
+    assert up.update() == 0
+    assert up.rollback() == 0
+    refreshed = [c for c in tools.ran("um-codex") if c[1:] == ["launchers", "--refresh"]]
+    programs = [str(app / "versions" / v / "bin" / "um-codex") for v in ("0.1.0a3", "0.1.0a1")]
+    assert refreshed == [[program, "launchers", "--refresh"] for program in programs]
+
+
+def test_launchers_that_cant_be_refreshed_dont_fail_the_update(app, github, key, data_folder):
+    private, public = key
+    github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
+    tools, said = FakeTools(), []
+    tools.launchers = subprocess.CompletedProcess(
+        [], 1, "/Applications/UM-Codex.app couldn't be brought up to date (PermissionError: no).\n", ""
+    )
+    assert updater(app, github, public, tools, said, data_folder).update() == 0
+    assert pointer(app) == ("0.1.0a3", "0.1.0a1")
+    text = "\n".join(said)
+    assert "couldn't be brought up to date (PermissionError: no)" in text
+    assert "UM-Codex 0.1.0a3 is installed and works: run um-codex launchers --refresh" in text
+    assert "Updated to UM-Codex 0.1.0a3" in text
+
+
+OLD_VERSION = "um-codex: error: argument command: invalid choice: 'launchers' (choose from ...)\n"
+
+
+def test_rolling_back_to_a_version_without_launchers_writes_its_launchers(app, github, key, data_folder):
+    from umcodex import launchers
+
+    private, public = key
+    github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
+    tools, said = FakeTools(), []
+    up = updater(app, github, public, tools, said, data_folder)
+    assert up.update() == 0
+    # The app as the newer version wrote it (a stand-in /Applications).
+    bundle = Path(os.environ[launchers.SYSTEM_APPS_ENV]) / "UM-Codex.app"
+    assert launchers.Launchers(app, platform="darwin", say=said.append).write([bundle]).ok
+    tools.launchers = subprocess.CompletedProcess([], 2, "", OLD_VERSION)
+    assert up.rollback() == 0
+    # 0.1.0-alpha.1 has no `launchers`: the newer code writes alpha.1's app
+    # (Terminal, `launch --from-app`), so it still opens.
+    for name, content in launchers.mac_app_files(app, launchers.mac_icon(), 1).items():
+        assert (bundle / name).read_bytes() == content, name
+    assert "launch --from-app" in (bundle / "Contents" / "MacOS" / "UM-Codex").read_text()
+    assert launchers.Launchers(app, platform="darwin").record().format == 1
+    assert "UM-Codex 0.1.0a1 opens in a terminal window" in "\n".join(said)
+    assert pointer(app) == ("0.1.0a1", "0.1.0a3")
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="POSIX permissions")
+def test_a_rollback_whose_launchers_cant_be_set_back_says_how_to_start_it(app, github, key, data_folder):
+    from umcodex import launchers
+
+    private, public = key
+    github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
+    tools, said = FakeTools(), []
+    up = updater(app, github, public, tools, said, data_folder)
+    assert up.update() == 0
+    bundle = Path(os.environ[launchers.SYSTEM_APPS_ENV]) / "UM-Codex.app"
+    assert launchers.Launchers(app, platform="darwin", say=said.append).write([bundle]).ok
+    (bundle / "Contents" / "MacOS").chmod(0o555)
+    tools.launchers = subprocess.CompletedProcess([], 2, "", OLD_VERSION)
+    try:
+        assert up.rollback() == 0
+    finally:
+        (bundle / "Contents" / "MacOS").chmod(0o755)
+    text = "\n".join(said)
+    assert "The UM-Codex app won't open UM-Codex 0.1.0a1. To start it, open Terminal and run: " in text
+    assert str(app / "bin" / "um-codex") in text
 
 
 def test_rollback_switches_back_and_forth(app, github, key, data_folder):
