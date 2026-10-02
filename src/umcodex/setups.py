@@ -511,12 +511,17 @@ def local_summary(setup: Setup, layout: folders.Layout) -> list[str]:
     lines = ["", f"Setup: {setup.name}", "", f"ON THIS COMPUTER. {LOCAL_PLAIN}", "", "Its project folders:"]
     lines.append(f"  {layout.working}")
     lines += [f"  {host}" for host, _ in layout.writes]
+    lines += [f"  Note: {note}" for note in layout.notes]
     if setup.local_access == "folder":
         lines.append("Codex's commands can change only these folders (Codex's own sandbox).")
         if setup.computer_use:
             lines.append("That doesn't limit computer and browser control: they act through your apps.")
+        lines.append(
+            "Internet for Codex's commands: ON." if setup.internet else "Internet for Codex's commands: off."
+        )
     else:
         lines.append("Codex can read, change and DELETE any of your files, not only these.")
+        lines.append("Internet: ON, everything this Mac can reach (full access doesn't limit it).")
     lines.append(
         "Computer and browser control: ON (Computer Use, the app's browser, your Chrome). macOS asks you "
         'once for Screen Recording and Accessibility, for "Codex Computer Use".'

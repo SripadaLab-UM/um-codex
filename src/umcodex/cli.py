@@ -125,7 +125,20 @@ def main(argv: list[str] | None = None) -> int:
     proxy.add_argument("setup")
     proxy.add_argument("--docker", default="docker")
     proxy.add_argument("--data-dir", type=Path)
+    # Codex's auth.command in UM-Codex's local copy of the app (this_computer.py): not in the help.
+    token = commands.add_parser("local-token")
+    token.add_argument("--data-dir", type=Path)
     args = parser.parse_args(argv)
+    if args.command == "local-token":
+        # stdout is the token for Codex: no log setup, nothing else printed there.
+        from umcodex.this_computer import TokenRefused, local_token
+
+        try:
+            print(local_token(args.data_dir))
+        except TokenRefused as why:
+            print(f"UM-Codex: no token: {why}.", file=sys.stderr)
+            return 1
+        return 0
     if args.command == "ssh-proxy":
         # stdout is the ssh connection: no log setup, nothing printed.
         from umcodex.codex_app import ssh_proxy
@@ -191,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
             from_app=getattr(args, "from_app", False),
             setup_name=getattr(args, "setup", None),
             in_app=getattr(args, "open", "terminal") == "app",
+            local=getattr(args, "open", "terminal") == "local",
         )
     except KeyboardInterrupt:
         print("\nStopped.")
@@ -318,8 +332,16 @@ def _refresh_launchers() -> None:
         logging.getLogger(__name__).warning("refreshing the launchers failed", exc_info=True)
 
 
+NOT_LOCAL = "start it without --open local."
+
+
 def _launch(
-    codex_args: list[str], *, from_app: bool = False, setup_name: str | None = None, in_app: bool = False
+    codex_args: list[str],
+    *,
+    from_app: bool = False,
+    setup_name: str | None = None,
+    in_app: bool = False,
+    local: bool = False,
 ) -> int:
     from umcodex import launch
 
@@ -343,6 +365,9 @@ def _launch(
     if setup_name is not None:
         chosen = _chosen_without_asking(SetupStore(), setup_name)
         if chosen is None:
+            return 1
+        if local and not chosen[0].on_this_computer:
+            print(f"“{chosen[0].name}” runs in the sandbox, not on this computer: {NOT_LOCAL}")
             return 1
         if chosen[0].on_this_computer:  # no Docker: it runs on this computer (M4)
             if not credentials.has_api_key():
@@ -368,6 +393,9 @@ def _launch(
         print("Not started.")
         return 0
     setup, layout = chosen
+    if local and not setup.on_this_computer:
+        print(f"“{setup.name}” runs in the sandbox, not on this computer: {NOT_LOCAL}")
+        return 1
     if setup.on_this_computer:
         return _launch_local(setup, layout)
     if in_app:

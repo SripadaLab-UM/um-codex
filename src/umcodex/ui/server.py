@@ -219,6 +219,9 @@ def setup_from(
     local_access = body.get("local_access") or "full"
     if local_access not in LOCAL_ACCESS:
         errors["local_access"] = "That choice of what Codex can change wasn't understood."
+    if runs_on == "this-computer" and local_access == "full" and approvals == "never":
+        # Full access on the Mac with nothing asked: refused (approvals is in More options).
+        errors.setdefault("approvals", this_computer.FULL_AND_NEVER)
     if runs_on == "this-computer" and reads and "folders" not in errors:
         errors["folders"] = (
             "Read-only folders aren't available on this computer: Codex can read all your files there. "
@@ -698,8 +701,9 @@ class Launcher:
             changed = moved(setup, own_data=self.own_data)
         except FolderRefused as why:
             raise Invalid(f"This setup can't be used as it is: {why} Edit it to change that.") from None
-        if setup.reads:
-            raise Invalid("Read-only folders aren't available on this computer: edit the setup.", status=409)
+        refusal = this_computer.local_refusal(setup)
+        if refusal is not None:
+            raise Invalid(f"{refusal} Edit the setup.", status=409)
         if changed and not moved_confirmed(body, changed):
             raise Invalid(MOVED, "moved", status=409)
         if changed:

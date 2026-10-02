@@ -44,6 +44,8 @@ log = logging.getLogger(__name__)
 LOCAL_FOLDER = "codex-app-local"  # in the data folder: this copy's CODEX_HOME, profile, relay files
 PORT_FILE = "relay-port"
 TOKEN_FILE = "relay-token"
+RELAY_PID_FILE = "relay-pid"  # the process holding the relay (checked by `um-codex local-token`)
+HOLD_LOCK = "launch.lock"  # one launch on this computer at a time, per data folder
 PROVIDER = "toolkit"
 
 # "Full access" (the default) or "this folder only": Codex's own sandbox on
@@ -120,7 +122,7 @@ def local_config(
     existing: str,
     *,
     port: int,
-    token_file: Path,
+    token_command: list[str],
     model: str,
     folders: Iterable[Path],
     access: str = "full",
@@ -136,6 +138,7 @@ def local_config(
     Mac enforces settings for one copy only)."""
     if access not in ACCESS:
         raise ValueError(f"unknown access {access!r}")
+    folders = list(folders)
     config = tomllib.loads(existing) if existing.strip() else {}
     providers = config.get("model_providers")
     providers = providers if isinstance(providers, dict) else {}
@@ -147,7 +150,9 @@ def local_config(
         "stream_max_retries": 2,
         "stream_idle_timeout_ms": 300000,
         # Re-read every 5 minutes: the relay writes a new token when it restarts.
-        "auth": {"command": "/bin/cat", "args": [str(token_file)], "refresh_interval_ms": 300000},
+        # `um-codex local-token`: the token, only after checking that what listens on the port is
+        # this computer's relay, held by this person (local_token).
+        "auth": {"command": token_command[0], "args": token_command[1:], "refresh_interval_ms": 300000},
     }
     projects = config.get("projects")
     projects = projects if isinstance(projects, dict) else {}
@@ -169,7 +174,12 @@ def local_config(
         }
     )
     if access == "folder":
-        config["sandbox_workspace_write"] = {"network_access": internet}
+        # Codex 0.157.1 and 0.159.2: `SandboxWorkspaceWrite { writable_roots, network_access, ... }`.
+        # Every project folder is writable, not only the chat's working folder.
+        config["sandbox_workspace_write"] = {
+            "network_access": internet,
+            "writable_roots": [str(f) for f in folders],
+        }
     else:
         config.pop("sandbox_workspace_write", None)
     if computer_use is not None:
@@ -284,9 +294,15 @@ def relay_port(data: Path | None = None) -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _private_folder(path.parent)
     _private_write(path, f"{port}\n")
     return port
+
+
+def _private_folder(folder: Path) -> None:
+    """The local copy's folder: the person's only (0700), even if it was there before."""
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(folder, 0o700)
 
 
 class FixedPortRelayServer(RelayServer):
@@ -304,6 +320,9 @@ class FixedPortRelayServer(RelayServer):
             timeout=httpx.Timeout(connect=20, read=900, write=120, pool=20), follow_redirects=False
         )
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # A relay that just ended leaves its port in TIME_WAIT: rebinding it must work at once.
+        # (On macOS this doesn't let two programs listen on the port together.)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("127.0.0.1", self._fixed))
         self._runner = web.AppRunner(self.relay.app(), access_log=None)
         await self._runner.setup()
@@ -324,6 +343,7 @@ class LocalRelay:
         self.data = data or data_dir()
         self.port = relay_port(self.data)
         self.token_file = local_folder(self.data) / TOKEN_FILE
+        self.pid_file = local_folder(self.data) / RELAY_PID_FILE
         kept = None
         if keep_token:
             with contextlib.suppress(OSError, UnicodeDecodeError):
@@ -332,17 +352,106 @@ class LocalRelay:
         self._server = FixedPortRelayServer(Relay(self.token, api_key, base_url), self.port)
 
     def start(self) -> int:
+        _private_folder(local_folder(self.data))
         self._server.start()  # OSError if the port is taken (another UM-Codex holds it)
         _private_write(self.token_file, self.token)
+        _private_write(self.pid_file, f"{os.getpid()}\n")
         log.info("local copy's relay on 127.0.0.1:%d", self.port)
         return self.port
 
     def stop(self, *, forget: bool = True) -> None:
+        with contextlib.suppress(OSError, ValueError):
+            if int(self.pid_file.read_text(encoding="ascii")) == os.getpid():
+                self.pid_file.unlink()
         if forget:
             with contextlib.suppress(OSError):
                 if self.token_file.read_text(encoding="utf-8") == self.token:
                     self.token_file.unlink()
         self._server.stop()
+
+
+# --- `um-codex local-token`: Codex's auth.command ---------------------------------------
+
+
+class TokenRefused(RuntimeError):
+    """The token isn't given out; the message says why (for the log, not a secret)."""
+
+
+def token_command(data: Path | None = None) -> list[str]:
+    """Codex's `auth.command` for the local copy: this UM-Codex's `local-token`,
+    with absolute paths (an installed copy's launcher, which follows updates;
+    a development copy, its own Python), and the data folder when it isn't
+    the default."""
+    import sys
+
+    from umcodex.paths import default_data_dir
+    from umcodex.update import Layout, install_root
+
+    layout = Layout(install_root())
+    if layout.running_version() is not None and layout.command.exists():
+        program = [str(layout.command)]
+    else:
+        program = [sys.executable, "-m", "umcodex"]
+    command = [*program, "local-token"]
+    data = data or data_dir()
+    if os.environ.get("UMCODEX_DATA_DIR") or os.path.realpath(data) != os.path.realpath(default_data_dir()):
+        command += ["--data-dir", str(data)]
+    return command
+
+
+def listeners(port: int, run: Runner = subprocess.run) -> list[dict[str, str]]:
+    """What listens on 127.0.0.1:<port> (TCP), from lsof's field output:
+    one {"pid", "uid", "name"} per listening socket."""
+    done = run(
+        ["/usr/sbin/lsof", "-nP", "-a", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpun"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    found: list[dict[str, str]] = []
+    pid = uid = ""
+    for line in (done.stdout or "").splitlines():
+        kind, value = line[:1], line[1:]
+        if kind == "p":
+            pid, uid = value, ""
+        elif kind == "u":
+            uid = value
+        elif kind == "n":
+            found.append({"pid": pid, "uid": uid, "name": value})
+    return found
+
+
+def local_token(data: Path | None = None, *, run: Runner = subprocess.run, uid: int | None = None) -> str:
+    """The relay's token, for Codex in the local copy, only when the program
+    listening on the relay's port is UM-Codex's relay for this data folder,
+    run by this person: otherwise a program that took the port (another
+    person on a shared Mac, say) would get the token, and with it the
+    copy's prompts. Raises TokenRefused."""
+    data = data or data_dir()
+    folder = local_folder(data)
+    uid = os.getuid() if uid is None else uid
+    try:
+        port = int((folder / PORT_FILE).read_text(encoding="ascii").strip())
+        relay_pid = int((folder / RELAY_PID_FILE).read_text(encoding="ascii").strip())
+        token_path = folder / TOKEN_FILE
+        info = token_path.stat()
+        token = token_path.read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        raise TokenRefused("the relay isn't running (start the setup in UM-Codex)") from None
+    if info.st_uid != uid or info.st_mode & 0o077:
+        raise TokenRefused("the token file isn't private to this person")
+    try:
+        found = listeners(port, run)
+    except (OSError, subprocess.SubprocessError):
+        raise TokenRefused("what listens on the relay's port couldn't be checked") from None
+    if not found:
+        raise TokenRefused("nothing listens on the relay's port (start the setup in UM-Codex)")
+    for entry in found:
+        if entry["pid"] != str(relay_pid) or entry["uid"] != str(uid) or entry["name"] != f"127.0.0.1:{port}":
+            raise TokenRefused("another program listens on the relay's port")
+    if not token:
+        raise TokenRefused("the token file is empty")
+    return token
 
 
 def wait_while_running(pid: int, poll: float = 2.0, sleep: Callable[[float], None] = time.sleep) -> None:
@@ -393,7 +502,7 @@ def _open_wait(data: Path, run: Runner, sleep: Callable[[float], None], seconds:
 
 
 def write_copy_files(
-    setup, layout, *, data: Path, app: Path | None, port: int, token_file: Path, run: Runner, seed: bool
+    setup, layout, *, data: Path, app: Path | None, port: int, token: list[str], run: Runner, seed: bool
 ) -> bool:
     """The copy's config.toml (and model catalog), and, when `seed` (the
     copy isn't running), its state. Returns whether the state was seeded."""
@@ -425,7 +534,7 @@ def write_copy_files(
         local_config(
             existing,
             port=port,
-            token_file=token_file,
+            token_command=token,
             model=setup.model,
             folders=folders,
             access=setup.local_access,
@@ -457,34 +566,45 @@ def run_local(
     run: Runner = subprocess.run,
     sleep: Callable[[float], None] = time.sleep,
     poll: float = 2.0,
+    token: list[str] | None = None,
 ) -> int:
     """One launch "On this computer": relay, the copy's files, the copy
     opened (or brought forward), held until the copy quits. 0 when it ended
-    normally, 1 when it couldn't start."""
+    normally, 1 when it couldn't start.
+
+    The copy never outlives its relay: however the hold ends (the copy quit,
+    Ctrl-C, SIGTERM or SIGHUP, an error, a refusal), a copy still open is
+    quit first (`quit_copy`), so nothing else that later listens on the
+    fixed port gets its requests."""
     import secrets
     import shutil
 
     from umcodex import codex_app, credentials, toolkit
-    from umcodex.launch import LaunchLock, launches_dir, running_launches, write_launch_info
+    from umcodex.launch import LaunchLock, launches_dir, write_launch_info
     from umcodex.relay import upstream_base_url
 
     data = data or data_dir()
-    if setup.reads:
-        say("Read-only folders aren't available on this computer: edit the setup and remove them.")
+    refusal = local_refusal(setup)
+    if refusal is not None:
+        say(refusal)
         return 1
-    others = [r for r in running_launches(data) if r.app and r.app.get("local")]
-    if others:
-        say(f"“{others[0].setup_name}” is running on this computer now. Stop it first.")
+    _private_folder(local_folder(data))
+    # One launch on this computer at a time (one copy, one relay): two Starts can't race.
+    hold = LaunchLock(local_folder(data) / HOLD_LOCK)
+    if not hold.acquire():
+        say("Another setup is running on this computer now. Stop it first.")
         return 1
     launch_id = secrets.token_hex(4)
     folder = launches_dir(data) / launch_id
     folder.mkdir(parents=True)
     lock = LaunchLock(folder / "lock")
     if not lock.acquire(tries=40):
+        hold.release()
         raise RuntimeError("couldn't lock the launch folder")
     state: dict = {"local": True, "copy": "not-opened", "pid": None, "seeded": False, "notes": list(NOTES)}
     write_launch_info(folder, setup, app=state)
     relay = None
+    restore = _end_on_signals()
     try:
         pid = running_copy(data, run)
         key = api_key or credentials.api_key
@@ -493,12 +613,12 @@ def run_local(
         try:
             port = relay.start()
         except OSError:
-            relay.stop(forget=False)  # its thread; the open copy's token stays
+            relay.stop(forget=False)  # its thread
             relay = None
             if pid is not None:
                 say(
-                    "The relay's port is taken by another program. Quit UM-Codex's local Codex window, "
-                    "then Start again."
+                    "The relay's port is taken by another program, so UM-Codex's local Codex window "
+                    "was closed. Start again in UM-Codex."
                 )
                 return 1
             (local_folder(data) / PORT_FILE).unlink(missing_ok=True)  # another program has it: a new one
@@ -511,7 +631,7 @@ def run_local(
             data=data,
             app=app,
             port=port,
-            token_file=relay.token_file,
+            token=token or token_command(data),
             run=run,
             seed=pid is None,
         )
@@ -542,16 +662,88 @@ def run_local(
         return 0
     except KeyboardInterrupt:
         say("")
-        say("Ending the launch (the relay stops; Start again in UM-Codex to carry on).")
-        if relay is not None:
-            relay.stop(forget=False)
-            relay = None
+        say("Ending the launch: UM-Codex's local Codex window is closed with it.")
         return 0
     finally:
-        if relay is not None:
-            relay.stop(forget=running_copy(data, run) is None)
-        lock.release()
-        shutil.rmtree(folder, ignore_errors=True)
+        restore()
+        quiet = _no_interrupts()  # a second Ctrl-C (or a signal) mustn't stop the copy being quit
+        try:
+            if running_copy(data, run) is not None:
+                quit_copy(data, run=run, sleep=sleep)
+        finally:
+            quiet()
+            if relay is not None:
+                relay.stop(forget=running_copy(data, run) is None)
+            lock.release()
+            hold.release()
+            shutil.rmtree(folder, ignore_errors=True)
+
+
+def local_refusal(setup) -> str | None:
+    """Why a setup can't run on this computer as it is (None: it can)."""
+    if setup.reads:
+        return "Read-only folders aren't available on this computer: edit the setup and remove them."
+    if setup.local_access == "full" and setup.approvals == "never":
+        return FULL_AND_NEVER
+    return None
+
+
+FULL_AND_NEVER = (
+    "On this computer with full access, Codex must ask before commands: turn on Ask before commands, "
+    "or choose Only this setup's folders."
+)
+
+
+class _Ended(KeyboardInterrupt):
+    """SIGTERM or SIGHUP: end the hold as Ctrl-C does (the copy is quit first)."""
+
+
+def _end_on_signals() -> Callable[[], None]:
+    """SIGTERM and SIGHUP end the hold through its `finally` (in the main
+    thread only, where Python delivers signals). Returns the restorer."""
+    import signal
+    import threading
+
+    if threading.current_thread() is not threading.main_thread():
+        return lambda: None
+
+    def end(signum, frame):
+        raise _Ended()
+
+    previous = {}
+    for name in ("SIGTERM", "SIGHUP"):
+        number = getattr(signal, name, None)
+        if number is not None:
+            previous[number] = signal.signal(number, end)
+
+    def restore() -> None:
+        for number, handler in previous.items():
+            with contextlib.suppress(ValueError, TypeError):
+                signal.signal(number, handler)
+
+    return restore
+
+
+def _no_interrupts() -> Callable[[], None]:
+    """Ignore SIGINT, SIGTERM and SIGHUP while the hold cleans up (main
+    thread only). Returns the restorer."""
+    import signal
+    import threading
+
+    if threading.current_thread() is not threading.main_thread():
+        return lambda: None
+    previous = {}
+    for name in ("SIGINT", "SIGTERM", "SIGHUP"):
+        number = getattr(signal, name, None)
+        if number is not None:
+            previous[number] = signal.signal(number, signal.SIG_IGN)
+
+    def restore() -> None:
+        for number, handler in previous.items():
+            with contextlib.suppress(ValueError, TypeError):
+                signal.signal(number, handler)
+
+    return restore
 
 
 # JavaScript for Automation, through AppKit: ask the copy to quit, as its Quit
@@ -564,25 +756,68 @@ _TERMINATE = (
 )
 
 
-def stop_local(data: Path, launch, run: Runner = subprocess.run) -> bool:
-    """Stop a launch on this computer: quit UM-Codex's local copy (only that
-    copy, found by its profile folder), and its launch then ends. False when
-    there's nothing to stop."""
-    pid = launch.app.get("pid") if launch.app else None
-    current = running_copy(data, run)
-    if current is None or (isinstance(pid, int) and pid != current):
-        return False
+def ask_to_quit(pid: int, run: Runner = subprocess.run) -> None:
+    """Ask the copy to quit as its Quit menu does; SIGTERM if that can't be asked."""
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         done = run(
-            ["/usr/bin/osascript", "-l", "JavaScript", "-e", _TERMINATE, str(current)],
+            ["/usr/bin/osascript", "-l", "JavaScript", "-e", _TERMINATE, str(pid)],
             capture_output=True,
             text=True,
             timeout=10,
         )
         if done.returncode == 0 and done.stdout.strip() in ("ok", "gone"):
-            return True
+            return
     with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.kill(current, 15)
+        os.kill(pid, 15)
+
+
+def quit_copy(
+    data: Path,
+    *,
+    run: Runner = subprocess.run,
+    sleep: Callable[[float], None] = time.sleep,
+    patience: float = 10.0,
+) -> bool:
+    """Make sure UM-Codex's local copy has ended: asked to quit, then SIGTERM,
+    then SIGKILL, each after a short wait. Only the process carrying the
+    copy's profile folder. True when no copy is left."""
+    import signal
+
+    pid = running_copy(data, run)
+    if pid is None:
+        return True
+    steps = [
+        lambda p: ask_to_quit(p, run),
+        lambda p: os.kill(p, signal.SIGTERM),
+        lambda p: os.kill(p, signal.SIGKILL),
+    ]
+    for step in steps:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            step(pid)
+        waited = 0.0
+        while waited < patience:
+            if running_copy(data, run) is None:
+                return True
+            sleep(0.5)
+            waited += 0.5
+        pid = running_copy(data, run)
+        if pid is None:
+            return True
+    log.warning("UM-Codex's local Codex window didn't quit")
+    return False
+
+
+def stop_local(data: Path, launch, run: Runner = subprocess.run) -> bool:
+    """Stop a launch on this computer: ask UM-Codex's local copy to quit
+    (the one carrying its profile folder, whatever PID the launch noted);
+    its launch then ends, and makes sure the copy has. False when there's
+    nothing to stop."""
+    if not (launch.app and launch.app.get("local")):
+        return False
+    current = running_copy(data, run)
+    if current is None:
+        return False
+    ask_to_quit(current, run)
     return True
 
 
@@ -593,6 +828,12 @@ def chrome_manifests(home: Path | None = None) -> list[Path]:
     support = home / "Library" / "Application Support"
     folders = ("Google/Chrome", "Chromium", "Google/ChromeForTesting", "Google/Chrome for Testing")
     return [support / f / "NativeMessagingHosts" / "com.openai.codexextension.json" for f in folders]
+
+
+def _inside(path: Path, folder: Path) -> bool:
+    """Whether `path` is `folder` or in it, letter case aside (a Mac's disk usually ignores it)."""
+    a, b = str(path).casefold().rstrip("/"), str(folder).casefold().rstrip("/")
+    return a == b or a.startswith(b + "/")
 
 
 def forget_chrome_manifests(data: Path, home: Path | None = None) -> list[str]:
@@ -606,10 +847,22 @@ def forget_chrome_manifests(data: Path, home: Path | None = None) -> list[str]:
             target = Path(json.loads(path.read_text(encoding="utf-8"))["path"]).resolve()
         except (OSError, ValueError, KeyError, TypeError):
             continue
-        if target == ours or ours in target.parents:
+        if _inside(target, ours):
             with contextlib.suppress(OSError):
                 path.unlink()
                 removed.append(
                     f"Removed Chrome's link to UM-Codex's local Codex window ({path.parent.parent.name})."
                 )
     return removed
+
+
+# What uninstall always removes from the local copy, even when the data is
+# kept: the programs it holds (its Computer Use copy, which macOS's grants
+# name, and the app's plugins). Its settings and chats stay unless the data
+# goes too.
+PROGRAMS = ("codex-home/computer-use", "codex-home/plugins")
+PRIVACY_NOTE = (
+    'If you granted Screen Recording or Accessibility to "Codex Computer Use" and no longer need '
+    "it, remove it in System Settings → Privacy & Security (your own ChatGPT app may use the same "
+    "entry, so UM-Codex leaves it to you)."
+)

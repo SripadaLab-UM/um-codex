@@ -142,10 +142,12 @@ app's own browser, or your own Chrome. Use it only for that.
   folders.
 - **What Codex can change:** "Anything I can (full access)" (the default), or
   "Only this setup's folders" (Codex's own macOS sandbox, for its commands
-  and file edits). That second choice doesn't limit computer and browser
-  control: those act through your apps, which can change anything you can.
-- **Ask before commands** is on by default here. There's no "Approve for
-  me" (the Toolkit has no reviewer model for it).
+  and file edits), with its own **Internet for Codex's commands** switch.
+  That second choice doesn't limit computer and browser control: those act
+  through your apps, which can change anything you can.
+- **Ask before commands** is on by default here, and needed with full
+  access. There's no "Approve for me" (the Toolkit has no reviewer model
+  for it).
 - **Computer and browser control** (on by default) turns on the app's
   Computer Use, Browser and Chrome plugins. The first time, macOS asks for
   **Screen Recording** and **Accessibility** for "Codex Computer Use";
@@ -155,8 +157,12 @@ app's own browser, or your own Chrome. Use it only for that.
 - Read-only folders aren't offered (Codex can read all your files here).
 - Your Toolkit key stays in the keychain, read only by UM-Codex's relay,
   which runs while that window is open. Quit the window, or press **Stop**,
-  to end it.
-- Uninstalling removes that window's settings and chats.
+  to end it; if UM-Codex's side ends first, it closes the window too.
+- Uninstalling removes the programs in that window's folder (its Computer
+  Use and plugins); its settings and chats go only if you delete UM-Codex's
+  data. If you granted Screen Recording or Accessibility to "Codex Computer
+  Use" and no longer need it, remove it in System Settings → Privacy &
+  Security yourself (your own ChatGPT app may use the same entry).
 - Not on Windows yet, and not in a terminal yet.
 
 ## Updating

@@ -725,12 +725,20 @@ modes, rigor, and the frontend.
      ones: Codex can read every file there anyway); "What Codex can change":
      "Anything I can (full access)" (`local_access = "full"`, the default)
      or "Only this setup's folders" (`folder`: Codex's own macOS sandbox,
-     Seatbelt, `sandbox_mode = "workspace-write"`, network from the setup's
-     internet setting), with the plain note that it doesn't limit computer
-     and browser control; "Ask before commands" on by default; "Computer
-     and browser control" (`computer_use`, default on); no internet or
-     browser-tool switches (the sandbox's browser tool is off); "Open in"
-     is the local window.
+     Seatbelt, `sandbox_mode = "workspace-write"` with
+     `sandbox_workspace_write.writable_roots` = every folder of the setup,
+     not only the chat's working folder; the key checked in the
+     `rust-v0.157.1` source, `SandboxWorkspaceWrite { writable_roots,
+     network_access, … }`, and in the bundled 0.159.2), with the plain note
+     that it doesn't limit computer and browser control, and then an
+     "Internet for Codex's commands" switch (`network_access`; with full
+     access the line says the internet is everything the Mac can reach);
+     "Ask before commands" on by default, and required with full access
+     (the API refuses full access with "never", and so does the launch: a
+     setup edited in the terminal could have it); "Computer and browser
+     control" (`computer_use`, default on); no sandbox browser tool; "Open
+     in" is the local window. The summary and the card say which internet
+     applies.
    - **A separate app copy**, `<data>/codex-app-local/` (`codex-home`,
      `user-data`, `relay-port`, `relay-token`, `models.json`), opened as M6
      opens its copy (`open -n --env CODEX_HOME=… --env
@@ -741,7 +749,8 @@ modes, rigor, and the frontend.
    - **Its config.toml** (`local_config`, written at each start, the app's
      other settings kept): provider `toolkit` at
      `http://127.0.0.1:<port>/relay/v1` with `auth = { command =
-     "/bin/cat", args = [<relay-token>], refresh_interval_ms = 300000 }`
+     <um-codex>, args = ["local-token", …], refresh_interval_ms = 300000 }`
+     (`um-codex local-token`, below)
      and no `requires_openai_auth` (no sign-in), `forced_login_method =
      "api"`, analytics, feedback and update checks off, the setup's model,
      the bundled catalog (no upgrade offers), `approval_policy` from the
@@ -765,24 +774,42 @@ modes, rigor, and the frontend.
      "seeded", "notes"}`, so the launcher's running list and Update's
      "a setup is running" check see it), starts the relay
      (`LocalRelay`: `RelayServer` on the port fixed per data folder; a
-     token written to `relay-token`, 0600), writes the files, opens the
-     copy (or brings it forward if it's open: it then keeps the settings
-     and project it opened with, and the relay keeps its token, so its
-     chats carry on), waits for the copy's main process to end, then stops
+     token written to `relay-token`, 0600, and the holding process's PID to
+     `relay-pid`, in a folder made 0700 even if it was there; the socket
+     has `SO_REUSEADDR`, so a relay that just ended doesn't block the next
+     on TIME_WAIT), writes the files, opens the copy (or brings it forward
+     if it's open, which only happens if a hold was killed outright: it
+     then keeps the settings and project it opened with, and the relay
+     keeps its token), waits for the copy's main process to end, then stops
      the relay and deletes the token. One setup on this computer at a time
-     (one copy, one relay). If another program took the port, a new one is
-     chosen (only while the copy is closed).
-   - **Stop** in the launcher quits UM-Codex's local copy (`stop_local`:
-     only the process whose arguments carry the copy's profile folder,
-     asked to quit through AppKit as its Quit menu does, else SIGTERM);
-     its launch then ends.
+     (one copy, one relay), held by a lock in `codex-app-local/launch.lock`
+     so two Starts can't race. If another program took the port, a new one
+     is chosen while the copy is closed.
+   - **The copy never outlives its relay.** However the hold ends (the copy
+     quit, Ctrl-C, SIGTERM or SIGHUP, which end it the same way, an error,
+     the port taken while the copy is open), a copy still open is quit
+     first (`quit_copy`: asked as its Quit menu does, then SIGTERM, then
+     SIGKILL, each after a short wait; interrupts are ignored meanwhile).
+     Otherwise whatever later listened on the fixed port (another person on
+     a shared Mac, say) would get the copy's requests.
+   - **`um-codex local-token`** (hidden; the copy's `auth.command`) prints
+     the token only after checking, with `lsof -nP -a -iTCP:<port>
+     -sTCP:LISTEN -Fpun`, that everything listening on the port is
+     127.0.0.1, owned by this person's uid and is the PID in `relay-pid`,
+     and that the token file is this person's and private; otherwise it
+     prints nothing on stdout and exits 1 (Codex then waits for the
+     network). So a program that took the port never gets the token.
+   - **Stop** in the launcher asks UM-Codex's local copy to quit
+     (`stop_local`: the process whose arguments carry the copy's profile
+     folder, whatever PID the launch noted; through AppKit as its Quit menu
+     does, else SIGTERM); its launch then ends and makes sure it has.
    - **The key:** in the keychain, read only by the relay; never in the
      copy's files or `auth.json`. The token works only through the relay,
      only while it runs. Limits said plainly (the dialog, the summary): any
      program running as the person can read the token file and use the
      Toolkit through the relay while the copy is open; and Codex, running as
-     the person with full access, may be able to read UM-Codex's keychain
-     item the way UM-Codex does.
+     the person, may be able to read UM-Codex's keychain item the way
+     UM-Codex does.
    - **Computer Use, the in-app browser and Chrome** are OpenAI's bundled
      plugins in that copy, behind its remote flags (Statsig gates
      `1506311413`, `410262010`, `410065390`), the Codex features
@@ -794,11 +821,16 @@ modes, rigor, and the frontend.
      Accessibility) are asked for "Codex Computer Use"
      (`com.openai.sky.CUAService`, copied into the copy's
      `codex-home/computer-use/`); UM-Codex never grants or edits them.
-   - **Uninstall** refuses while the local copy is open; it removes
-     `codex-app-local` (settings, chats, plugins, its Computer Use copy:
-     nothing opens it without UM-Codex) and Chrome's native messaging
-     manifest (`com.openai.codexextension.json`) only when it leads into
-     that folder.
+   - **Uninstall** refuses while the local copy is open. It always removes
+     the programs the copy holds (`codex-home/computer-use`, its Computer
+     Use copy, and `codex-home/plugins`), its relay files, and Chrome's
+     native messaging manifest (`com.openai.codexextension.json`) when it
+     leads into that folder (letter case aside). The copy's settings and
+     chats are data, as the sandbox copy's: kept with `--keep-data`,
+     deleted with `--delete-data`. It tells the person to remove "Codex
+     Computer Use" from Screen Recording and Accessibility in System
+     Settings if they no longer need it, and doesn't run `tccutil reset`
+     (the entry may be shared with their own ChatGPT app).
    - **Not yet:** the terminal variant (a native `codex`, pinned and
      installed by UM-Codex, with the same relay hold): it needs a pinned
      download and its checks, left for later. Windows. Docker optional in the
@@ -807,7 +839,11 @@ modes, rigor, and the frontend.
      a stand-in key): the setup's fields, the form's API rules, Start with
      no Docker and no question, one at a time, the launch holding the relay
      until the copy quits (the relay answering with the token, the token
-     gone after), Stop quitting only UM-Codex's copy, uninstall. The live
+     gone after), the copy quit on Ctrl-C, SIGTERM, SIGHUP, an error and
+     the port taken, and when it ignores the quit request; `local-token`
+     refusing other listeners, uids, a public bind and a shared token file;
+     the relay rebinding at once; Stop finding the copy by profile;
+     uninstall with and without the data. The live
      run of a copy is the GUI test's (this session's permission check
      refuses opening a full-access copy of the app).
 6. **M5, launcher window (asked for on 2026-10-01: the terminal's setup

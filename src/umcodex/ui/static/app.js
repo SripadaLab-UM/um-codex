@@ -200,6 +200,9 @@ const WORDS = {
   localControlOn: "Computer and browser control on: Computer Use, the app's browser and your Chrome (macOS asks once for Screen Recording and Accessibility).",
   localControlOff: "Computer and browser control off.",
   localKey: "Your Toolkit key stays in the keychain, but Codex runs as you here, so it may be able to reach it.",
+  localNetFull: "Internet: everything this Mac can reach (full access doesn't limit it).",
+  localNetOn: "Internet for Codex's commands: on.",
+  localNetOff: "Internet for Codex's commands: off (computer and browser control still use your apps' own).",
 };
 
 function onThisComputer(s) {
@@ -207,7 +210,10 @@ function onThisComputer(s) {
 }
 
 function accessLines(s) {
-  if (onThisComputer(s)) return [WORDS.local, s.computer_use === false ? WORDS.localControlOff : WORDS.localControlOn];
+  if (onThisComputer(s)) {
+    const net = s.local_access === "folder" ? (s.internet ? WORDS.localNetOn : WORDS.localNetOff) : WORDS.localNetFull;
+    return [WORDS.local, net, s.computer_use === false ? WORDS.localControlOff : WORDS.localControlOn];
+  }
   const lines = [s.internet ? WORDS.internetOn : WORDS.internetOff];
   if (s.internet && s.browser) lines.push(WORDS.browserOn + (s.browser_asks ? " (asks before each action)." : "."));
   return lines;
@@ -1172,7 +1178,9 @@ function renderForm() {
       "ask",
       "Ask before commands",
       local
-        ? "On (recommended here): Codex asks before commands that need your OK. There's no sandbox around it on this computer."
+        ? draft.local_access === "folder"
+          ? "On (recommended here): Codex asks before commands that need your OK. There's no sandbox around it on this computer."
+          : "On: needed with full access on this computer (there's no sandbox around Codex here)."
         : "Off (recommended): Codex runs commands without asking; the sandbox is what keeps it in.",
       draft.approvals === "on-request",
       (e) => ((draft.approvals = e.target.checked ? "on-request" : "never"), renderSummary()),
@@ -1224,6 +1232,16 @@ function renderForm() {
             }),
             error("local_access"),
           ),
+          draft.local_access === "folder"
+            ? switchRow(
+                "internet",
+                "Internet for Codex's commands",
+                "On: commands can reach the internet. Off: they can't (Codex's own sandbox). Computer and browser control aren't limited by this.",
+                draft.internet,
+                (e) => ((draft.internet = e.target.checked), renderSummary()),
+                "indent",
+              )
+            : el("p", { class: "help", text: WORDS.localNetFull }),
           switchRow(
             "computer-use",
             "Computer and browser control",

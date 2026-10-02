@@ -322,12 +322,23 @@ the relay held by the launch, Stop, uninstall). Changes from the spike:
 - The caution dialog also says Codex "may also be able to reach UM-Codex's
   own Toolkit key" while it runs (the keychain limit found above).
 - `approvals_reviewer = "user"` in the copy's config (no "Approve for me").
-- The relay keeps its token while the copy stays open (`keep_token`), so a
-  relay restarted by a second Start doesn't strand open chats.
-- Stop quits the copy through AppKit (as its Quit menu does), else SIGTERM,
-  only the process whose arguments carry the copy's profile folder.
-- Uninstall removes `codex-app-local` and Chrome's native host manifest
-  only when it leads into that folder.
+- After the review of #22:
+  - **the copy never outlives its relay**: however the hold ends (Ctrl-C,
+    SIGTERM, SIGHUP, an error, the port taken), the copy is quit (asked,
+    then SIGTERM, then SIGKILL);
+  - **`auth.command` is `um-codex local-token`**, which gives the token only
+    when what listens on the port is this person's relay process (`lsof`:
+    PID from `relay-pid`, uid, 127.0.0.1), not `/bin/cat <file>`;
+  - `SO_REUSEADDR` on the relay's socket; the folder made 0700 every time;
+    a data-folder lock so two Starts can't race;
+  - "Only this setup's folders" sets `writable_roots` to every folder of
+    the setup and has its own Internet switch;
+  - full access with "never" is refused (API and launch);
+  - Stop finds the copy by its profile folder, whatever PID was noted;
+  - uninstall always removes the copy's programs (`computer-use`,
+    `plugins`), its relay files and Chrome's manifest leading into it, but
+    keeps its settings and chats with `--keep-data`; it points the person
+    at System Settings for the privacy grants (no `tccutil reset`).
 - **The terminal variant is left for later:** a native `codex` pinned and
   installed by UM-Codex needs a pinned download (GitHub release asset and
   SHA-256), its update path and tests; not small. On this computer is
@@ -415,8 +426,10 @@ and record each prompt's exact words. Screenshot each "Expect".
     section shows the red line "On this computer: …", "What Codex can
     change" (Anything I can (full access) selected; Only this setup's
     folders) with the note that it doesn't limit computer and browser
-    control, "Computer and browser control" on; no Internet or Browser
-    tool switches; "Ask before commands" on; Open in shows UM-Codex's
+    control, "Computer and browser control" on; no Browser tool switch;
+    under full access, the line "Internet: everything this Mac can reach";
+    "Ask before commands" on (its help says it's needed with full access);
+    Open in shows UM-Codex's
     local Codex window; added folders are Read & write, with no Read only
     button. If a read-only folder was there before, it's now Read & write
     with a note.
@@ -427,6 +440,9 @@ and record each prompt's exact words. Screenshot each "Expect".
     before commands". The "demo" card has no badge.
 14. Edit "here", switch to "In the sandbox" (no dialog), Save, then back to
     "On this computer" (the dialog again), Save.
+14a. Edit "here": turn "Ask before commands" off and Save. Expect it
+    refused under the switch ("On this computer with full access, Codex
+    must ask before commands…"). Turn it back on.
 
 **F. On this computer: starting, the window, Stop.**
 15. Start "here". Expect: no dialog, no Docker needed (it works with Docker
@@ -439,9 +455,12 @@ and record each prompt's exact words. Screenshot each "Expect".
 16. In a new chat: "Say hello and run pwd". Expect an answer from the
     Toolkit model and the folder `here`; no "Remote ·" strip. Ask it to
     create `hi.txt`: with "Ask before commands" on, the app asks first.
-17. Check `<scratch>/codex-app-local/relay-token` exists (0600) and contains
-    no `sk-` key; `codex-home/config.toml` has the `toolkit` provider at
-    127.0.0.1 and no key.
+17. Check `<scratch>/codex-app-local` is 0700, `relay-token` is 0600 and
+    contains no `sk-` key, `relay-pid` names the background `um-codex
+    launch` process; `codex-home/config.toml` has the `toolkit` provider at
+    127.0.0.1 with `auth.command` = UM-Codex's `local-token`, and no key.
+    In a terminal, `UMCODEX_DATA_DIR=<scratch> uv run um-codex local-token`
+    prints a token (don't paste it anywhere).
 18. Start "demo" (sandbox) at the same time: both run; the sandbox copy and
     the local copy are separate windows; the local copy has no `umcodex-*`
     hosts; the sandbox copy has no "here" project.
@@ -450,6 +469,11 @@ and record each prompt's exact words. Screenshot each "Expect".
     is gone. Start it again: the window reopens on "here".
 20. Quit the local window yourself (Cmd-Q). Expect: the card goes idle
     within a few seconds.
+20a. Start "here"; then end its background launch process (`kill <pid>`
+    of the `um-codex launch --setup … --open local` process, SIGTERM).
+    Expect: the local window quits within ~10 s, `relay-token` and
+    `relay-pid` are gone, the card goes idle. The copy is never left open
+    without its relay.
 
 **G. On this computer: computer and browser control.**
 21. With "here" running: open Plugins, Settings > Computer Use, and type
@@ -464,7 +488,8 @@ and record each prompt's exact words. Screenshot each "Expect".
     name). Grant for this test only. Expect 144, and screenshots in the
     chat. Then System Settings > Privacy & Security > Screen Recording and
     Accessibility: list the "Codex Computer Use" entries (question 3).
-23. Edit "here": "Ask before commands" off; Start; repeat 22 (question 4).
+23. Edit "here": "Only this setup's folders", "Ask before commands" off
+    (allowed there); Start; repeat 22 (question 4).
 24. "@Browser open https://example.com and tell me the heading": the
     app's own browser pane and the answer.
 25. Chrome (question 5): Settings > Computer Use > Google Chrome. Stop here
@@ -477,19 +502,27 @@ and record each prompt's exact words. Screenshot each "Expect".
 26. Edit "here": "Computer and browser control" off, Stop and Start.
     Expect: Computer Use, Browser and Chrome not offered (or disabled) in
     the local window; `config.toml` has them `enabled = false`.
-27. Edit "here": "Only this setup's folders", Start. Ask Codex to write
-    `here/inside.txt` (works) and `~/Desktop/um-codex-outside.txt`
-    (refused or asks). Record the permission label in the chat (question 7).
+27. Edit "here": add a second folder `here2` (Read & write), "Only this
+    setup's folders", "Internet for Codex's commands" off, "Ask before
+    commands" on; Start. Expect `writable_roots` with both folders in
+    `config.toml`. Ask Codex to write `here/inside.txt` and
+    `here2/inside.txt` (both work), and `~/Desktop/um-codex-outside.txt`
+    (refused or asks), and to run `curl -sI https://example.com` (fails or
+    asks). Record the permission label in the chat (question 7). The card
+    and summary say "Internet for Codex's commands: off".
 
 **H. Cleanup.**
 28. Stop everything. With the local window open, `um-codex uninstall`
     (against the scratch data folder) refuses ("Quit it first"). Quit it;
     run `UMCODEX_DATA_DIR=<scratch> uv run um-codex uninstall --keep-data`
     only if the maintainer wants the uninstall checked (it removes the
-    scratch key from the keychain too: answer accordingly). Expect:
-    "Removing UM-Codex's local Codex window's settings and chats…", and
-    `<scratch>/codex-app-local` gone; a Chrome manifest leading into it
-    removed, one of the person's own app left.
+    Toolkit key from the keychain too: answer accordingly). Expect:
+    "Removing the programs in UM-Codex's local Codex window…" and the line
+    about removing "Codex Computer Use" in System Settings yourself;
+    `codex-home/computer-use`, `codex-home/plugins`, `relay-token` gone;
+    the copy's `config.toml` and chats kept; a Chrome manifest leading into
+    the copy removed, one of the person's own app left; no privacy grant
+    changed. With `--delete-data` instead, all of `codex-app-local` goes.
 29. List any macOS permissions granted during the round for the maintainer
     to remove if wanted.
 

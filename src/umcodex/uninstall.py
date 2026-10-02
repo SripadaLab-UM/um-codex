@@ -12,14 +12,17 @@ removed before that's answered yes. Then, found by label only:
 - the Codex app's ssh entries: the `Include ~/.ssh/um-codex/config` line at
   the top of ~/.ssh/config (its backup too, if the file is now the same as
   it) and ~/.ssh/um-codex;
-- UM-Codex's local copy of the Codex app ("On this computer", M4):
-  `codex-app-local` in the data folder (its settings, chats, plugins and
-  its copy of Computer Use), always, since nothing can open it without
-  UM-Codex; and Chrome's link to it (the ChatGPT extension's native host
-  manifest) when it leads into that folder;
+- from UM-Codex's local copy of the Codex app ("On this computer", M4):
+  always the programs it holds (`codex-home/computer-use`, its copy of
+  Computer Use, and `codex-home/plugins`), its relay files, and Chrome's
+  link to it (the ChatGPT extension's native host manifest) when it leads
+  into that folder; macOS's privacy grants are left to the person (they
+  may be shared with their own ChatGPT app). Its settings and chats are
+  data: kept with --keep-data, deleted with --delete-data, as the sandbox
+  copy's;
 - the agent image and, if no container uses it, the gateway image (asked first);
 - with --delete-data, the data folder's contents (saved setups, logs, the
-  Codex app copy's settings and chats in `codex-app`), but never its `app`
+  Codex app copies' settings and chats in `codex-app` and `codex-app-local`), but never its `app`
   folder.
 """
 
@@ -106,14 +109,22 @@ def uninstall(
     for line in codex_app.uninstall_ssh(data=data):
         say(line)
 
-    # The local copy of the Codex app (M4): its chats ran on this computer,
-    # and nothing opens it without UM-Codex.
+    # The local copy of the Codex app (M4): the programs it holds (its copy
+    # of Computer Use, the app's plugins), its relay files and Chrome's link
+    # to it always go; its settings and chats are data (below).
     local = this_computer.local_folder(data)
     for line in this_computer.forget_chrome_manifests(data):
         say(line)
-    if local.exists():
-        say("Removing UM-Codex's local Codex window's settings and chats (On this computer)...")
-        remove_tree(local)
+    programs = [local / part for part in this_computer.PROGRAMS]
+    relay_files = [local / name for name in (this_computer.TOKEN_FILE, this_computer.RELAY_PID_FILE)]
+    if any(p.exists() for p in programs):
+        say("Removing the programs in UM-Codex's local Codex window (its Computer Use and plugins)...")
+        say(this_computer.PRIVACY_NOTE)
+    for part in programs:
+        if part.exists() or part.is_symlink():
+            remove_tree(part)
+    for file in relay_files:
+        file.unlink(missing_ok=True)
 
     if docker_ok:
         _remove_images(run, say, confirm)
