@@ -44,6 +44,7 @@ is Mac only for now (`unavailable_reason`).
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import logging
 import os
@@ -58,7 +59,7 @@ import time
 import tomllib
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import tomli_w
 
@@ -276,8 +277,9 @@ def add_include(home: Path | None = None) -> str:
     folder = ssh_dir(home)
     config = folder / "config"
     if not config.exists():
-        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-        _private_write(config, INCLUDE_LINE + "\n")
+        # ~/.ssh keeps the permissions it has if it's there; made here, it's set as ssh wants.
+        _ssh_mkdir(folder, parents=True, own=not folder.is_dir())
+        _ssh_write(config, INCLUDE_LINE + "\n")
         return "created"
     data = _read(config)
     text = data.decode("utf-8")
@@ -454,9 +456,88 @@ def _saved_setup_ids(data: Path | None = None) -> set[str]:
     return {setup.id for setup in store.all()}
 
 
+# Windows: what OpenSSH accepts for its files is the person, SYSTEM and
+# Administrators. Python 3.13's mkdir(mode=0o700) gives a folder SYSTEM,
+# Administrators and OWNER RIGHTS instead, and ssh.exe refuses a config file
+# with OWNER RIGHTS ("Bad permissions"): through the Include line, every host
+# in ~/.ssh/config then fails (found on a Windows laptop, 2026-10-02). What a
+# new file inherits also depends on the account (an administrator's, on CI,
+# still got OWNER RIGHTS), so UM-Codex's own ssh folders and files are given
+# exactly those three, not inherited, with icacls.
+_SYSTEM_SID = "S-1-5-18"
+_ADMINISTRATORS_SID = "S-1-5-32-544"
+
+
+def _system32() -> PureWindowsPath:
+    """Windows' System32, as a Windows path on any OS (so commands read the same in tests)."""
+    return PureWindowsPath(os.environ.get("SYSTEMROOT") or r"C:\Windows") / "System32"
+
+
+@functools.cache
+def _windows_user_sid() -> str | None:
+    """The person's SID (whoami /user), or None if Windows can't say."""
+    whoami = _system32() / "whoami.exe"
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        done = subprocess.run(
+            [str(whoami), "/user", "/fo", "csv", "/nh"],
+            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )  # fmt: skip
+        sid = done.stdout.strip().split(",")[-1].strip().strip('"')
+        if done.returncode == 0 and sid.startswith("S-1-"):
+            return sid
+    return None
+
+
+def _windows_owner_only(
+    path: Path, *, folder: bool, run: Runner = subprocess.run, sid: str | None = None
+) -> bool:
+    """Windows: `path` readable by the person, SYSTEM and Administrators only,
+    and not inheriting anything else (a folder hands the same down)."""
+    sid = sid or _windows_user_sid()
+    if sid is None:
+        log.warning("couldn't find this account's SID; %s keeps the permissions it has", path)
+        return False
+    icacls = _system32() / "icacls.exe"
+    flags = "(OI)(CI)F" if folder else "F"
+    who = (sid, _SYSTEM_SID, _ADMINISTRATORS_SID)
+    grants = [part for one in who for part in ("/grant:r", f"*{one}:{flags}")]
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        done = run(
+            [str(icacls), str(path), "/inheritance:r", *grants, "/Q"],
+            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )  # fmt: skip
+        if done.returncode == 0:
+            return True
+        log.warning("icacls couldn't set %s's permissions: %s", path, (done.stdout or done.stderr).strip())
+    return False
+
+
+def _ssh_mkdir(
+    folder: Path, *, parents: bool = False, platform: str = sys.platform, own: bool = True
+) -> None:
+    """Make a folder for ssh's files. On Windows without a mode (see above),
+    and, if it's UM-Codex's own (`own`), with only the person, SYSTEM and
+    Administrators."""
+    if platform == "win32":
+        folder.mkdir(parents=parents, exist_ok=True)
+        if own:
+            _windows_owner_only(folder, folder=True)
+    else:
+        folder.mkdir(mode=0o700, parents=parents, exist_ok=True)
+
+
+def _ssh_write(path: Path, text: str, *, platform: str = sys.platform) -> None:
+    """_private_write for a file ssh reads, with Windows' permissions set too."""
+    _private_write(path, text)
+    if platform == "win32":
+        _windows_owner_only(path, folder=False)
+
+
 def _private_dir(folder: Path) -> None:
     """A folder only the person can open (its parent must be there)."""
-    folder.mkdir(mode=0o700, exist_ok=True)
+    _ssh_mkdir(folder)
     with contextlib.suppress(OSError):
         os.chmod(folder, 0o700)
 
@@ -490,7 +571,7 @@ def _own_folder(home: Path | None, data: Path | None) -> Path:
     except (OSError, UnicodeDecodeError):
         current = None
     if current != text:
-        _private_write(owner, text)
+        _ssh_write(owner, text)
     return folder
 
 
@@ -674,11 +755,11 @@ def _write_combined(home: Path | None, keep: str | None = None) -> Path:
     ]
     if still_missing != missing:
         if still_missing:
-            _private_write(own_ssh_dir(home) / MISSING, json.dumps(still_missing) + "\n")
+            _ssh_write(own_ssh_dir(home) / MISSING, json.dumps(still_missing) + "\n")
         else:
             (own_ssh_dir(home) / MISSING).unlink(missing_ok=True)
     path = own_ssh_dir(home) / "config"
-    _private_write(path, "\n".join(header) + "\n".join(parts))
+    _ssh_write(path, "\n".join(header) + "\n".join(parts))
     return path
 
 
@@ -714,7 +795,7 @@ def write_config(
             key.with_name(key.name + ".pub").unlink(missing_ok=True)
             log.info("removed the ssh key of %s, which is no saved setup", setup_id)
         blocks = [host_block(setup_id, proxy(setup_id), data) for setup_id in hosts]
-        _private_write(folder / HOSTS, "\n".join(blocks))
+        _ssh_write(folder / HOSTS, "\n".join(blocks))
         return _write_combined(home, keep=folder.name)
 
 
@@ -741,6 +822,8 @@ def ensure_key(
         )
     with contextlib.suppress(OSError):
         os.chmod(key, 0o600)
+    if sys.platform == "win32":  # ssh-keygen's own permissions can vary by account: set ours
+        _windows_owner_only(key, folder=False)
     return public
 
 
