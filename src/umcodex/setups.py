@@ -13,6 +13,7 @@ in Terminal, Windows Terminal and PowerShell. Every function that asks takes
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import re
 import secrets
@@ -28,6 +29,8 @@ from umcodex.codex_config import Approvals
 from umcodex.folders import FolderRefused
 from umcodex.paths import data_dir
 from umcodex.toolkit import DEFAULT_MODEL
+
+log = logging.getLogger(__name__)
 
 Ask = Callable[[str], str]
 Say = Callable[[str], None]
@@ -71,6 +74,13 @@ class Setup:
 
     @classmethod
     def from_toml(cls, raw: dict) -> Setup:
+        """A saved setup. ValueError for an id UM-Codex wouldn't make: it
+        names ssh keys, Docker volumes and the Codex app's hosts."""
+        if not SETUP_ID.fullmatch(str(raw["id"])):
+            raise ValueError(
+                f"the saved setup “{raw['id']}” has an id UM-Codex can't use (only letters, digits, "
+                "dots and dashes)"
+            )
         approvals = raw.get("approvals", "never")
         if approvals not in ("never", "on-request"):
             approvals = "never"
@@ -113,6 +123,11 @@ def default_name(working: str, taken: Iterable[str]) -> str:
     """A new setup's name: its working folder's name (made unique)."""
     base = " ".join((Path(working).name or str(working)).split()) or "Setup"
     return unique_name(base, taken)
+
+
+# A setup's id: Docker-safe, a file name, and never `_` (the Codex app's host
+# names add `_<install id>` for a data folder other than the installed copy's).
+SETUP_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,127}")
 
 
 def new_id(name: str) -> str:
@@ -162,6 +177,8 @@ class SetupStore:
                 setups.append(Setup.from_toml(entry))
             except (KeyError, TypeError):
                 continue
+            except ValueError as why:
+                log.warning("%s; it's left out (in %s).", why, self.path)
         last = raw.get("last_used")
         setups.sort(key=lambda s: s.id != last)
         return setups

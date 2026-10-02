@@ -59,7 +59,7 @@ ALIVE = "_umcodex/alive"
 # a Remote chat; anything else, 404.
 LOCAL_PREFIX = "/um-codex-local/"
 LOCAL_WHOAMI = "/um-codex-local/_whoami"
-_LOCAL_PATH = re.compile(r"/um-codex-local/(umcodex-[A-Za-z0-9][A-Za-z0-9_.-]{0,127})/v1/(.*)")
+_LOCAL_PATH = re.compile(r"/um-codex-local/(umcodex-[A-Za-z0-9][A-Za-z0-9_.-]{0,159})/v1/(.*)")
 REDACTED = b"[removed by UM-Codex]"
 
 # Response headers passed back to Codex. Everything else (cookies, upstream
