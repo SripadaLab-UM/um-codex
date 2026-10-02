@@ -78,6 +78,15 @@ def test_store_lives_in_the_data_folder(data_folder):
     assert store.path == data_folder / "setups.toml"
 
 
+def test_a_saved_id_with_an_underscore_is_left_out_with_a_reason(data_folder, caplog):
+    data_folder.mkdir(parents=True, exist_ok=True)
+    (data_folder / "setups.toml").write_text(
+        '[[setup]]\nid = "odd_a1"\nworking = "/tmp"\n\n[[setup]]\nid = "fine-b2"\nworking = "/tmp"\n'
+    )
+    assert [s.id for s in SetupStore().all()] == ["fine-b2"]
+    assert any("odd_a1" in r.getMessage() and "dashes" in r.getMessage() for r in caplog.records)
+
+
 def test_ids_are_docker_safe():
     setup_id = new_id("My Thesis (2026)!")
     assert setup_id.startswith("my-thesis-2026-")
