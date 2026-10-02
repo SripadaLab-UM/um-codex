@@ -34,7 +34,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -48,8 +48,9 @@ EXE = "ChatGPT.exe"  # in the package's app\ folder
 _VERSION = re.compile(rf"{re.escape(PACKAGE)}_(\d+(?:\.\d+)+)_", re.IGNORECASE)
 
 
-def system_dir() -> Path:
-    return Path(os.environ.get("SystemRoot") or r"C:\Windows") / "System32"
+def system_dir() -> PureWindowsPath:
+    """Windows' System32 (a Windows path on any OS, so tests read the same)."""
+    return PureWindowsPath(os.environ.get("SYSTEMROOT") or r"C:\Windows") / "System32"
 
 
 def powershell() -> str:

@@ -843,7 +843,7 @@ def test_on_windows_the_copy_is_started_with_its_own_home(tmp_path, data_folder)
     assert not any(c[0] == "/usr/bin/open" for c in calls)
     ((command, options),) = started
     home, user_data = codex_app.copy_paths(data_folder)
-    assert command[0].endswith(r"\app\ChatGPT.exe") and command[1] == f"--user-data-dir={user_data}"
+    assert command[0] == str(hold.app) and command[1] == f"--user-data-dir={user_data}"
     assert options["env"]["CODEX_HOME"] == str(home)  # never the person's ~/.codex
     assert options["env"]["CODEX_ELECTRON_USER_DATA_PATH"] == str(user_data)
     assert options["stdin"] == subprocess.DEVNULL and options["creationflags"]
