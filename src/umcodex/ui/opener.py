@@ -279,7 +279,7 @@ class CodexAppOpener:
     def reason(self) -> str | None:
         from umcodex import codex_app
 
-        if self._platform != "darwin":
+        if self._platform != "darwin" and not (self._platform == "win32" and codex_app.windows_enabled()):
             return codex_app.unavailable_reason(self._platform)
         return codex_app.unavailable_reason(self._platform, self.app())
 

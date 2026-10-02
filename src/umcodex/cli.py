@@ -110,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
     links.add_argument("--dry-run", action="store_true", help="with --refresh: only say what would change")
     include = commands.add_parser(
         "ssh-include",
-        help="for the installers: ask once whether to add the Codex app's line to ~/.ssh/config (Mac)",
+        help="for the installers: ask once whether to add the Codex app's line to ~/.ssh/config",
     )
     include.add_argument("--ask-again", action="store_true", help="ask even if the answer was no before")
     remove = commands.add_parser("uninstall", help="remove UM-Codex's containers, key, images and data")
