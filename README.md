@@ -13,6 +13,38 @@ You need a U-M GPT Toolkit API key for Codex (see ITS's "Codex Setup"
 articles for how to get one). The key is kept in your computer's keychain and
 never goes into the container.
 
+## Research and development tools
+
+The capability-bundle image includes Python and R analysis libraries,
+reproducible environments (uv/renv), Jupyter notebooks (run headless, no
+Jupyter server), Quarto reports,
+Shiny, Streamlit and Dash dashboards, and Node/TypeScript build tools.
+Codex has focused skills for these tasks, research handoffs, figures and
+Office documents. Ask for the deliverable you need; it chooses the workflow.
+For example:
+
+- "Audit this CSV's missing values and joins, then make a reproducible
+  analysis with a methods note and labeled figures."
+- "Extract an evidence table from these PDFs, retaining page references
+  and marking results that were not reported."
+- "Build an offline dashboard with filters and clear empty states, test
+  its controls, and tell me how to open it."
+- "Create an executable Quarto report with HTML and Word outputs."
+- "Fix this failing test, preserve my edits, and explain the checks run."
+
+Keep project code, environments and outputs in your working folder so they
+survive Stop. Bundled tools work with internet off; additional packages need
+internet or a previously prepared local package store. Quarto HTML, Word and
+PDF reports work offline: PDFs are made with Typst, which comes with Quarto
+(`quarto render report.qmd --to typst`); only LaTeX templates need a TeX
+installation.
+
+Dashboards run inside the container on ports 3838 (Shiny), 8501 (Streamlit)
+or 8050 (Dash). In the Codex app, its connection to the container can
+forward that port to your computer; a terminal launch doesn't show a
+dashboard on your computer. Codex tells you the port and how to reach it.
+Stop ends the server.
+
 ## Install on a Mac
 
 In Terminal (Applications > Utilities > Terminal), paste:

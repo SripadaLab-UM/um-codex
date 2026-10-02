@@ -336,6 +336,58 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
   setup's name, `/work` and each `/mnt/write/*` and `/mnt/read/*` with its
   folder on the computer, internet on or off, the browser tool (on or off,
   and whether each action is approved), and the approval policy.
+- **Research and development tools and skills** (`images/agent/skills/`):
+  the image adds uv, ipykernel/nbconvert (notebooks run headless; no
+  Jupyter server), Streamlit and Dash (Python), renv and Shiny (R), Quarto
+  1.10.18 (SHA256-checked for amd64 and arm64), TypeScript and esbuild.
+  Quarto's own Pandoc and Typst are the image's `pandoc` (R Markdown uses it
+  too) and `typst`, so HTML, Word and PDF (Typst, no TeX) reports work
+  offline. Python packages are installed from `requirements.txt` with
+  hashes (`--require-hashes`, compiled for Linux on both architectures).
+  - Eight skills (environments, analysis, research handoffs, figures,
+    reports, notebooks, dashboards, development) are short offline
+    instructions. They're user skills: Codex 0.157.1 finds them in
+    `$HOME/.agents/skills` (HOME=/home/agent; `ext/skills/src/host_roots.rs`)
+    and they're on by default, in the terminal and over ssh. Not
+    `/etc/codex/skills`: the launch's `/etc/codex` mount hides the image's.
+    No `[[skills.config]]` entries: Codex reads those only from the person's
+    `config.toml` and `-c` flags (`config/src/skills_config.rs`), so a
+    person can still turn one off. `~/.agents` belongs to agent, so a
+    session can add skills there, for that launch; a project's
+    `.agents/skills` under `/work` is kept.
+  - Codex's own bundled skills (skill-installer, imagegen, openai-docs, …)
+    reach GitHub or OpenAI, so managed_config.toml turns them off
+    (`[skills.bundled] enabled = false`; `bundled_skills_enabled_from_stack`
+    reads the effective config, which includes that layer): Codex neither
+    installs them in `$CODEX_HOME/skills/.system` nor lists them.
+  - Helpers: `um-codex-env` makes a project `.venv` without downloads (with
+    `--image-packages`, a `.pth` fallback to `/opt/venv`, recorded; it never
+    replaces an existing one). R projects use renv with its cache off, so the
+    library is copied into the project. `um-codex-dashboard` runs Shiny
+    (3838), Streamlit (8501) or Dash (8050) on the container's 127.0.0.1
+    (`--host` to change), with debug/reload/browser launch off, and refuses
+    a port in use. UM-Codex publishes no ports: the Codex app's ssh
+    connection can forward one (sshd allows local forwarding to loopback);
+    a terminal launch has no host preview.
+  - The build's smoke test (run with `--network=none`) executes all of this:
+    a notebook (and its HTML export), Quarto HTML/DOCX/Typst PDF, R Markdown
+    HTML/DOCX, Pandoc's Typst PDF, an image-backed venv, a copied renv
+    library, TypeScript and esbuild builds, each dashboard's button and
+    callback in headless Chromium (and that it listens only on loopback),
+    and Codex's app-server `skills/list` (the eight skills enabled; Codex's
+    bundled ones listed by default and absent with them off).
+  - **/codex-home stays empty in the image.** Docker copies it into every new
+    setup's volume (`containers.py` mounts the volume without `nocopy`), so
+    anything Codex writes there at build time (installation id, sqlite
+    databases, bundled skills) would be shared by every setup. Every Codex
+    run in the checks uses a throwaway `CODEX_HOME`, and the last build stage
+    fails if `/codex-home` holds anything but alpha.3's `tmp/arg0`. It also
+    removes the smoke test's caches and temp folders.
+  - The arm64 image is 6.40 GB (alpha.3: 5.57 GB), mostly Quarto (about
+    440 MB) and the Streamlit/Dash Python stack. amd64 is first
+    smoke-tested by release CI's native amd64 runner, which must pass before
+    a release: under emulation on an Apple silicon Mac the notebook kernel
+    check times out (as ZeroMQ subprocesses do under Rosetta).
 - **The launch's files** (`codex/` with the three files above, `launch.md`,
   `gateway.conf`, and the env file with the token, deleted once the agent
   has started) are in
@@ -458,6 +510,8 @@ um-codex/
     images.json             pinned image digests (stamped by the release)
   images/agent/             Dockerfile, AGENTS.md (from DataLab's image: Codex, Node, Python, R; DataLab skills removed; build tools added),
                             smoke.sh, browser-check.js (the browser tool's MCP check),
+                            skills/ (UM-Codex's skills), project-env.py, dashboard.py and their checks
+                            (capability-check.py, dashboard-check.js, skills-check.py),
                             sshd_config, profile.sh, umcodex-token (the Codex app's ssh entry, M6)
   installer/macos/          install.sh, uninstall.sh (from DataLab, trimmed)
   installer/windows/        install.ps1, uninstall.ps1 (from DataLab, trimmed)
