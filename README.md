@@ -94,7 +94,8 @@ UM-Codex's window in your web browser. The page runs on your own computer
   the card follows a start: Starting… → Opening Codex… → Connected ✓.
 - **Edit** a setup for more: more folders (each read only, or read &
   write), the internet and the browser tool, the model (newest first), where
-  it opens, and, under More options, "Ask before commands" and its name.
+  it opens, and, under More options, "Ask before commands", its name and
+  where Codex runs (below: On this computer).
   **New setup with options…** starts from that form.
 - **Stop** ends a running setup (it asks first, as **Delete** does).
 - The strip at the top says whether Docker is running and your key is saved
@@ -149,7 +150,9 @@ is only the window you use. What to know:
   `umcodex-*` hosts under Settings → Connections too (switched off). You can
   leave them off there; use UM-Codex's copy.
 - The app's own browser runs on your computer, not in the sandbox. For
-  browsing inside the sandbox, turn on the setup's Browser tool.
+  browsing inside the sandbox, turn on the setup's Browser tool. Chrome
+  control is off in UM-Codex's copy, and UM-Codex keeps your own ChatGPT
+  app's connection to Chrome as it was.
 - The setup runs until you press **Stop** in the launcher; the app then says
   it can't reconnect, which is expected.
 - **Windows (experimental):** the same, with the ChatGPT app from the
@@ -162,6 +165,52 @@ is only the window you use. What to know:
   minutes, UM-Codex closes it, stops the setup, and says to use Terminal.
 
 In a terminal: `um-codex launch --setup <name> --open app`.
+
+### On this computer (Mac, experimental): computer and browser control
+
+The sandbox is the safe default. A setup can instead run Codex **directly
+on your Mac**, when you need it to use your apps (Computer Use) or the
+Codex app's own browser. Use it only for that.
+
+- In the setup's form, open **More options** → **Where Codex runs** → **On
+  this computer**. UM-Codex asks once, then: *Codex will run on your Mac, not
+  in the sandbox. It can read, change and delete any of your files, use your
+  apps and browser, and act with your accounts. While it runs, it may also be
+  able to reach UM-Codex's own Toolkit key.* **Cancel** keeps the sandbox;
+  **Run on this computer** switches. Its card then says **On this computer · experimental**,
+  and Start doesn't ask again.
+- It opens in **UM-Codex's local Codex window**: another copy of the Codex
+  app, apart from your own and from the sandbox's copy (its chats never mix
+  with either). No sign-in, no Docker. It opens on a project with the setup's
+  folders.
+- **What Codex can change:** "Anything I can (full access)" (the default), or
+  "Only this setup's folders" (Codex's own macOS sandbox, for its commands
+  and file edits), with its own **Internet for Codex's commands** switch.
+  That second choice doesn't limit computer and browser control: those act
+  through your apps, which can change anything you can.
+- **Ask before commands** is on by default here: Codex asks before commands
+  (and file changes) in this setup's chats. That holds for new chats; the
+  Codex app's own permission choice in a chat can change it. It stays on with
+  full access or with computer and browser control (without it, the apps'
+  own permission questions are turned down). There's no "Approve for me"
+  (the Toolkit has no reviewer model for it).
+- **Computer and browser control** (on by default) turns on the app's
+  Computer Use and its own browser; both work on the Toolkit with no
+  ChatGPT account. The first time, macOS asks for **Screen Recording** and
+  **Accessibility** for "Codex Computer Use", and the app asks before using
+  each app or site. **Control of your own Chrome isn't supported yet**: it's
+  kept off in that window, and UM-Codex puts back your own ChatGPT app's
+  Chrome connection if the window changed it.
+- Read-only folders aren't offered (Codex can read all your files here).
+- Your Toolkit key stays in the keychain, read only by UM-Codex's relay,
+  which runs while that window is open. Quit the window, or press **Stop**,
+  to end it; if UM-Codex's side ends first, it closes the window too.
+- Uninstalling removes the programs in that window's folder (its Computer
+  Use and plugins); its settings and chats go only if you delete UM-Codex's
+  data. If you granted Screen Recording or Accessibility to "Codex Computer
+  Use" and no longer need it, remove it in System Settings → Privacy &
+  Security yourself (your own ChatGPT app may use the same entry).
+- Not on Windows yet, and not in a terminal yet.
 
 ## Updating
 

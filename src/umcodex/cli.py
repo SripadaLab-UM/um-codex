@@ -73,9 +73,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     launch.add_argument(
         "--open",
-        choices=["terminal", "app"],
+        choices=["terminal", "app", "local"],
         default="terminal",
-        help="where Codex opens: this terminal (the default), or the Codex desktop app (Mac)",
+        help="where Codex opens: this terminal (the default), or the Codex desktop app (Mac); "
+        "a setup that runs on this computer always opens in UM-Codex's local copy of the app",
     )
     launch.add_argument("codex_args", nargs=argparse.REMAINDER, help="passed to codex (after --)")
     window = commands.add_parser("ui", help="open the launcher window (in your browser)")
@@ -142,7 +143,20 @@ def main(argv: list[str] | None = None) -> int:
     proxy.add_argument("setup")
     proxy.add_argument("--docker", default="docker")
     proxy.add_argument("--data-dir", type=Path)
+    # Codex's auth.command in UM-Codex's local copy of the app (this_computer.py): not in the help.
+    token = commands.add_parser("local-token")
+    token.add_argument("--data-dir", type=Path)
     args = parser.parse_args(argv)
+    if args.command == "local-token":
+        # stdout is the token for Codex: no log setup, nothing else printed there.
+        from umcodex.this_computer import TokenRefused, local_token
+
+        try:
+            print(local_token(args.data_dir))
+        except TokenRefused as why:
+            print(f"UM-Codex: no token: {why}.", file=sys.stderr)
+            return 1
+        return 0
     if args.command == "ssh-proxy":
         # stdout is the ssh connection: no log setup, nothing printed.
         from umcodex.codex_app import ssh_proxy
@@ -208,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
             from_app=getattr(args, "from_app", False),
             setup_name=getattr(args, "setup", None),
             in_app=getattr(args, "open", "terminal") == "app",
+            local=getattr(args, "open", "terminal") == "local",
         )
     except KeyboardInterrupt:
         print("\nStopped.")
@@ -335,8 +350,16 @@ def _refresh_launchers() -> None:
         logging.getLogger(__name__).warning("refreshing the launchers failed", exc_info=True)
 
 
+NOT_LOCAL = "start it without --open local."
+
+
 def _launch(
-    codex_args: list[str], *, from_app: bool = False, setup_name: str | None = None, in_app: bool = False
+    codex_args: list[str],
+    *,
+    from_app: bool = False,
+    setup_name: str | None = None,
+    in_app: bool = False,
+    local: bool = False,
 ) -> int:
     from umcodex import launch
 
@@ -356,16 +379,27 @@ def _launch(
         print("This window can't run Codex's screen (Git Bash and mintty can't).")
         print("Use Windows Terminal or PowerShell, then run um-codex again.")
         return 1
+    chosen = None
+    if setup_name is not None:
+        chosen = _chosen_without_asking(SetupStore(), setup_name)
+        if chosen is None:
+            return 1
+        if local and not chosen[0].on_this_computer:
+            print(f"“{chosen[0].name}” runs in the sandbox, not on this computer: {NOT_LOCAL}")
+            return 1
+        if chosen[0].on_this_computer:  # no Docker: it runs on this computer (M4)
+            if not credentials.has_api_key():
+                print("First, UM-Codex needs your Toolkit API key.")
+                if _key_command() != KEY_SAVED:
+                    return 1
+            return _launch_local(*chosen)
     if not doctor.ensure_docker():
         return 1
     if not credentials.has_api_key():
         print("First, UM-Codex needs your Toolkit API key.")
         if _key_command() != KEY_SAVED:
             return 1
-    if setup_name is not None:
-        chosen = _chosen_without_asking(SetupStore(), setup_name)
-        if chosen is None:
-            return 1
+    if chosen is not None:
         if in_app:
             return _launch_in_app(*chosen, app=app)
         return launch.run(*chosen, codex_args=codex_args)
@@ -377,9 +411,35 @@ def _launch(
         print("Not started.")
         return 0
     setup, layout = chosen
+    if local and not setup.on_this_computer:
+        print(f"“{setup.name}” runs in the sandbox, not on this computer: {NOT_LOCAL}")
+        return 1
+    if setup.on_this_computer:
+        return _launch_local(setup, layout)
     if in_app:
         return _launch_in_app(setup, layout, app=app)
     return launch.run(setup, layout, codex_args=codex_args)
+
+
+def _launch_local(setup: Setup, layout: Layout) -> int:
+    """A setup that runs on this computer (M4): UM-Codex's local copy of the
+    Codex app, with the relay held here until the copy quits."""
+    from umcodex import this_computer
+    from umcodex.codex_app import find_app
+
+    log = logging.getLogger("umcodex.launch")
+
+    def say(text: str) -> None:
+        print(text, flush=True)
+        if text.strip():
+            log.info("%s", text)
+
+    app = find_app()
+    reason = this_computer.unavailable_reason(app=app)
+    if reason is not None:
+        say(reason)
+        return 1
+    return this_computer.run_local(setup, layout, say=say, app=app)
 
 
 def _launch_in_app(setup: Setup, layout: Layout, *, app: Path | None) -> int:

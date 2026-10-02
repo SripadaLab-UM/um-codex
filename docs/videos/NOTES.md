@@ -70,7 +70,28 @@ plain; no product pitch. These are separate from DataLab's users.
    - starting the setup again later: the app comes forward and reconnects by
      itself.
 
-Later, when built: "On this computer" mode (M4).
+8. **On this computer** (about 3 min, Mac only; record it only after the
+   GUI test round has confirmed what OpenAI's app offers without a ChatGPT
+   account, see "Not built yet"). Show, in order:
+   - Edit a setup → **More options** → **Where Codex runs**: "In the
+     sandbox (recommended)" is selected; choose **On this computer**;
+   - the caution dialog: read it out; **Cancel** is the highlighted button,
+     and pressing it keeps the sandbox; then choose it again and press
+     **Run on this computer**;
+   - the form changing: "What Codex can change" (full access, or only the
+     setup's folders, and why that doesn't limit computer control), Ask
+     before commands on, Computer and browser control, no read-only
+     folders;
+   - the card's **On this computer** marker; Start (no question this time);
+   - UM-Codex's local Codex window opening on the setup's project, with no
+     sign-in;
+   - a chat asking Codex to use an app (Calculator), the app's own "Allow
+     Codex to use Calculator?" question, and macOS asking for Screen
+     Recording and Accessibility for "Codex Computer Use" (say: only if you
+     want this);
+   - Stop in the launcher, and the window closing.
+   Say plainly: this is for computer and browser control only; the sandbox
+   stays the default; here Codex can do anything you can do on your Mac.
 
 ## What to say (true now, in the code)
 
@@ -193,8 +214,12 @@ Later, when built: "On this computer" mode (M4).
 - Don't call it "safe" or "secure" without saying what from: the key is
   protected; your chosen folders are exactly what Codex can touch.
 - The browser tool is a separate browser inside the sealed environment,
-  not the person's own: don't say Codex "uses your browser". Don't promise
-  control of the person's own browser or computer yet (see below).
+  not the person's own: don't say Codex "uses your browser". Control of the
+  person's own computer and Chrome is only in "On this computer" (M4), and
+  only once the GUI test has shown OpenAI's app offers it with no ChatGPT
+  account.
+- "On this computer" is never "safe": say what it means (Codex can do
+  anything you can do on this Mac, and may reach the Toolkit key).
 
 ## Recording
 
@@ -208,8 +233,12 @@ Later, when built: "On this computer" mode (M4).
 
 ## Not built yet (leave out until it is)
 
-- "On this computer" mode, the person's own browser, computer control
-  (M4; computer control depends on a spike).
+- "On this computer" (M4) is built, but whether Computer Use, the app's
+  browser and Chrome control are offered without a ChatGPT account is
+  waiting for the GUI test round (docs/spikes/2026-10-02-this-computer.md).
+  Until then, video 8 shows only the choice, the caution dialog, the card
+  marker and a plain chat in the local window.
+- "On this computer" in a terminal, and on Windows.
 - The Codex app on Windows.
 - An install website; until then the README has the commands.
 - In the Codex app: that a later launch reconnects with no steps isn't

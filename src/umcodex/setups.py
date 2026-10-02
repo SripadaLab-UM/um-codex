@@ -37,6 +37,11 @@ Say = Callable[[str], None]
 
 # Where a launch from the launcher window opens Codex (ui/opener.py).
 OPEN_IN = ("terminal", "codex-app")
+# Where Codex runs (M4): in the sandbox (the default), or on this computer, in
+# UM-Codex's local copy of the Codex app (this_computer.py).
+RUNS_ON = ("sandbox", "this-computer")
+# On this computer, what Codex's own commands may change (its macOS sandbox).
+LOCAL_ACCESS = ("full", "folder")
 
 
 @dataclass(frozen=True)
@@ -56,6 +61,15 @@ class Setup:
     # Where Codex opens when started from the launcher window (M5): only
     # "terminal" for now; "codex-app" is being tried on another branch.
     open_in: str = "terminal"
+    # M4, "On this computer": setups saved before it have none of these
+    # keys, which means the sandbox.
+    runs_on: str = "sandbox"
+    local_access: str = "full"  # "folder": Codex's commands change only the setup's folders
+    computer_use: bool = True  # Computer Use, the in-app browser and Chrome control
+
+    @property
+    def on_this_computer(self) -> bool:
+        return self.runs_on == "this-computer"
 
     def to_toml(self) -> dict:
         return {
@@ -70,6 +84,9 @@ class Setup:
             "browser": self.browser,
             "browser_asks": self.browser_asks,
             "open_in": self.open_in,
+            "runs_on": self.runs_on,
+            "local_access": self.local_access,
+            "computer_use": self.computer_use,
         }
 
     @classmethod
@@ -97,6 +114,9 @@ class Setup:
             browser=internet and raw.get("browser", False) is True,
             browser_asks=raw.get("browser_asks", True) is not False,
             open_in=str(raw["open_in"]) if raw.get("open_in") in OPEN_IN else "terminal",
+            runs_on=str(raw["runs_on"]) if raw.get("runs_on") in RUNS_ON else "sandbox",
+            local_access=str(raw["local_access"]) if raw.get("local_access") in LOCAL_ACCESS else "full",
+            computer_use=raw.get("computer_use", True) is not False,
         )
 
 
@@ -418,6 +438,10 @@ def ask_setup(
         browser=browser,
         browser_asks=browser_asks,
         open_in=base.open_in if base else "terminal",
+        # Where it runs is chosen in the launcher window (M4); the terminal keeps it.
+        runs_on=base.runs_on if base else "sandbox",
+        local_access=base.local_access if base else "full",
+        computer_use=base.computer_use if base else True,
     )
     return setup
 
@@ -431,6 +455,8 @@ def _default_working(start_folder: Path, own_data: Path | None) -> str | None:
 
 def summary(setup: Setup, layout: folders.Layout) -> list[str]:
     """The summary screen, in plain words."""
+    if setup.on_this_computer:
+        return local_summary(setup, layout)
     lines = [
         "",
         f"Setup: {setup.name}",
@@ -472,6 +498,45 @@ def summary(setup: Setup, layout: folders.Layout) -> list[str]:
     lines += [
         "",
         "Your Toolkit key stays on this computer; the container never sees it.",
+        "",
+    ]
+    return lines
+
+
+LOCAL_PLAIN = "Codex runs on this computer, not in the sandbox: it can do anything you can do on this Mac."
+
+
+def local_summary(setup: Setup, layout: folders.Layout) -> list[str]:
+    """The summary of a setup that runs on this computer (M4)."""
+    lines = ["", f"Setup: {setup.name}", "", f"ON THIS COMPUTER. {LOCAL_PLAIN}", "", "Its project folders:"]
+    lines.append(f"  {layout.working}")
+    lines += [f"  {host}" for host, _ in layout.writes]
+    lines += [f"  Note: {note}" for note in layout.notes]
+    if setup.local_access == "folder":
+        lines.append("Codex's commands can change only these folders (Codex's own sandbox).")
+        if setup.computer_use:
+            lines.append("That doesn't limit computer and browser control: they act through your apps.")
+        lines.append(
+            "Internet for Codex's commands: ON." if setup.internet else "Internet for Codex's commands: off."
+        )
+    else:
+        lines.append("Codex can read, change and DELETE any of your files, not only these.")
+        lines.append("Internet: ON, everything this Mac can reach (full access doesn't limit it).")
+    lines.append(
+        "Computer and browser control: ON (Computer Use and the app's own browser; not your Chrome "
+        'yet). macOS asks you once for Screen Recording and Accessibility, for "Codex Computer Use".'
+        if setup.computer_use
+        else "Computer and browser control: off."
+    )
+    lines.append(f"Model: {setup.model}")
+    lines.append(
+        "Approvals: Codex runs commands without asking."
+        if setup.approvals == "never"
+        else "Approvals: Codex asks you before commands."
+    )
+    lines += [
+        "",
+        "Your Toolkit key stays in the keychain, but Codex runs as you here, so it may be able to reach it.",
         "",
     ]
     return lines

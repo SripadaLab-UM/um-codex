@@ -63,8 +63,8 @@ from pathlib import Path
 
 import tomli_w
 
+from umcodex import chrome_link, locks
 from umcodex import codex_app_windows as win
-from umcodex import locks
 from umcodex.containers import APP, APP_LABEL, INSTANCE_LABEL, Docker, DockerError, instance_of
 from umcodex.paths import data_dir, default_data_dir
 from umcodex.setups import SETUP_ID, Setup
@@ -127,6 +127,7 @@ WINDOWS_UPDATE_GRACE_SECONDS = 1200.0
 
 def windows_enabled() -> bool:
     return WINDOWS_COPY or os.environ.get("UMCODEX_WINDOWS_CODEX_APP") == "1"
+
 
 # What the launcher (and the terminal) says before adding the Include line.
 INCLUDE_EXPLAINED = (
@@ -610,6 +611,38 @@ def known_setups(home: Path | None = None, data: Path | None = None) -> list[str
     return _keys_in(install_ssh_dir(home, data))
 
 
+def app_setups(data: Path | None = None) -> list[Setup]:
+    """The data folder's saved setups that open in the Codex app (in the
+    sandbox; not those that run on this computer)."""
+    from umcodex.setups import SetupStore
+
+    store = SetupStore() if data is None else SetupStore(path=data / "setups.toml")
+    return [s for s in store.all() if s.open_in == "codex-app" and not s.on_this_computer]
+
+
+def copy_knows(setup_id: str, data: Path | None = None) -> bool | None:
+    """Whether UM-Codex's copy has the setup's host and project in its state;
+    None when that can't be told (the file can't be read or has another shape)."""
+    home, _ = copy_paths(data)
+    if not any((home / name).exists() for name in (GLOBAL_STATE, f"{GLOBAL_STATE}.bak")):
+        return False
+    try:
+        state = read_state(home)
+    except (StateUnknown, OSError):
+        return None
+    if not state:
+        return None  # there, but neither the file nor its backup could be read
+    host = host_id(setup_id, data)
+    connections = state.get("codex-managed-remote-connections")
+    projects = state.get("remote-projects")
+    return (
+        isinstance(connections, list)
+        and any(isinstance(c, dict) and c.get("hostId") == host for c in connections)
+        and isinstance(projects, list)
+        and any(isinstance(p, dict) and p.get("hostId") == host for p in projects)
+    )
+
+
 def _saved_setup_ids(data: Path | None = None) -> set[str]:
     from umcodex.setups import SetupStore
 
@@ -642,7 +675,7 @@ class SshPermissionsError(OSError):
         else:
             said = (
                 f"UM-Codex couldn't set the permissions Windows' ssh needs on {path}. It put the file's "
-                "contents back as they were, but not its permissions: if ssh now says \"Bad permissions\", "
+                'contents back as they were, but not its permissions: if ssh now says "Bad permissions", '
                 f"restore them from {path.name}.um-codex-backup's or ask for help. "
                 "Use Open in: Terminal for now."
             )
@@ -1390,6 +1423,13 @@ def local_config(
         }
     )
     config.setdefault("model", model)
+    # Chrome control off in this copy: its plugin would take the person's Chrome
+    # connection over (chrome_link.py; the launch also keeps their manifest).
+    plugins = config.get("plugins")
+    plugins = plugins if isinstance(plugins, dict) else {}
+    entry = plugins.get("chrome@openai-bundled")
+    plugins["chrome@openai-bundled"] = {**(entry if isinstance(entry, dict) else {}), "enabled": False}
+    config["plugins"] = plugins
     if catalog is not None:
         # No upgrade offers or new-model announcements on the copy's own side.
         config["model_catalog_json"] = str(catalog)
@@ -1726,10 +1766,23 @@ def read_state(home: Path) -> dict:
     return {}
 
 
-def seed_copy(home: Path, setup: Setup, *, seen_models: Iterable[str] = (), data: Path | None = None) -> None:
-    """Write the seeded state (the file and its backup, as the app does).
-    Only while the copy isn't running. Raises StateUnknown or OSError."""
-    text = json.dumps(seeded_state(read_state(home), setup, seen_models=seen_models, data=data))
+def seed_copy(
+    home: Path,
+    setup: Setup,
+    *,
+    seen_models: Iterable[str] = (),
+    data: Path | None = None,
+    others: Iterable[Setup] = (),
+) -> None:
+    """Write the seeded state (the file and its backup, as the app does):
+    every setup in `others` (the data folder's other Codex-app setups, so
+    the copy knows them before they're started) and then `setup`, which is
+    selected. Only while the copy isn't running. Raises StateUnknown or OSError."""
+    state = read_state(home)
+    for other in others:
+        if other.id != setup.id:
+            state = seeded_state(state, other, seen_models=seen_models, data=data)
+    text = json.dumps(seeded_state(state, setup, seen_models=seen_models, data=data))
     for path in (home / GLOBAL_STATE, home / f"{GLOBAL_STATE}.bak"):
         _replace(path, text.encode("utf-8"), mode=0o644)
 
@@ -1867,8 +1920,14 @@ class AppHold:
         spec, setup = running.spec, running.setup
         name = alias(setup.id, self.data)
         self.say("Preparing the sandbox for the Codex app...")
+        others = [s for s in app_setups(self.data) if s.id != setup.id]
         try:
             public = ensure_key(setup.id, run=self.run, data=self.data)
+            # Every Codex-app setup gets its key and Host now, so the copy can be
+            # set up with all of them (one started later is known already).
+            for other in others:
+                with contextlib.suppress(OSError, subprocess.SubprocessError, ValueError):
+                    ensure_key(other.id, run=self.run, data=self.data)
             write_config(self.proxy_for, setup_ids={*_saved_setup_ids(self.data), setup.id}, data=self.data)
         except SshPermissionsError as error:  # Windows: nothing left that would break ssh
             from umcodex.launch import update_launch_app
@@ -1886,9 +1945,12 @@ class AppHold:
             responder.ensure()
         copy_open = self.app is not None and running_copy(self.data, self.run, self.platform) is not None
         seen = self._write_copy_files(running.relay_port, running.token, setup, responder)
+        reopened = False
+        if copy_open and self._reopen_for(running, setup):
+            copy_open, reopened = False, True
         seeded = False
         if self.app is not None and not copy_open:
-            seeded = self._seed(setup, seen)
+            seeded = self._seed(setup, seen, others)
         connected_once = connected_before(setup.id, self.data)
         state = {
             "alias": name,
@@ -1901,6 +1963,7 @@ class AppHold:
             "notes": notes(setup.id, local_chats=self.local_chats, data=self.data, platform=self.platform),
             "copy": "not-opened",
             "icon": second_icon(self.platform),  # where the launcher says the copy is
+            "reopened": reopened,
         }
         token_file = app_folder(self.data) / "launch-token"
         try:
@@ -1913,13 +1976,53 @@ class AppHold:
             self.say("Ending the launch...")
             return 0
         finally:
+            # The copy may stay open after the launch: the backup then stays for its next write.
+            self._keep_chrome(
+                final=self.app is None or running_copy(self.data, self.run, self.platform) is None
+            )
             responder.stop()
             # Only this launch's token (another launch may have written its own since).
             with contextlib.suppress(OSError):
                 if token_file.read_text(encoding="utf-8") == running.token:
                     token_file.unlink()
 
-    def _seed(self, setup: Setup, seen: list[str]) -> bool:
+    def _keep_chrome(self, *, final: bool) -> None:
+        """Put the person's Chrome manifest back if the copy took it
+        (chrome_link.py): at each poll, and when the launch ends."""
+        with contextlib.suppress(OSError):
+            chrome_link.restore(app_folder(self.data), self.data, final=final, platform=self.platform)
+
+    def _reopen_for(self, running, setup: Setup) -> bool:
+        """The copy is open but doesn't know this setup (made after it opened):
+        when no other setup's launch uses it, quit it so it can be set up and
+        opened again (the card says "Reopening the Codex window…"). False when
+        it's left as it is (it knows the setup, another launch uses it, or it
+        didn't quit): the guided steps then show as before. Mac only."""
+        from umcodex.launch import update_launch_app
+        from umcodex.this_computer import quit_found
+
+        known = copy_knows(setup.id, self.data)
+        if self.platform != "darwin" or known is not False or self._copy_shared(running):
+            return False  # it knows the setup, or that can't be told, or another launch uses it
+        update_launch_app(
+            running.folder, {"alias": alias(setup.id, self.data), "connected": False, "copy": "reopening"}
+        )
+        self.say("Reopening UM-Codex's Codex window, set up for this setup...")
+        log.info("launch %s: reopening the Codex app copy to set it up", running.spec.launch_id)
+        # Asked to quit, then SIGTERM; never SIGKILL here (the person may have a
+        # chat open): if it hasn't quit in about 10 s, it's left and the steps show.
+        ended = quit_found(
+            lambda: running_copy(self.data, self.run, self.platform),
+            run=self.run,
+            sleep=self.sleep,
+            patience=5.0,
+            force=False,
+        )
+        if not ended:
+            log.warning("the Codex app copy didn't quit; showing the steps")
+        return ended
+
+    def _seed(self, setup: Setup, seen: list[str], others: Iterable[Setup] = ()) -> bool:
         """The host, its project and the pop-ups seen, in the copy's state
         file (the copy isn't running). False, and nothing changed, if the
         file's shape isn't one UM-Codex knows."""
@@ -1928,7 +2031,7 @@ class AppHold:
         if version is not None and not version.startswith(TESTED_APP_VERSIONS):
             log.info("Codex app %s: not a version the copy's set-up was checked with; trying it", version)
         try:
-            seed_copy(home, setup, seen_models=seen, data=self.data)
+            seed_copy(home, setup, seen_models=seen, data=self.data, others=others)
         except (StateUnknown, OSError) as error:
             log.warning("the Codex app copy's state couldn't be set up (%s); showing the steps", error)
             return False
@@ -1987,6 +2090,9 @@ class AppHold:
         # host never connected: it adds the host switched off, so later it
         # would switch off a host that's on.
         link_arg = deep_link(setup_id, self.data) if link else None
+        chrome_link.remember(
+            app_folder(self.data), self.data, platform=self.platform
+        )  # restored by _keep_chrome
         if self.platform == "win32":
             return self._open_windows(link_arg)
         done = self.run(
@@ -2038,7 +2144,10 @@ class AppHold:
 
         mine = running.spec.launch_id
         with contextlib.suppress(OSError):
-            return any(launch.app and launch.launch_id != mine for launch in running_launches(self.data))
+            return any(
+                launch.app and not launch.app.get("local") and launch.launch_id != mine
+                for launch in running_launches(self.data)
+            )
         return False
 
     def _fall_back(self, running, state: dict, why: str) -> int:
@@ -2074,9 +2183,7 @@ class AppHold:
         elif copy == "refused":
             self.say("UM-Codex didn't open its Codex window: its folders would have been your own app's.")
         elif copy == "already-open":
-            self.say(
-                f"UM-Codex's Codex window is already open: switch to it ({second_icon(self.platform)})."
-            )
+            self.say(f"UM-Codex's Codex window is already open: switch to it ({second_icon(self.platform)}).")
         if state["first_time"]:
             self.say("")
             self.say("The first time for this setup, in UM-Codex's Codex window:")
@@ -2112,6 +2219,7 @@ class AppHold:
             if responder is not None and not self.local_chats:
                 with contextlib.suppress(OSError, RuntimeError):
                     responder.ensure()  # takes the port over if the process that had it ended
+            self._keep_chrome(final=False)
             if missing >= 2:
                 self.say("The sandbox was stopped.")
                 return 0
