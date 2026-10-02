@@ -98,6 +98,11 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH",
         help="for the installers: write the app (a .app folder) or shortcuts (.lnk files) at PATH",
     )
+    which.add_argument(
+        "--write-command",
+        action="store_true",
+        help="for the Mac installer: write the um-codex command in UM-Codex's own bin folder",
+    )
     links.add_argument("--dry-run", action="store_true", help="with --refresh: only say what would change")
     remove = commands.add_parser("uninstall", help="remove UM-Codex's containers, key, images and data")
     data = remove.add_mutually_exclusive_group()
@@ -148,7 +153,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.dry_run and not args.refresh:
                 parser.error("--dry-run goes with --refresh")
             launchers = Launchers()
-            report = launchers.write(args.write) if args.write else launchers.refresh(dry_run=args.dry_run)
+            if args.write_command:
+                report = launchers.write_command()
+            elif args.write:
+                report = launchers.write(args.write)
+            else:
+                report = launchers.refresh(dry_run=args.dry_run)
             return 0 if report.ok else 1
         if args.command == "uninstall":
             from umcodex.uninstall import uninstall

@@ -228,6 +228,14 @@ jobs:
           Install-Launcher (Join-Path $venv "Scripts\pip.exe") $copy
           $said = & $copy --version
           if ($said -notmatch [regex]::Escape($venv)) { Fail "the copy says: $said" }
+          # Typed by name, as people do: bin is on PATH (no link, unlike the
+          # Mac's ~/.local/bin), from another folder.
+          $Env:PATH = "$bin;$Env:PATH"
+          Push-Location $Env:TEMP
+          $found = (Get-Command pip.exe).Source
+          $typed = & pip.exe --version
+          Pop-Location
+          if ($found -ne $copy -or $typed -notmatch [regex]::Escape($venv)) { Fail "typed by name: $found says $typed" }
           # Again, while the copy is running: it's renamed aside, not overwritten.
           $running = Start-Process $copy -ArgumentList "download", "--no-deps", "-d", $Env:RUNNER_TEMP, "pip==24.0" -PassThru -WindowStyle Hidden
           Install-Launcher (Join-Path $venv "Scripts\pip.exe") $copy

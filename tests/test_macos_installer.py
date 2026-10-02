@@ -52,7 +52,7 @@ case "$*" in
   launchers*)
     # The real `um-codex launchers` (umcodex/launchers.py): what the app
     # contains. UMCODEX_TEST_LAUNCHERS=fail: it writes half the app, then fails.
-    if [ "${UMCODEX_TEST_LAUNCHERS:-}" = fail ]; then
+    if [ "${UMCODEX_TEST_LAUNCHERS:-}" = fail ] && [ "$2" = --write ]; then
       for last; do :; done
       mkdir -p "$last/Contents/MacOS" && echo half > "$last/Contents/Info.plist"
       echo "PermissionError: no" >&2
@@ -354,10 +354,15 @@ def test_it_installs_a_version_in_its_own_folder_then_pulls_the_images(machine):
     assert not (app / "previous").exists()
     assert asked(machine) == [
         "--version",  # the new folder's own check
+        "launchers --write-command",  # bin/um-codex, as UM-Codex writes it
         "--version",  # through bin/um-codex, the launcher's command
+        "--version",  # through ~/.local/bin/um-codex: the command link must work
         "pull",
         f"launchers --write {machine['apps'] / 'UM-Codex.app'}",  # the app, as UM-Codex writes it
     ]
+    command = app / "bin" / "um-codex"
+    assert command.read_bytes() == launchers.mac_command_file(app)
+    assert (machine["home"] / ".local" / "bin" / "um-codex").readlink() == command
     launcher = machine["apps"] / "UM-Codex.app" / "Contents" / "MacOS" / "UM-Codex"
     text = launcher.read_text()
     # The launcher window, in the background: no Terminal window, no Dock icon.
@@ -387,6 +392,71 @@ def test_installing_a_newer_version_keeps_the_one_before(machine):
         check=True,
     )
     assert shim.stdout.strip() == "UM-Codex x"
+
+
+# bin/um-codex as alpha.1's and alpha.2's installers wrote it: its folder
+# worked out from $0, which through the ~/.local/bin link is the link.
+ALPHA_2_COMMAND = """#!/bin/sh
+export PYTHONUTF8=1
+root="$(cd "$(dirname "$0")/.." && pwd)"
+version="$(head -n 1 "$root/current" 2>/dev/null || true)"
+if [ -z "$version" ] || [ ! -x "$root/versions/$version/bin/um-codex" ]; then
+  echo "UM-Codex ${version:-(none)} can't be opened; opening the version before it." >&2
+  version="$(head -n 1 "$root/previous" 2>/dev/null || true)"
+fi
+exec "$root/versions/$version/bin/um-codex" "$@"
+"""
+
+
+def typed_um_codex(machine, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """`um-codex --version` typed in a new Terminal window: found on PATH as
+    ~/.local/bin/um-codex (a link), run in another folder."""
+    env = environment(machine, "x", PATH=f"{machine['home'] / '.local' / 'bin'}:{machine['system']}")
+    return subprocess.run(
+        ["/bin/sh", "-c", "um-codex --version"], cwd=cwd, env=env, capture_output=True, text=True, timeout=30
+    )
+
+
+def test_the_command_link_works_from_any_folder_with_a_quote_in_the_home_folder(machine, tmp_path):
+    # A home folder like /Users/o'brien, with a space too.
+    home = machine["home"].rename(machine["home"].with_name("o'brien home"))
+    machine["home"] = home
+    elsewhere = tmp_path / "some project"
+    elsewhere.mkdir()
+    # As alpha.2 left it: the link works only by the command's full path.
+    install(machine, "0.1.0a2")
+    command = root(machine) / "bin" / "um-codex"
+    command.write_text(ALPHA_2_COMMAND)
+    link = home / ".local" / "bin" / "um-codex"
+    assert link.readlink() == command
+    broken = typed_um_codex(machine, elsewhere)
+    assert broken.returncode != 0 and "UM-Codex (none) can't be opened" in broken.stderr
+    # The fixed installer (run again, or a newer version's) rewrites it.
+    done = install(machine, "0.1.0a3")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert f"The command:       {link}" in done.stdout
+    assert "doesn't run UM-Codex" not in done.stdout
+    works = typed_um_codex(machine, elsewhere)
+    assert works.returncode == 0, works.stderr
+    assert works.stdout.strip() == "UM-Codex x" and works.stderr == ""
+    assert command.read_bytes() == launchers.mac_command_file(root(machine))
+
+
+def test_a_command_link_that_doesnt_work_isnt_offered(machine):
+    # A command that runs by its full path but not from another folder
+    # through the link, as alpha.2's: the end says the full path instead.
+    broken = FAKE_UMCODEX.replace(
+        "case \"$*\" in", 'case "$(pwd)" in /) [ "$*" = --version ] && exit 1 ;; esac\ncase "$*" in', 1
+    )
+    executable(machine["fake"], broken)
+    # ~/.local/bin on PATH: plain `um-codex` would be offered if the link worked.
+    on_path = f"{machine['home'] / '.local' / 'bin'}:{machine['tools']}:{machine['system']}"
+    done = install(machine, "0.1.0a3", PATH=on_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    link = machine["home"] / ".local" / "bin" / "um-codex"
+    assert f"{link} doesn't run UM-Codex; use the full path below instead." in done.stdout
+    assert f"run: '{root(machine)}/bin/um-codex'" in done.stdout
+    assert "The command:" not in done.stdout
 
 
 def test_a_package_without_a_version_in_its_name_is_refused(machine):

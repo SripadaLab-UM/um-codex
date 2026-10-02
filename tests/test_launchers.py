@@ -243,6 +243,119 @@ def test_a_script_that_lost_its_execute_bit_is_rewritten(tmp_path, home, system_
     assert os.access(app / "Contents" / "MacOS" / "UM-Codex", os.X_OK)
 
 
+# alpha.1's and alpha.2's bin/um-codex, as installer/macos/install.sh at
+# v0.1.0-alpha.2 wrote it: its folder worked out from $0, which through the
+# ~/.local/bin/um-codex link is the link, so the typed `um-codex` never worked.
+ALPHA_2_COMMAND = """#!/bin/sh
+# Runs the UM-Codex version named in ../current, or the one before
+# (../previous) if that one can't run.
+# UTF-8 for Python's own text files and console, whatever the locale.
+export PYTHONUTF8=1
+root="$(cd "$(dirname "$0")/.." && pwd)"
+version="$(head -n 1 "$root/current" 2>/dev/null || true)"
+if [ -z "$version" ] || [ ! -x "$root/versions/$version/bin/um-codex" ]; then
+  echo "UM-Codex ${version:-(none)} can't be opened; opening the version before it." >&2
+  version="$(head -n 1 "$root/previous" 2>/dev/null || true)"
+fi
+exec "$root/versions/$version/bin/um-codex" "$@"
+"""
+
+
+def an_install(root: Path, version: str = "0.1.0a3") -> Path:
+    """An install with one version, whose command says its version and the
+    folder it was run from; bin/um-codex as alpha.2 left it. Returns that."""
+    program = root / "versions" / version / "bin" / "um-codex"
+    program.parent.mkdir(parents=True)
+    program.write_text(f'#!/bin/sh\necho "UM-Codex {version} $*"\npwd\n')
+    program.chmod(0o755)
+    (root / "current").write_text(f"{version}\n")
+    command = root / "bin" / "um-codex"
+    command.parent.mkdir()
+    command.write_text(ALPHA_2_COMMAND)
+    command.chmod(0o755)
+    return command
+
+
+def typed(link: Path, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """`um-codex --version` typed in a terminal: found on PATH as the
+    ~/.local/bin link, run from another folder."""
+    env = {**os.environ, "PATH": f"{link.parent}:/usr/bin:/bin"}
+    return subprocess.run(
+        ["/bin/sh", "-c", "um-codex --version"], cwd=cwd, env=env, capture_output=True, text=True, timeout=30
+    )
+
+
+def test_the_command_has_its_folder_written_in_quoted(tmp_path):
+    root = tmp_path / "o'brien $HOME `x`" / "app"
+    text = launchers.mac_command_file(root).decode()
+    assert text.startswith("#!/bin/sh\n")
+    assert f"\nroot={launchers.sh_quote(str(root))}\n" in text
+    assert "$0" not in text.replace("from $0", "")  # never worked out from where it was run
+    assert "export PYTHONUTF8=1" in text
+    # Absolute, whatever it's given.
+    assert f"root='{os.path.abspath('app')}'" in launchers.mac_command_file(Path("app")).decode()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a shell script")
+def test_refresh_rewrites_alpha_2s_command_so_the_typed_um_codex_works(tmp_path, home):
+    person = tmp_path / "o'brien's home"
+    root = person / "Library" / "Application Support" / "UM-Codex" / "app"
+    command = an_install(root)
+    link = person / ".local" / "bin" / "um-codex"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(command)
+    elsewhere = tmp_path / "work"
+    elsewhere.mkdir()
+    # The bug: through the link, alpha.2's command looks in ~/.local.
+    broken = typed(link, elsewhere)
+    assert broken.returncode != 0 and "UM-Codex (none) can't be opened" in broken.stderr
+    # The new version's first launch (or update) rewrites it.
+    said: list[str] = []
+    launchers.refresh_if_differs(said.append, launchers=mac(root, home, said))
+    assert command.read_bytes() == launchers.mac_command_file(root)
+    assert os.access(command, os.X_OK) and not command.is_symlink()
+    assert f"Brought the um-codex command up to date ({command})" in "\n".join(said)
+    assert record(root) == (FORMAT, True)
+    works = typed(link, elsewhere)
+    assert works.returncode == 0, works.stderr
+    assert works.stdout.splitlines() == ["UM-Codex 0.1.0a3 --version", str(elsewhere.resolve())]
+    # Up to date now: not rewritten again.
+    said.clear()
+    report = mac(root, home, said).refresh()
+    assert report.current == [command] and report.changed == []
+
+
+def test_the_command_is_written_only_in_an_install(tmp_path, home):
+    root = tmp_path / "app"  # no `current`: not an install
+    assert mac(root, home, []).refresh().ok
+    assert not (root / "bin").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a shell script")
+def test_a_dry_run_shows_the_commands_change(tmp_path, home):
+    root = tmp_path / "app"
+    command = an_install(root)
+    said: list[str] = []
+    report = mac(root, home, said).refresh(dry_run=True)
+    assert report.changed == [command]
+    text = "\n".join(said)
+    assert "Would bring the um-codex command up to date" in text
+    assert '-root="$(cd "$(dirname "$0")/.." && pwd)"' in text
+    assert f"+root={launchers.sh_quote(str(root))}" in text
+    assert command.read_text() == ALPHA_2_COMMAND
+
+
+def test_the_installers_write_command(tmp_path, home):
+    root = tmp_path / "app"
+    said: list[str] = []
+    report = mac(root, home, said).write_command()
+    assert report.ok and report.changed == [root / "bin" / "um-codex"]
+    assert (root / "bin" / "um-codex").read_bytes() == launchers.mac_command_file(root)
+    assert not (root / "launchers").exists()  # the app's write records the format
+    windows = Launchers(root, platform="win32", say=said.append, home=home).write_command()
+    assert not windows.ok
+
+
 def test_a_dry_run_says_what_would_change_and_changes_nothing(tmp_path, home, system_apps):
     root = tmp_path / "app"
     app = alpha_1_app(system_apps, root)

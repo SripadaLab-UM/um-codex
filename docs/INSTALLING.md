@@ -47,9 +47,14 @@ Steps:
    bin/um-codex          the launcher's command: runs `current`
    ```
 
-   and a link `~/.local/bin/um-codex` to `bin/um-codex`. The end of the
-   install says how to run it: `um-codex` if `~/.local/bin` was on PATH,
-   otherwise the full path.
+   `bin/um-codex` is written by the new version itself, `um-codex launchers
+   --write-command` (`src/umcodex/launchers.py`, which `um-codex update` also
+   uses to bring it up to date): a shell script with this folder written in,
+   single-quoted, never worked out from `$0`. Then a link
+   `~/.local/bin/um-codex` to `bin/um-codex`, and a check that the link
+   works as people use it (`um-codex --version` through the link, run in
+   another folder). The end of the install says how to run it: `um-codex` if
+   `~/.local/bin` was on PATH and the link works, otherwise the full path.
 4. **Images:** `um-codex pull`. If it fails, the install stops and says to
    run it again.
 5. **Toolkit key:** if the Keychain has a key already (`security
@@ -159,7 +164,7 @@ Commits are in github.com/SripadaLab-UM/ihs-datalab.
 - uv gets both files under plain names from a staging folder: it cuts a path at its first space ("Application Support"). (`40a455f`)
 - `uv venv --no-config --python 3.13 --python-preference only-managed` (UM-Codex adds the last: always uv's own Python build, never Homebrew's or python.org's, which could change or go from under it), then `uv pip install --no-config --require-hashes --only-binary :all: --default-index https://pypi.org/simple --link-mode copy`: only hashed wheels from PyPI, copied rather than hardlinked (hardlinks fail in cloud-synced or redirected folders). (`1eb5673`, `b0bf0b0`)
 - Per-version folders: a version is installed beside the one in use, checked (`--version` must say it), `sync`ed, then marked `.complete` with the package's checksum; the same version with another package is reinstalled. `current` and `previous` are switched by rename. (`40a455f`, `1eb5673`)
-- The shim `bin/um-codex` runs `current`, falls back to `previous` and says so, and sets `PYTHONUTF8=1`. (`1eb5673`, `0ed6270`)
+- The shim `bin/um-codex` runs `current`, falls back to `previous` and says so, and sets `PYTHONUTF8=1`. (`1eb5673`, `0ed6270`; its folder is now written in: see "The command link must work" below.)
 
 **The key**
 
@@ -191,6 +196,25 @@ Commits are in github.com/SripadaLab-UM/ihs-datalab.
   on stdin, so they work under `curl … | sh`.
 - The `~/.local/bin/um-codex` link, replaced only if it's a link to this
   install's command; the uninstaller removes only that link.
+- **The command link must work.** alpha.1's and alpha.2's `bin/um-codex`
+  worked out its folder from `$0` (`cd "$(dirname "$0")/.."`). Run through
+  the link, `$0` is the link, so it looked in `~/.local` and said "UM-Codex
+  (none) can't be opened": typing `um-codex` in Terminal never worked (the
+  app ran the command by its full path, and so did the tests). Now
+  `um-codex launchers --write-command` writes the folder in, single-quoted
+  (`/Users/o'brien` works), and a link always stays a link to it. The
+  installer runs `um-codex --version` through the link from `/` and, if that
+  fails, says so and gives the full path instead. A test types `um-codex
+  --version` through the link from another folder, with an apostrophe and a
+  space in the home folder, after first showing alpha.2's command fails there.
+  Installs from alpha.1 and alpha.2 get the command rewritten by the
+  launchers' refresh (launcher format 3, below): by `um-codex update` (the
+  new version's `launchers --refresh`), by the installer, or at the new
+  version's first `um-codex ui` (opening the app, which runs the command by
+  its full path). The typed `um-codex` can't do it: the old command fails
+  before any Python runs. Windows has no such link: `bin` itself is on PATH,
+  and `bin\um-codex.exe` is a copy of uv's launcher, which names the
+  version's `python.exe` by its full path, not relative to itself.
 - The key step runs `um-codex key < /dev/tty` (DataLab's `datalab setup`
   asked for keys itself), and `set +a` follows `set -eu`, so nothing the
   script sets is exported even if sh started with allexport.
@@ -274,6 +298,12 @@ and both the installers and the updater use it, so they can't drift apart:
 - Both launchers run the command in `<app>/bin` (the Mac shim, the Windows
   `um-codex.exe` copy), never a version's folder, so an ordinary update
   changes nothing in them. A change to what they contain bumps `FORMAT`.
+- On a Mac the refresh also rewrites that command, `<app>/bin/um-codex`
+  (`mac_command_file`), in an install (`<app>/current` is there) where it
+  differs: format 3 is format 2 plus a command with its folder written in
+  (alpha.1's and alpha.2's didn't work through `~/.local/bin/um-codex`; see
+  "The command link must work"). It's the same in every format, a rollback
+  to alpha.1 included: any version runs from it.
 - A shortcut pinned to the Windows taskbar is Windows' own copy (in
   `%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar`),
   which UM-Codex doesn't touch: after an update that changes the launchers,

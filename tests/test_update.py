@@ -205,6 +205,52 @@ def test_the_launchers_are_refreshed_by_the_version_switched_to(app, github, key
     assert refreshed == [[program, "launchers", "--refresh"] for program in programs]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the Mac's shell-script command")
+def test_an_update_from_alpha_2_makes_the_typed_um_codex_work(app, github, key, data_folder, tmp_path):
+    """alpha.2's bin/um-codex worked out its folder from $0, so through the
+    ~/.local/bin link it never ran. The new version's `launchers --refresh`
+    (here the real code, as that version runs it) rewrites it."""
+    from tests.test_launchers import ALPHA_2_COMMAND
+    from umcodex import launchers
+
+    command = app / "bin" / "um-codex"
+    command.parent.mkdir()
+    command.write_text(ALPHA_2_COMMAND)
+    command.chmod(0o755)
+    link = tmp_path / "home" / ".local" / "bin" / "um-codex"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(command)
+    private, public = key
+    github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
+    tools, said = FakeTools(), []
+    up = updater(app, github, public, tools, said, data_folder)
+
+    def run(command, **kw):
+        if command[1:] != ["launchers", "--refresh"]:
+            return tools(command, **kw)
+        lines: list[str] = []
+        report = launchers.Launchers(app, platform="darwin", say=lines.append).refresh()
+        return subprocess.CompletedProcess([], 0 if report.ok else 1, "".join(f"{x}\n" for x in lines), "")
+
+    up._run = run
+    assert up.update() == 0, said
+    assert command.read_bytes() == launchers.mac_command_file(app)
+    assert f"Brought the um-codex command up to date ({command})" in "\n".join(said)
+    # Typed in a terminal: found on PATH as the link, run in another folder.
+    program = app / "versions" / "0.1.0a3" / "bin" / "um-codex"
+    program.write_text('#!/bin/sh\necho "UM-Codex 0.1.0a3 $*"\n')
+    program.chmod(0o755)
+    typed = subprocess.run(
+        ["/bin/sh", "-c", "um-codex --version"],
+        cwd=tmp_path,
+        env={**os.environ, "PATH": f"{link.parent}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert typed.returncode == 0 and typed.stdout == "UM-Codex 0.1.0a3 --version\n", typed.stderr
+
+
 def test_launchers_that_cant_be_refreshed_dont_fail_the_update(app, github, key, data_folder):
     private, public = key
     github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
