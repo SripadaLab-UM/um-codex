@@ -46,6 +46,7 @@ Status: **draft for review.**
 
 - **Visual (launcher):** The setup's card; Edit pressed; the whole page.
   - `editbtn` · "Press Edit" · Edit
+  - `none` · "It's all on one page"
   - `sections` · "three sections" · Folder, Access, Codex
 - **Narration:**
   > Press Edit on a setup's card to see them. For a new setup, press New
@@ -98,6 +99,7 @@ Status: **draft for review.**
 - **Visual (launcher):** Browser tool switched on; Approve each browser action appears; internet off hides both.
   - `browser` · "Browser tool" · Browser tool
   - `asks` · "Approve each browser action is on" · Approve each browser action
+  - `none` · "Turn the internet off"
 - **Narration:**
   > With the internet on, there's a Browser tool. It's off until you turn it
   > on. It gives Codex a fresh browser inside the sandbox, with none of your
