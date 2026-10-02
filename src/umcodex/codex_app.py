@@ -1104,7 +1104,9 @@ def remove_ssh_files(
             _write_combined(home)
             done.append(f"Kept {folder}: another UM-Codex data folder on this computer still uses it.")
             return done, True
-        shutil.rmtree(folder, ignore_errors=True)
+    # After the lock is let go: its file is in the folder, and Windows can't
+    # delete a file that's open (found on a Windows laptop, 2026-10-02).
+    shutil.rmtree(folder, ignore_errors=True)
     if folder.exists():
         return [f"Couldn't remove {folder}: delete it yourself."], False
     return [f"Removed {folder}."], False

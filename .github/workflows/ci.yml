@@ -379,12 +379,12 @@ jobs:
           Write-Host "Only this account's Docker Desktop processes end; a stuck one, a failed listing or a failed terminate says so."
           exit 0
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
-      - name: The launcher window's terminal command runs exactly the launch (Windows PowerShell)
+      - name: The launcher window's terminal command runs exactly the launch, and its folder dialog compiles (Windows PowerShell)
         # Setup ids and program paths with quotes, spaces, ";" and "$(...)"
         # reach `um-codex launch --setup` unchanged through -EncodedCommand.
         run: |
           uv sync
-          uv run pytest -q tests/test_ui.py -k windows_command
+          uv run pytest -q tests/test_ui.py -k "windows_command or windows_folder_dialog" -rs
       - name: The uv the installer notes is the one um-codex update finds
         # Write-UvRecord as it is, for the pinned uv (from the step above)
         # copied into a folder whose name ASCII can't spell, and update.py's
