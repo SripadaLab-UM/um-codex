@@ -410,8 +410,12 @@ class Updater:
         platform: str = sys.platform,
         data: Path | None = None,
         say: Say = print,
+        close_window: bool = True,
     ) -> None:
         self.platform = platform
+        # False: run from the launcher window's Update (M7), which stays open
+        # (its own version is kept, as the running one) and offers Reopen.
+        self.close_window = close_window
         self.layout = layout or Layout(install_root(), windows=platform == "win32")
         self._source = source
         self._keys = keys
@@ -460,7 +464,8 @@ class Updater:
             if offer is None:
                 self.say(f"UM-Codex {self.current} is the newest version.")
                 return 0
-            _close_launcher_window(self.data)
+            if self.close_window:
+                _close_launcher_window(self.data)
             try:
                 self.install(offer)
             except UpdateFailed as failed:
@@ -797,6 +802,46 @@ def _remembered(data: Path) -> tuple[float, str | None] | None:
     return None
 
 
+class CheckFailed(RuntimeError):
+    """The launcher's "Check for updates" couldn't say; the message is for the person."""
+
+
+def check_now(
+    *,
+    layout: Layout | None = None,
+    keys: Sequence[str] | None = None,
+    source: Callable[[], ReleaseSource] | None = None,
+    current: str = __version__,
+    data: Path | None = None,
+) -> str | None:
+    """The launcher's "Check for updates": asks GitHub now (as `um-codex
+    update` does, signature checked) and remembers the answer for the daily
+    check. The newer version, or None. Raises CheckFailed."""
+    data = data if data is not None else data_dir()
+    layout = layout or Layout(install_root())
+    if layout.running_version() is None:
+        raise CheckFailed(
+            "This copy of UM-Codex wasn't installed by the installer (it's a development copy), "
+            "so it can't update itself."
+        )
+    try:
+        pinned = pinned_keys(keys)
+    except NotConfigured as error:
+        raise CheckFailed(str(error)) from None
+    try:
+        offer = find_update(source() if source else ReleaseSource(timeout=httpx.Timeout(10)), current, pinned)
+    except CheckProblem as problem:
+        raise CheckFailed(f"Couldn't check for updates: {problem}") from None
+    except (NotSigned, ChecksumMismatch):
+        raise CheckFailed(
+            "A newer release was found, but it didn't pass UM-Codex's checks, so it isn't offered. "
+            "Tell the UM-Codex maintainer."
+        ) from None
+    version = offer.release.version if offer else None
+    remember_check(data, version)
+    return version
+
+
 def launch_notice(
     say: Say = print,
     *,
@@ -807,23 +852,24 @@ def launch_notice(
     data: Path | None = None,
     wait: float = NOTICE_WAIT_SECONDS,
     now: Callable[[], float] = time.time,
-) -> None:
+) -> str | None:
     """At a launch: one line if a newer release is out. GitHub is asked at most
     once a day, and the launch never waits more than `wait` seconds for it; a
     check that takes longer finishes in the background and is remembered for
     the next launch. Never asked for a development copy, or while no release
-    key is pinned. Never raises."""
+    key is pinned. Never raises. Returns the newer version it named, if any
+    (the launcher window offers Update for it)."""
     try:
         if os.environ.get(NO_CHECK_ENV):
-            return
+            return None
         data = data if data is not None else data_dir()
         layout = layout or Layout(install_root())
         if layout.running_version() is None:
-            return
+            return None
         try:
             pinned = pinned_keys(keys)
         except NotConfigured:
-            return
+            return None
         remembered = _remembered(data)
         found: list[str | None] = []
         if remembered is not None and 0 <= now() - remembered[0] < NOTICE_EVERY_SECONDS:
@@ -848,5 +894,7 @@ def launch_notice(
         version = found[0] if found else None
         if version and is_newer(version, current):
             say(f"UM-Codex {version} is available: run um-codex update")
+            return version
+        return None
     except Exception:  # a notice must never stop a launch
-        return
+        return None

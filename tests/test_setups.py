@@ -14,9 +14,11 @@ from umcodex.setups import (
     Setup,
     SetupStore,
     choose,
+    default_name,
     manage,
     new_id,
     summary,
+    unique_name,
 )
 
 
@@ -402,3 +404,14 @@ def test_summary_with_the_browser_tool(project):
     text = "\n".join(summary(setup, plan(project, [], [])))
     assert "Browser tool: ON." in text and "none of your logins" in text
     assert "asks you before each browser action" in text
+
+
+def test_a_default_name_is_the_folders_made_unique():
+    assert default_name("/x/thesis", []) == "thesis"
+    assert default_name("/x/thesis", ["Thesis"]) == "thesis 2"
+    assert default_name("/y/thesis", ["thesis", "thesis 2"]) == "thesis 3"
+    assert default_name("/x/my   notes", []) == "my notes"
+    assert unique_name("thesis 2", ["thesis 2"]) == "thesis 3"  # a duplicate of "thesis 2"
+    long = "x" * 90
+    assert unique_name(long, []) == "x" * 80
+    assert unique_name(long, ["x" * 80]) == "x" * 78 + " 2"

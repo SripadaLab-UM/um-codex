@@ -295,9 +295,9 @@ def test_setups_round_trip_through_the_api(folders_here):
         again = SetupStore().get(made["id"])
         assert again is not None and again.name == "thesis 2" and not again.internet and not again.browser
         copy = await (await h.post(f"/api/setups/{made['id']}/duplicate")).json()
-        assert copy["name"] == "thesis 2 (copy)" and copy["id"] != made["id"]
+        assert copy["name"] == "thesis 3" and copy["id"] != made["id"]
         assert (await h.delete(f"/api/setups/{made['id']}")).status == 200
-        assert [s.name for s in SetupStore().all()] == ["thesis 2 (copy)"]
+        assert [s.name for s in SetupStore().all()] == ["thesis 3"]
         assert ["docker", "volume", "rm", f"umcodex-home-{made['id']}"] in h.launcher.run.commands  # type: ignore[attr-defined]
         assert (await h.delete(f"/api/setups/{made['id']}")).status == 404
 
@@ -332,8 +332,6 @@ def test_folder_refusals_come_back_in_plain_words(folders_here, home_with_keys):
         assert both["field"] == "folders" and "both read-only and writable" in both["error"]
         relative = await (await h.post("/api/setups", setup_body(Path("thesis")))).json()
         assert "isn't a full path" in relative["error"]
-        nameless = await (await h.post("/api/setups", setup_body(folders_here["thesis"], name="  "))).json()
-        assert nameless["field"] == "name"
         odd = await (await h.post("/api/setups", setup_body(folders_here["thesis"], name="a\u202eb"))).json()
         assert odd["field"] == "name"
         model = await (await h.post("/api/setups", setup_body(folders_here["thesis"], model="x; rm"))).json()
@@ -622,7 +620,10 @@ def test_the_key_field_is_masked_and_not_offered_for_saving():
     assert "-webkit-text-security: disc" in (static / "app.css").read_text()
     script = (static / "app.js").read_text()
     assert 'if (!CSS.supports("-webkit-text-security", "disc")) keyField.type = "password"' in script
-    assert 'addEventListener("close", () => (keyField.value = ""))' in script  # Escape or Cancel empties it
+    # Cancel, Escape or saving empties it.
+    assert 'function hideKeyPanel() {\n  keyField.value = "";' in script
+    assert 'if (e.key === "Escape") {\n    keyField.value = "";' in script
+    assert "<dialog" not in page.split('id="key-panel"')[0].rsplit("<section", 1)[-1]  # inline, not a pop-up
 
 
 def test_destructive_questions_start_on_cancel():
@@ -1043,7 +1044,7 @@ def test_every_problem_in_the_form_comes_back_at_once_in_order(folders_here, hom
     async def test(h: Harness) -> None:
         await h.sign_in()
         body = {
-            "name": "",
+            "name": "a\u202eb",
             "working": str(home_with_keys / ".ssh"),
             "folders": [{"path": "relative"}],
             "model": "no good",
@@ -1261,3 +1262,269 @@ def test_the_launch_logs_how_the_agent_ended(caplog):
 
     log_agent_state(Docker(run), "umcodex-x-agent", "0123abcd")
     assert "exit_code=137" in caplog.text and "watchdog: launch gone, ending" in caplog.text
+
+
+# --- M7: one click -------------------------------------------------------------------
+
+
+def test_a_folder_is_all_a_new_setup_needs(folders_here):
+    """The first run's "Choose a folder to work in": the page sends only the
+    folder; the setup is named after it (made unique), with the internet on,
+    commands without asking, the default model, and the Codex app when it's
+    installed."""
+    credentials.save_api_key(FAKE_KEY)
+    app = FakeAppOpener()
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        state = await (await h.client.get("/api/state")).json()
+        assert state["default_open_in"] == "codex-app" and state["last_used"] is None
+        made = await (await h.post("/api/setups", {"working": str(folders_here["thesis"])})).json()
+        assert made["name"] == "thesis"
+        saved = SetupStore().get(made["id"])
+        assert saved is not None
+        assert (saved.internet, saved.browser, saved.approvals) == (True, False, "never")
+        assert (saved.model, saved.open_in) == ("gpt-5.6-terra", "codex-app")
+        again = await (await h.post("/api/setups", {"working": str(folders_here["thesis"])})).json()
+        blank = {"working": str(folders_here["thesis"]), "name": " "}
+        third = await (await h.post("/api/setups", blank)).json()
+        assert (again["name"], third["name"]) == ("thesis 2", "thesis 3")
+        # The page's own choices win over the defaults.
+        chosen = setup_body(folders_here["data"], name="", internet=False, open_in="terminal")
+        plain = await (await h.post("/api/setups", chosen)).json()
+        assert (plain["name"], plain["internet"], plain["open_in"]) == ("data", False, "terminal")
+
+    with_server(test, openers={"terminal": FakeOpener(), "codex-app": app})
+
+
+def test_without_the_codex_app_a_new_setup_opens_in_terminal(folders_here):
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        assert (await (await h.client.get("/api/state")).json())["default_open_in"] == "terminal"
+        made = await (await h.post("/api/setups", {"working": str(folders_here["thesis"])})).json()
+        assert made["open_in"] == "terminal"
+
+    with_server(test)  # the Codex app isn't installed here
+
+
+def test_an_edit_without_a_name_keeps_the_name_and_rename_changes_only_it(folders_here):
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        thesis = folders_here["thesis"]
+        made = await (await h.post("/api/setups", setup_body(thesis, name="My thesis"))).json()
+        edited = await h.put(f"/api/setups/{made['id']}", setup_body(thesis, name="", internet=True))
+        assert (await edited.json())["name"] == "My thesis"
+        renamed = await (await h.post(f"/api/setups/{made['id']}/rename", {"name": "  Chapter   2 "})).json()
+        assert renamed["name"] == "Chapter 2" and renamed["internet"] is True
+        bad = await h.post(f"/api/setups/{made['id']}/rename", {"name": "a‮b"})
+        assert bad.status == 400 and (await bad.json())["field"] == "name"
+        assert (await h.post("/api/setups/nope/rename", {"name": "x"})).status == 404
+        saved = SetupStore().get(made["id"])
+        assert saved is not None and saved.name == "Chapter 2"
+
+    with_server(test)
+
+
+def test_a_card_knows_its_moved_folders_and_start_says_so(folders_here, tmp_path):
+    credentials.save_api_key(FAKE_KEY)
+    link = tmp_path / "link"
+    link.symlink_to(folders_here["thesis"])
+    SetupStore().save(Setup(id="linked-a1", name="linked", working=str(link)))
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        state = await (await h.client.get("/api/state")).json()
+        assert state["setups"][0]["moved"] == [{"saved": str(link), "now": str(folders_here["thesis"])}]
+        refused = await h.post("/api/setups/linked-a1/start", {})
+        assert refused.status == 409 and (await refused.json())["field"] == "moved"
+
+    with_server(test)
+
+
+def test_start_can_add_the_ssh_line_in_the_same_click(folders_here, ssh_home):
+    """The card's "Add the line and start": the explanation is on the card,
+    and the click is the consent. Without it, nothing is written."""
+    credentials.save_api_key(FAKE_KEY)
+    app = FakeAppOpener()
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        made = await (await h.post("/api/setups", {"working": str(folders_here["thesis"])})).json()
+        assert made["open_in"] == "codex-app"
+        refused = await h.post(f"/api/setups/{made['id']}/start", {"allow_ssh_include": "yes"})
+        assert (await refused.json())["field"] == "ssh_include"
+        assert not (ssh_home / ".ssh" / "config").exists() and app.opened == []
+        started = await h.post(f"/api/setups/{made['id']}/start", {"allow_ssh_include": True})
+        assert (await started.json()) == {"opened": "Codex app", "in_background": True}
+        assert (ssh_home / ".ssh" / "config").read_text() == "Include ~/.ssh/um-codex/config\n"
+        assert app.opened == [made["id"]]
+        assert (await (await h.client.get("/api/state")).json())["last_used"] == made["id"]
+
+    with_server(test, openers={"terminal": FakeOpener(), "codex-app": app})
+
+
+def test_models_come_newest_first_with_the_default_kept(folders_here):
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        answer = await (await h.client.get("/api/models")).json()
+        assert answer["default"] == "gpt-5.6-terra"
+        assert answer["models"] == [
+            "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+            "gpt-5.5", "gpt-5.4",
+        ]  # fmt: skip
+
+    served = ["gpt-5.4", "gpt-5.5", "gpt-5.6-luna", "gpt-6-luna", "gpt-5.6-sol", "gpt-6-astra", "gpt-6-sol"]
+    with_server(test, list_models=lambda: list(served))
+
+
+def test_the_page_starts_at_once_and_asks_only_before_stop_and_delete():
+    script = (REPO / "src" / "umcodex" / "ui" / "static" / "app.js").read_text()
+    assert "/prepare" not in script  # no summary page before a start
+    assert script.count("confirmBox(") == 4  # its definition, Stop, Delete and Windows' fix
+    assert "/api/codex-app/allow" not in script and "allow_ssh_include: true" in script
+    # The safety facts, short, on every card and under the form.
+    for words in ("your real files, no undo", "could send what it can read anywhere", "only the model"):
+        assert words in script
+
+
+# --- M7: Update from the launcher ---------------------------------------------------
+
+
+class FakeUpdate:
+    """`um-codex update --from-launcher`, as the launcher runs it: prints `lines`."""
+
+    def __init__(self, lines: list[str], code: int = 0) -> None:
+        self.lines, self.code, self.commands = lines, code, []
+
+    def __call__(self, command, **options):
+        self.commands.append((command, options))
+        lines, code = self.lines, self.code
+
+        class Child:
+            stdout = iter(line + "\n" for line in lines)
+
+            def wait(self) -> int:
+                return code
+
+        return Child()
+
+
+def wait_for_update(h: Harness) -> dict:
+    deadline = time.monotonic() + 10
+    while h.launcher.update_job.phase == "running" and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return {"phase": h.launcher.update_job.phase, "words": h.launcher.update_job.words}
+
+
+UPDATE_OUTPUT = [
+    "Checking for a newer UM-Codex...",
+    "UM-Codex 0.1.0a5 is available (this is 0.1.0a4). Downloading it...",
+    "Installing UM-Codex 0.1.0a5 beside this one...",
+    "  Resolved 34 packages from /Users/someone/Library/Application Support/UM-Codex/app",
+    "Downloading its container images...",
+    "",
+    "Updated to UM-Codex 0.1.0a5. The next launch uses it.",
+]
+
+
+def test_update_runs_the_update_command_and_shows_only_its_own_words(caplog):
+    fake = FakeUpdate(UPDATE_OUTPUT)
+    seen: list[str | None] = []
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        h.launcher.status.update = "0.1.0a5"
+        original = h.launcher._run_update
+
+        def watched() -> None:
+            # Every word the page could be shown while it runs.
+            seen.append(h.launcher.update_job.words)
+            original()
+
+        h.launcher._run_update = watched  # type: ignore[method-assign]
+        answer = await h.post("/api/update")
+        assert answer.status == 200 and (await answer.json())["phase"] == "running"
+        assert wait_for_update(h) == {"phase": "updated", "words": "Updated to UM-Codex 0.1.0a5."}
+        state = await (await h.client.get("/api/state")).json()
+        done = {"phase": "updated", "words": "Updated to UM-Codex 0.1.0a5.", "version": "0.1.0a5"}
+        assert state["update"] == {"available": None, **done}
+        ((command, options),) = fake.commands
+        assert command[-2:] == ["update", "--from-launcher"] and command[1:3] == ["-m", "umcodex"]
+        assert options["stdin"] == subprocess.DEVNULL
+
+    with caplog.at_level(logging.INFO):
+        with_server(test, spawn=fake)
+    allowed = {words for _, words in server.UPDATE_STEPS} | {"Starting the update…"}
+    assert all(word in allowed for word in seen)
+    assert "update: Updated to UM-Codex 0.1.0a5" in caplog.text  # its output goes to the log
+
+
+def test_update_progress_words_never_carry_what_the_update_printed():
+    """The words come from a fixed list, whatever the update prints (a path,
+    a token-looking string): none of its text reaches the page."""
+    secret = "sk-not-a-real-key-0123456789"
+    printed = [f"Installing UM-Codex {secret}", f"oops {secret}"]
+    launcher = launcher_for_tests(spawn=FakeUpdate(printed, code=1))
+    launcher.update_job = server.UpdateJob("running")
+    launcher._run_update()
+    assert launcher.update_job.phase == "failed"
+    assert launcher.update_job.words == server.UPDATE_FAILED and "um-codex.log" in server.UPDATE_FAILED
+    assert secret not in json.dumps(launcher.state()["update"])
+    for _, words in server.UPDATE_STEPS:
+        assert "{" not in words and "UM-Codex" not in words
+
+
+def test_update_says_when_this_is_the_newest():
+    printed = ["Checking for a newer UM-Codex...", "UM-Codex 0.1.0a4 is the newest version."]
+    launcher = launcher_for_tests(spawn=FakeUpdate(printed))
+    launcher.status.update = "0.1.0a4"
+    launcher.update_job = server.UpdateJob("running")
+    launcher._run_update()
+    assert launcher.update_job.phase == "newest" and launcher.status.update is None
+
+
+def test_update_is_refused_while_a_setup_runs(folders_here):
+    data = data_dir()
+    folder = launches_dir(data) / "0123abcd"
+    folder.mkdir(parents=True)
+    lock = LaunchLock(folder / "lock")
+    assert lock.acquire()
+    write_launch_info(folder, Setup(id="thesis-a1", name="thesis", working=str(folders_here["thesis"])))
+    fake = FakeUpdate(UPDATE_OUTPUT)
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        answer = await h.post("/api/update")
+        body = await answer.json()
+        assert answer.status == 409 and body["error"] == "Stop running setups first: “thesis”."
+        assert fake.commands == [] and h.launcher.update_job.phase == "idle"
+
+    try:
+        with_server(test, spawn=fake)
+    finally:
+        lock.release()
+
+
+def test_check_for_updates_asks_now_and_says_what_it_found():
+    answers: list[object] = ["0.1.0a9", None]
+
+    def check() -> str | None:
+        found = answers.pop(0)
+        if isinstance(found, Exception):
+            raise found
+        return found  # type: ignore[return-value]
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        found = await (await h.post("/api/update/check")).json()
+        assert found == {"available": "0.1.0a9", "words": "UM-Codex 0.1.0a9 is available."}
+        assert (await (await h.client.get("/api/state")).json())["update"]["available"] == "0.1.0a9"
+        newest = await (await h.post("/api/update/check")).json()
+        assert newest["available"] is None and "is the newest version" in newest["words"]
+        from umcodex.update import CheckFailed
+
+        answers.append(CheckFailed("Couldn't check for updates: offline"))
+        failed = await h.post("/api/update/check")
+        assert failed.status == 409 and "offline" in (await failed.json())["error"]
+
+    with_server(test, check_updates_now=check)

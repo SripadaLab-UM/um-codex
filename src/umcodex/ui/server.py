@@ -47,15 +47,18 @@ from umcodex.folders import FolderRefused
 from umcodex.launch import LaunchLock, running_launches, stop_launch
 from umcodex.paths import data_dir
 from umcodex.setups import (
+    MAX_NAME,
     OPEN_IN,
     Setup,
     SetupStore,
     check,
+    default_name,
     moved,
     new_id,
     resolved,
     shown,
     summary,
+    unique_name,
 )
 from umcodex.ui import picker
 from umcodex.ui.opener import Opener, OpenFailed, openers
@@ -69,7 +72,11 @@ _MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:\-/]{0,99}")
 _UNPRINTABLE = re.compile(
     "[\\x00-\\x1f\\x7f\\u0085\\u2028\\u2029\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069]"
 )
-MAX_NAME = 80
+# A new setup from the launcher window, where the page doesn't say: the
+# internet on (M7: the group wants full power; the card says what it means),
+# the browser tool off, commands without asking, the default model, and the
+# Codex app when it can be used (Launcher.default_open_in).
+NEW_SETUP_INTERNET = True
 
 
 class Invalid(ValueError):
@@ -101,8 +108,10 @@ def folder_json(path: str, *, write: bool | None = None) -> dict[str, Any]:
 
 def setup_json(setup: Setup, *, own_data: Path | None = None) -> dict[str, Any]:
     problem = None
+    changed: list[tuple[str, Path]] = []
     try:
         check(setup, own_data=own_data)
+        changed = moved(setup, own_data=own_data)
     except FolderRefused as why:
         problem = str(why)
     return {
@@ -118,6 +127,8 @@ def setup_json(setup: Setup, *, own_data: Path | None = None) -> dict[str, Any]:
         "model": setup.model,
         "open_in": setup.open_in,
         "problem": problem,
+        # Saved folders that now lead somewhere else: Start needs a confirmation (on the card).
+        "moved": [{"saved": saved, "now": str(now)} for saved, now in changed],
     }
 
 
@@ -131,9 +142,21 @@ def checked_folder(raw: object, *, own_data: Path | None, field: str) -> tuple[s
     return str(found.path), found.warnings
 
 
-def setup_from(body: object, *, setup_id: str | None, own_data: Path | None = None) -> Setup:
-    """A setup from the page's form, checked as the terminal's questions check
-    it. Every problem is reported at once, in the form's order."""
+def setup_from(
+    body: object,
+    *,
+    setup_id: str | None,
+    own_data: Path | None = None,
+    taken: tuple[str, ...] = (),
+    current_name: str | None = None,
+    default_open_in: str = "terminal",
+) -> Setup:
+    """A setup from the page, checked as the terminal's questions check it.
+    Every problem is reported at once, in the form's order. Only the working
+    folder is needed: with no name, an edited setup keeps its own
+    (`current_name`) and a new one is named after its working folder, made
+    unique among the other setups' names (`taken`); the rest have the
+    defaults (NEW_SETUP_INTERNET, `default_open_in`)."""
     if not isinstance(body, dict):
         raise Invalid("That request wasn't understood.")
     errors: dict[str, str] = {}
@@ -148,7 +171,11 @@ def setup_from(body: object, *, setup_id: str | None, own_data: Path | None = No
     working = check_part(
         "working", lambda: checked_folder(body.get("working"), own_data=own_data, field="working")[0]
     )
-    name = check_part("name", lambda: _name(body.get("name")))
+    raw_name = body.get("name")
+    if raw_name is None or (isinstance(raw_name, str) and not raw_name.strip()):
+        name = current_name or (default_name(working, taken) if working is not None else None)
+    else:
+        name = check_part("name", lambda: _name(raw_name))
     writes: list[str] = []
     reads: list[str] = []
     raw_folders = body.get("folders", [])
@@ -170,7 +197,7 @@ def setup_from(body: object, *, setup_id: str | None, own_data: Path | None = No
             folders.plan(Path(working), [Path(p) for p in writes], [Path(p) for p in reads])
         except FolderRefused as why:
             errors["folders"] = str(why)
-    internet = body.get("internet") is True
+    internet = body.get("internet", NEW_SETUP_INTERNET) is True
     browser = internet and body.get("browser") is True
     approvals = body.get("approvals", "never")
     if approvals not in ("never", "on-request"):
@@ -178,7 +205,7 @@ def setup_from(body: object, *, setup_id: str | None, own_data: Path | None = No
     model = body.get("model") or toolkit.DEFAULT_MODEL
     if not isinstance(model, str) or not _MODEL.fullmatch(model):
         errors["model"] = "That isn't a model name."
-    open_in = body.get("open_in", "terminal")
+    open_in = body.get("open_in") or default_open_in
     if open_in not in OPEN_IN:
         errors["open_in"] = "That choice of where to open Codex wasn't understood."
     if errors:
@@ -254,6 +281,34 @@ KEY_WORDS = {
 }
 
 
+# The launcher's Update (M7) runs `um-codex update --from-launcher` in the
+# background and shows only these words for its progress: each is chosen by a
+# line the update prints, never that line itself.
+UPDATE_STEPS = (
+    ("Checking for a newer UM-Codex", "Checking for a newer version…"),
+    ("is available (this is", "Downloading…"),
+    ("Installing UM-Codex", "Installing…"),
+    ("Downloading its container images", "Getting the new image…"),
+)
+UPDATE_FAILED = (
+    "The update didn't finish, so this version is still the one in use. What happened is in "
+    "um-codex.log, in UM-Codex's data folder."
+)
+_UPDATED = re.compile(r"Updated to UM-Codex ([0-9][0-9A-Za-z.+-]{0,40})\.")
+
+
+def update_command() -> list[str]:
+    """This very UM-Codex's `update`, as the terminal runs it (same checks)."""
+    return [sys.executable, "-m", "umcodex", "update", "--from-launcher"]
+
+
+@dataclass
+class UpdateJob:
+    phase: str = "idle"  # "idle" | "running" | "updated" | "newest" | "failed"
+    words: str | None = None
+    version: str | None = None
+
+
 def _quiet_run(*args, **kwargs) -> subprocess.CompletedProcess:
     """subprocess.run with no console window of its own on Windows."""
     if sys.platform == "win32":
@@ -269,7 +324,7 @@ class Status:
     docker_checked: float = 0.0
     key_saved: bool | None = None
     key_checked: float = 0.0
-    update: str | None = None
+    update: str | None = None  # a newer version the daily check (or Check for updates) found
     models: list[str] = field(default_factory=list)
     # One Docker check at a time: a page polling while another check runs
     # gets the last answer instead of starting a second one.
@@ -296,6 +351,12 @@ class Launcher:
     quit: Callable[[], None] | None = None  # set by serve(): ends the server
     reopen_after: bool = False  # start the installed version's window once this one has ended
     ssh_home: Path | None = None  # where ~/.ssh is (tests)
+    # The launcher's Update and Check for updates (M7).
+    update_command: Callable[[], list[str]] = update_command
+    spawn: Callable[..., Any] = subprocess.Popen
+    check_updates_now: Callable[[], str | None] | None = None
+    update_job: UpdateJob = field(default_factory=UpdateJob)
+    _update_lock: threading.Lock = field(default_factory=threading.Lock)
 
     # ----------------------------------------------------------- reading
 
@@ -345,17 +406,30 @@ class Launcher:
                 "fix_explained": FIX_EXPLAINED if docker == "vm-refused" else None,
             },
             "key": {"saved": self.key_saved()},
-            "update": self.status.update,
+            "update": {
+                "available": self.status.update,
+                "phase": self.update_job.phase,
+                "words": self.update_job.words,
+                "version": self.update_job.version,
+            },
             "installed": self.installed_version(),
             "openers": [
                 {"key": key, "label": opener.label, "available": reason is None, "reason": reason}
                 for key, opener in self.openers.items()
                 for reason in [opener.reason()]
             ],
+            # Where a new setup opens (M7): the Codex app when it can be used.
+            "default_open_in": self.default_open_in(),
+            "last_used": last.id if (last := self.store.last_used()) is not None else None,
             # The Codex app (M6): whether ~/.ssh/config has UM-Codex's line yet.
             "ssh_include": codex_app.include_present(self.ssh_home),
             "include_explained": codex_app.INCLUDE_EXPLAINED,
         }
+
+    def default_open_in(self) -> str:
+        """The Codex app when it's installed and works here (a Mac), else Terminal."""
+        app = self.openers.get("codex-app")
+        return "codex-app" if app is not None and app.available() else "terminal"
 
     def installed_version(self) -> str | None:
         """The version the installed launchers now open, when it isn't this
@@ -396,10 +470,8 @@ class Launcher:
                 self.status.models = self.list_models()
             except credentials.MissingCredential:
                 self.status.models = []
-        found = list(self.status.models)
-        if toolkit.DEFAULT_MODEL not in found:
-            found.insert(0, toolkit.DEFAULT_MODEL)
-        return found
+        # Newest release first; the default is always there (and selected by the page).
+        return toolkit.by_release([*self.status.models, toolkit.DEFAULT_MODEL])
 
     def setup(self, setup_id: str) -> Setup:
         found = self.store.get(setup_id)
@@ -409,20 +481,43 @@ class Launcher:
 
     # ----------------------------------------------------------- setups
 
+    def _names(self, *, but: str | None = None) -> tuple[str, ...]:
+        return tuple(s.name for s in self.store.all() if s.id != but)
+
     def create(self, body: object) -> dict[str, Any]:
-        setup = setup_from(body, setup_id=None, own_data=self.own_data)
+        setup = setup_from(
+            body,
+            setup_id=None,
+            own_data=self.own_data,
+            taken=self._names(),
+            default_open_in=self.default_open_in(),
+        )
         self.store.save(setup)
         return setup_json(setup, own_data=self.own_data)
 
     def update(self, setup_id: str, body: object) -> dict[str, Any]:
-        self.setup(setup_id)
-        setup = setup_from(body, setup_id=setup_id, own_data=self.own_data)
+        current = self.setup(setup_id)
+        setup = setup_from(
+            body,
+            setup_id=setup_id,
+            own_data=self.own_data,
+            taken=self._names(but=setup_id),
+            current_name=current.name,
+            default_open_in=current.open_in,
+        )
         self.store.save(setup)
         return setup_json(setup, own_data=self.own_data)
 
+    def rename(self, setup_id: str, body: object) -> dict[str, Any]:
+        """A new name only (the card's Rename)."""
+        current = self.setup(setup_id)
+        renamed = replace(current, name=_name(body.get("name") if isinstance(body, dict) else None))
+        self.store.save(renamed)
+        return setup_json(renamed, own_data=self.own_data)
+
     def duplicate(self, setup_id: str) -> dict[str, Any]:
         original = self.setup(setup_id)
-        name = f"{original.name} (copy)"[:MAX_NAME]
+        name = unique_name(original.name, self._names())
         copy = replace(original, id=new_id(name), name=name)
         self.store.save(copy)
         return setup_json(copy, own_data=self.own_data)
@@ -462,6 +557,8 @@ class Launcher:
     def start(self, setup_id: str, body: object) -> dict[str, Any]:
         setup = self.setup(setup_id)
         confirmed = isinstance(body, dict) and body.get("confirm_moved") is True
+        # The person pressed the card's "Add the line and start", under the explanation.
+        allow_include = isinstance(body, dict) and body.get("allow_ssh_include") is True
         if not self.key_saved(fresh=True):
             raise Invalid("Save your Toolkit key first (Add key…).", "key", status=409)
         docker = self.docker_state(fresh=True)
@@ -473,6 +570,8 @@ class Launcher:
         if not opener.available():
             raise Invalid(opener.reason() or "Codex can't be opened there now: choose Terminal.", status=409)
         if opener.key == "codex-app":
+            if allow_include and not codex_app.include_present(self.ssh_home):
+                self.allow_ssh_include()
             if not codex_app.include_present(self.ssh_home):
                 raise Invalid(
                     "The Codex app needs one line in your ssh settings first.", "ssh_include", status=409
@@ -485,7 +584,9 @@ class Launcher:
         except FolderRefused as why:
             raise Invalid(f"This setup can't be used as it is: {why} Edit it to change that.") from None
         if changed and not confirmed:
-            raise Invalid("A saved folder now leads somewhere else: check it and confirm first.", status=409)
+            raise Invalid(
+                "A saved folder now leads somewhere else: check it and confirm first.", "moved", status=409
+            )
         if changed:
             setup = resolved(setup, layout)  # what the person confirmed
         self.store.save(setup, used=True)
@@ -573,10 +674,78 @@ class Launcher:
         """The daily check, as a launch does it (update.launch_notice)."""
         from umcodex.update import launch_notice
 
-        said: list[str] = []
-        launch_notice(said.append, wait=10)
-        if said:
-            self.status.update = said[0]
+        self.status.update = launch_notice(lambda _: None, wait=10)
+
+    def check_for_updates(self) -> dict[str, Any]:
+        """Check for updates (by hand): GitHub is asked now."""
+        from umcodex.update import CheckFailed, check_now
+
+        try:
+            found = (self.check_updates_now or check_now)()
+        except CheckFailed as why:
+            raise Invalid(str(why), "update", status=409) from None
+        self.status.update = found
+        if self.update_job.phase in ("newest", "failed"):
+            self.update_job = UpdateJob()
+        words = (
+            f"UM-Codex {found} is available." if found else f"UM-Codex {__version__} is the newest version."
+        )
+        return {"available": found, "words": words}
+
+    def start_update(self) -> dict[str, Any]:
+        """Update: `um-codex update` in the background (its own checks, and
+        it undoes itself if a step fails). Not while a setup runs."""
+        running = self.running()
+        if running:
+            names = ", ".join(sorted({f"“{run['setup_name']}”" for run in running}))
+            raise Invalid(f"Stop running setups first: {names}.", "update", status=409)
+        with self._update_lock:
+            if self.update_job.phase == "running":
+                raise Invalid("The update is already under way.", "update", status=409)
+            self.update_job = UpdateJob("running", "Starting the update…")
+        log.info("launcher window: Update asked for")
+        threading.Thread(target=self._run_update, name="update", daemon=True).start()
+        return {"phase": "running", "words": self.update_job.words}
+
+    def _run_update(self) -> None:
+        job = self.update_job
+        version, newest = None, False
+        try:
+            child = self.spawn(
+                self.update_command(),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env={**os.environ, "PYTHONUTF8": "1"},
+                **_no_window(),
+            )
+            for raw in child.stdout:
+                line = raw.rstrip()
+                if line:
+                    log.info("update: %s", line)
+                for marker, words in UPDATE_STEPS:
+                    if marker in line:
+                        job.words = words
+                newest = newest or "is the newest version" in line
+                found = _UPDATED.search(line)
+                if found:
+                    version = found.group(1)
+            code = child.wait()
+        except (OSError, ValueError):
+            log.exception("launcher window: the update couldn't be run")
+            code = None
+        if code == 0 and version:
+            job.phase, job.words, job.version = "updated", f"Updated to UM-Codex {version}.", version
+            self.status.update = None
+        elif code == 0 and newest:
+            job.phase, job.words = "newest", f"UM-Codex {__version__} is the newest version."
+            self.status.update = None
+        else:
+            log.error("launcher window: the update ended with %s", code)
+            job.phase, job.words = "failed", UPDATE_FAILED
 
 
 # --- HTTP -------------------------------------------------------------------
@@ -660,6 +829,10 @@ def make_app(
         await blocking(launcher.delete, request.match_info["id"])
         return web.json_response({"deleted": True})
 
+    async def rename(request: web.Request) -> web.Response:
+        body = await _body(request)
+        return web.json_response(await blocking(launcher.rename, request.match_info["id"], body))
+
     async def duplicate(request: web.Request) -> web.Response:
         return web.json_response(await blocking(launcher.duplicate, request.match_info["id"]), status=201)
 
@@ -702,6 +875,14 @@ def make_app(
         await _body(request)
         return web.json_response(launcher.reopen_newer())
 
+    async def update_start(request: web.Request) -> web.Response:
+        await _body(request)
+        return web.json_response(await blocking(launcher.start_update))
+
+    async def update_check(request: web.Request) -> web.Response:
+        await _body(request)
+        return web.json_response(await blocking(launcher.check_for_updates))
+
     async def allow_ssh(request: web.Request) -> web.Response:
         await _body(request)
         return web.json_response(await blocking(launcher.allow_ssh_include))
@@ -721,6 +902,7 @@ def make_app(
     app.router.add_put("/api/setups/{id}", update)
     app.router.add_delete("/api/setups/{id}", delete)
     app.router.add_post("/api/setups/{id}/duplicate", duplicate)
+    app.router.add_post("/api/setups/{id}/rename", rename)
     app.router.add_post("/api/setups/{id}/prepare", prepare)
     app.router.add_post("/api/setups/{id}/start", start)
     app.router.add_post("/api/launches/{id}/stop", stop)
@@ -730,6 +912,8 @@ def make_app(
     app.router.add_post("/api/docker/open", docker_open)
     app.router.add_post("/api/docker/fix", docker_fix)
     app.router.add_post("/api/reopen", reopen_newer)
+    app.router.add_post("/api/update", update_start)
+    app.router.add_post("/api/update/check", update_check)
     app.router.add_post("/api/codex-app/allow", allow_ssh)
     return app
 
@@ -957,6 +1141,12 @@ def start_installed() -> None:
     log.info("launcher window: reopening as the installed version")
     with contextlib.suppress(OSError):
         subprocess.Popen([str(command), "ui", "--detach"], **_background())
+
+
+def _no_window() -> dict[str, Any]:
+    if sys.platform == "win32":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+    return {}
 
 
 def _background() -> dict[str, Any]:

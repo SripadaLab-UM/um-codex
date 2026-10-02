@@ -9,6 +9,7 @@ um-codex key        save or replace the Toolkit API key
 um-codex doctor     check Docker, the images, the key and the Toolkit
 um-codex update     install a newer signed release (--rollback: back to the one before)
 um-codex launchers --refresh   bring the UM-Codex app or shortcuts up to date (update does this)
+um-codex ssh-include   ask once to add the Codex app's line to ~/.ssh/config (the installers run it)
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=f"UM-Codex {__version__}")
     # The metavar leaves out ssh-proxy, which only ssh runs.
     commands = parser.add_subparsers(
-        dest="command", metavar="{launch,ui,setups,key,pull,doctor,update,launchers,uninstall}"
+        dest="command", metavar="{launch,ui,setups,key,pull,doctor,update,launchers,ssh-include,uninstall}"
     )
     launch = commands.add_parser("launch", help="choose a setup and open Codex (the default)")
     launch.add_argument(
@@ -81,6 +82,8 @@ def main(argv: list[str] | None = None) -> int:
     update.add_argument(
         "--rollback", action="store_true", help="switch back to the version in use before the last update"
     )
+    # The launcher window's Update: it stays open (and offers Reopen) instead of being closed.
+    update.add_argument("--from-launcher", action="store_true", help=argparse.SUPPRESS)
     links = commands.add_parser(
         "launchers", help="bring the UM-Codex app (Mac) or shortcuts (Windows) up to date"
     )
@@ -104,6 +107,10 @@ def main(argv: list[str] | None = None) -> int:
         help="for the Mac installer: write the um-codex command in UM-Codex's own bin folder",
     )
     links.add_argument("--dry-run", action="store_true", help="with --refresh: only say what would change")
+    commands.add_parser(
+        "ssh-include",
+        help="for the installers: ask once whether to add the Codex app's line to ~/.ssh/config (Mac)",
+    )
     remove = commands.add_parser("uninstall", help="remove UM-Codex's containers, key, images and data")
     data = remove.add_mutually_exclusive_group()
     data.add_argument("--delete-data", action="store_true", help="also delete saved setups and Codex history")
@@ -145,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "update":
             from umcodex.update import Updater
 
-            updater = Updater()
+            updater = Updater(close_window=not args.from_launcher)
             return updater.rollback() if args.rollback else updater.update()
         if args.command == "launchers":
             from umcodex.launchers import Launchers
@@ -160,6 +167,10 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 report = launchers.refresh(dry_run=args.dry_run)
             return 0 if report.ok else 1
+        if args.command == "ssh-include":
+            from umcodex import codex_app
+
+            return codex_app.offer_include(input, print)
         if args.command == "uninstall":
             from umcodex.uninstall import uninstall
 

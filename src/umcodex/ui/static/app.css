@@ -83,26 +83,31 @@ code, .path { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere
   margin-bottom: 4px;
 }
 
-/* Status line */
-.status {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 22px;
-  align-items: center;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--line);
-  font-size: 14px;
-}
-.status .item { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* The status strip: one quiet line while all is well; a line of its own
+   for anything that needs doing. */
+.strip { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.strip .quiet { display: flex; flex-wrap: wrap; gap: 4px 18px; align-items: center; color: var(--muted); }
+.strip .item { display: inline-flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.strip .item.loud { display: flex; flex-wrap: nowrap; align-items: baseline; color: var(--ink); font-size: 14px; margin-top: 6px; }
+.strip .item.loud .dot { position: relative; top: -1px; }
+.strip .item.loud > span:not(.dot) { flex: 0 1 auto; min-width: 0; }
+.strip .item button.link, .strip .quiet button.link { color: inherit; font-size: 13.5px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--edge); flex: none; }
 .dot.ok { background: var(--ok); }
 .dot.attn { background: var(--attn); }
 .dot.bad { background: var(--danger); }
-.status .explain { flex-basis: 100%; color: var(--muted); font-size: 13.5px; }
+.strip .explain { color: var(--muted); font-size: 13.5px; margin: 4px 0 0 15px; max-width: 70ch; }
+.strip .explain.message { color: var(--danger); }
+
+/* The key, inline */
+.key-panel { padding: 12px 14px; margin: 12px 0 0; border-left: 3px solid var(--attn); background: var(--attn-soft); }
+.key-panel .help { margin: 0 0 8px; }
+.key-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.key-row input { flex: 1 1 260px; }
 
 .notice {
   margin: 14px 0 0;
-  padding: 9px 12px;
+  padding: 8px 12px;
   border-left: 3px solid var(--ok);
   background: var(--ok-soft);
   font-size: 14px;
@@ -137,6 +142,17 @@ section.block + section.block { border-top: 1px solid var(--line); }
 .radios .help { display: block; color: var(--muted); font-size: 13px; }
 .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
 
+/* The one main action */
+.hero { padding: 22px 0 18px; border-bottom: 1px solid var(--line); }
+.hero h2 { margin-bottom: 12px; }
+.hero .help { margin-top: 8px; max-width: 64ch; }
+.hero .message { margin-top: 8px; }
+.hero button.link { margin-top: 2px; padding-left: 0; }
+.hero-status { display: flex; align-items: center; gap: 8px; font-size: 15px; margin: 0; }
+.hero-status.ok { color: var(--ok); }
+.hero-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0; }
+.head-actions { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+
 /* Setups */
 .cards { display: grid; gap: 12px; }
 .card {
@@ -146,12 +162,24 @@ section.block + section.block { border-top: 1px solid var(--line); }
   background: var(--canvas);
 }
 .card:hover, .card:focus-within { border-color: var(--edge); }
-.card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.card .opens { font-size: 13px; color: var(--muted); }
-.card .working { margin: 8px 0 6px; }
-.facts { font-size: 14px; color: var(--muted); margin: 8px 0 0; }
-.facts span + span::before { content: "·"; margin: 0 7px; color: var(--edge); }
+.card.live { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.card-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.card-title.rename input { max-width: 320px; }
+button.small { font-size: 12.5px; color: var(--muted); }
+.status-line { display: flex; align-items: center; gap: 8px; margin: 6px 0 0; font-size: 14px; font-weight: 600; color: var(--ink); }
+.status-line.ok { color: var(--ok); }
+.status-line.bad { color: var(--danger); font-weight: 400; }
+.facts { display: grid; gap: 6px; margin: 10px 0 0; }
+.fact { display: grid; grid-template-columns: 74px 1fr; gap: 0 10px; align-items: baseline; }
+.fact > .label { margin: 0; padding-top: 3px; }
+.fact > :not(.label) { grid-column: 2; }
+.fact .chips { margin: 0; align-items: center; }
+.fact .line { margin: 0; font-size: 13.5px; color: var(--muted); max-width: 66ch; }
+.facts .copy { padding: 0 6px; font-size: 11.5px; border-color: var(--line); color: var(--muted); }
 .problem { color: var(--danger); font-size: 14px; margin: 8px 0 0; }
+.inline-note { font-size: 13.5px; color: var(--muted); margin: 8px 0 0; max-width: 70ch; }
+.inline-note p { margin: 0; }
+.inline-note button.link, .warning button.link { padding-left: 0; }
 .card .actions { margin-top: 12px; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
@@ -192,6 +220,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 14px; }
 
 form.setup { padding: 18px 0; }
+fieldset.section { border-top: 1px solid var(--line); padding: 12px 0 0; margin: 0 0 14px; }
+fieldset.section > legend { font-family: var(--serif); font-size: 17px; font-weight: 600; padding: 0 8px 0 0; }
+.field.inline select { max-width: 300px; }
+details.more-options { margin: 4px 0 0; }
+details.more-options > summary { cursor: pointer; color: var(--muted); font-size: 14px; margin-bottom: 10px; }
+.form-summary { border: 1px solid var(--line); border-radius: 4px; padding: 10px 14px; margin: 6px 0 0; background: var(--sunken); }
+.form-summary .help { margin-top: 8px; }
+details.app-notes-block > summary { cursor: pointer; font-size: 13.5px; color: var(--muted); }
 .field { display: block; margin: 0 0 18px; }
 .field > .help, .help { display: block; color: var(--muted); font-size: 13.5px; margin-top: 3px; }
 input[type="text"], input[type="password"], select {
@@ -239,11 +275,7 @@ input[type="text"], input[type="password"], select {
 fieldset { border: 0; padding: 0; margin: 0 0 18px; }
 legend { padding: 0; }
 
-/* Summary before a start */
-.summary { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 14px 0 6px; margin: 12px 0; }
-.summary p { max-width: 64ch; }
-.summary .path-line { font-family: var(--mono); font-size: 13px; margin: 0 0 4px 18px; overflow-wrap: anywhere; }
-.summary .strong { font-weight: 600; }
+/* Warnings on a card */
 .warning {
   border-left: 3px solid var(--attn);
   background: var(--attn-soft);
@@ -268,8 +300,19 @@ dialog::backdrop { background: rgb(0 0 0 / 0.35); }
 @media (max-width: 560px) {
   body { padding: 18px 16px 48px; }
   .indent { margin-left: 0; }
+  .fact { grid-template-columns: 1fr; }
+  .fact > :not(.label) { grid-column: 1; }
+  .block-head { flex-wrap: wrap; }
 }
-.summary .path-line + p { margin-top: 10px; }
+/* A long path in a chip shortens its parent part, never the page. */
+.chip { min-width: 0; }
+.cards { grid-template-columns: minmax(0, 1fr); }
+.card, .fact > * { min-width: 0; }
+.chip .pathview .name { overflow-wrap: normal; white-space: nowrap; }
+.chip .pathview { min-width: 0; overflow: hidden; }
+.chip .pathview .parent { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.chip .access { white-space: nowrap; }
+.warning .path { overflow-wrap: anywhere; }
 
 /* Paths: the folder's name in bold, its parent shortened, the full path in
    the tooltip and a Copy button. */
@@ -278,21 +321,6 @@ dialog::backdrop { background: rgb(0 0 0 / 0.35); }
 .pathview .name { font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
 .pathview .copy { margin-left: 8px; padding: 0 6px; font-family: var(--sans); font-size: 11.5px; border-color: var(--line); color: var(--muted); }
 .pathview .copy:hover { color: var(--ink); border-color: var(--edge); }
-.path-line .target { font-family: var(--mono); font-size: 13px; font-weight: 600; }
-.path-line .arrow { color: var(--muted); }
-
-/* The first run's checklist */
-.checklist { list-style: none; counter-reset: step; padding: 0; margin: 14px 0 0; }
-.checklist li { counter-increment: step; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 12px 0; border-top: 1px solid var(--line); }
-.checklist li::before {
-  content: counter(step); flex: none; width: 26px; height: 26px; border-radius: 50%;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--edge); font-family: var(--serif); font-weight: 600;
-}
-.checklist li.done::before { content: "✓"; background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
-.checklist .tick { display: none; }
-.checklist .step { flex: 1; min-width: 220px; }
-.checklist .step strong { display: block; font-weight: 600; }
 
 .running-tag { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--ok); font-weight: 600; }
 .running-tag button.link { color: var(--ink); font-weight: 400; }
