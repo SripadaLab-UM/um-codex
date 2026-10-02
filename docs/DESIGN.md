@@ -139,9 +139,20 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      2 cancelled (Ctrl-C at the masked prompt, or an empty entry). The Mac
      installer runs `um-codex key < /dev/tty`, so the key never passes
      through its shell; `--from-stdin` reads one line.
-   - `um-codex pull`: pulls every image in `images.json`; a local `:dev`
-     image that's already present is skipped. Nonzero on failure, and a plain
-     message when Docker isn't running.
+   - `um-codex pull` (the installers' image step, and `um-codex update`'s,
+     which runs the new version's own): pulls every image in `images.json`;
+     a local `:dev` image that's already present is skipped, and so is an
+     image pinned by digest that's already here (that exact version can't
+     have changed). A failed `docker pull` is tried twice more (after 3 s,
+     then 10 s), and if the image turns out to be here by that digest
+     after all, that's success: a registry can answer "not found" for a
+     moment (the Windows tester's update). Nonzero on failure, with a
+     message that says which kind (Docker isn't running or stopped, the
+     registry or the network, the disk full) and quotes Docker's own line.
+     In a terminal Docker's progress is shown; otherwise (the launcher's
+     Update writes to a file) `docker pull --quiet` and one line per image.
+     Each line is flushed before a child process writes, and `update`'s
+     steps flush too, so the order is right when stdout is a file or a pipe.
    - `um-codex doctor [--quiet] [--fix-docker]`: `--quiet` prints nothing but
      one line on failure (a Toolkit that can't be reached, off the VPN, is a
      note there, not a failure; a refused key is a failure); `--fix-docker` opens Docker Desktop and, on
@@ -151,8 +162,9 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      development copy, a release that fails a check), with nothing changed.
    - `um-codex uninstall [--delete-data|--keep-data] [--yes]`: first asks
      "Uninstall UM-Codex? [y/N]" (no: nothing removed, exit 1). Then it removes, by
-     label only, UM-Codex's containers and networks (and, with
-     `--delete-data`, each setup's Codex home volume), the key, the images
+     label only, its data folder's containers and networks (its
+     `umcodex.instance` label; and, with `--delete-data`, each of its
+     setups' Codex home volume), the key, the images
      (asked first; the gateway's nginx only if no container uses it) and,
      with `--delete-data`, the data folder's contents. It also takes the
      Codex app's ssh entries out (M6): its own data folder's
@@ -166,6 +178,16 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      with the #36 fixes. `--yes` asks nothing: images go, and data stays
      unless `--delete-data`. With no terminal to answer a question
      (EOF), `um-codex` takes it as no and exits 1, without a traceback.
+     **Scope.** Everything goes by the data folder's own instance label,
+     so another data folder's containers, networks and volumes (a
+     development or test copy's, whose launch may be running) are never
+     removed; it says when some were left. The key (there's one, in the
+     keychain) and the images are shared by every data folder, so only the
+     installed copy's data folder (`paths.default_data_dir`, compared
+     resolved) removes them, and the images only when no other data
+     folder's containers are here. An uninstall of another data folder
+     (`UMCODEX_DATA_DIR`) keeps both and says so, and takes out only its
+     own ssh entries (the Include line stays while others use it).
 
 ## How it runs (one launch)
 

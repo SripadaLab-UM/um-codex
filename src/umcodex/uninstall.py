@@ -4,6 +4,14 @@
 its program files (the uninstaller scripts remove those after this returns)
 and the person's own folders, which are never touched.
 
+Its scope is its data folder (`UMCODEX_DATA_DIR`, or the default one).
+Containers, networks and volumes go by that data folder's instance label, so
+another data folder's (a development or test copy's) are never removed. Only
+the installed copy's data folder (paths.default_data_dir) also takes what
+every copy shares: the Toolkit key (there's one, in the keychain) and the
+Docker images, and those only when no other data folder's containers are
+here. Another data folder's uninstall keeps both and says so.
+
 It first asks "Uninstall UM-Codex? [y/N]" (not with --yes); nothing is
 removed before that's answered yes. Then, found by label only:
 - UM-Codex's containers and networks;
@@ -29,9 +37,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 from umcodex import credentials
-from umcodex.containers import APP, APP_LABEL, images
+from umcodex.containers import APP, APP_LABEL, INSTANCE_LABEL, images, instance_of
 from umcodex.launch import LaunchLock, launch_is_live, launches_dir
-from umcodex.paths import app_dir, data_dir
+from umcodex.paths import app_dir, data_dir, default_data_dir
 
 Say = Callable[[str], None]
 Ask = Callable[[str], str]
@@ -77,16 +85,29 @@ def uninstall(
     close_running(data)
 
     docker_ok = shutil.which("docker") is not None and _docker(run, "info", "--format", "x") is not None
+    installed = is_installed_copy(data)
+    if not installed:
+        say(
+            f"This uninstalls the UM-Codex data folder {data}, which isn't the installed one "
+            f"({default_data_dir()}): only its own containers, ssh entries and data go."
+        )
     if docker_ok:
         say("Removing UM-Codex's containers and networks...")
-        label = f"label={APP_LABEL}={APP}"
-        _remove_listed(run, ["ps", "-aq", "--filter", label], ["rm", "-f"])
-        _remove_listed(run, ["network", "ls", "-q", "--filter", label], ["network", "rm"])
+        _remove_owned(run, ["ps", "-a"], ["rm", "-f"], data)
+        _remove_owned(run, ["network", "ls"], ["network", "rm"], data)
+        if _others(run, data):
+            say(
+                "Left the containers of another UM-Codex data folder on this computer (a development "
+                "or test copy): that copy's own uninstall removes them."
+            )
     else:
         say("Docker isn't running, so UM-Codex's containers, volumes and images (if any) were left.")
 
-    say("Removing the Toolkit key from the keychain...")
-    credentials.delete_api_key()
+    if installed:
+        say("Removing the Toolkit key from the keychain...")
+        credentials.delete_api_key()
+    else:
+        say("Kept the Toolkit key in the keychain: there's one, and the installed UM-Codex uses it.")
 
     # The Codex app's ssh entries (M6): this data folder's in ~/.ssh/um-codex,
     # and the Include line in ~/.ssh/config with the folder itself unless
@@ -112,9 +133,7 @@ def uninstall(
             delete_data = (not yes) and confirm("Delete them? This can't be undone.")
         if delete_data:
             if docker_ok:
-                _remove_listed(
-                    run, ["volume", "ls", "-q", "--filter", f"label={APP_LABEL}={APP}"], ["volume", "rm"]
-                )
+                _remove_owned(run, ["volume", "ls"], ["volume", "rm"], data)
             for entry in entries:
                 remove_tree(entry)
             left = [e for e in entries if e.exists() or e.is_symlink()]
@@ -127,7 +146,7 @@ def uninstall(
         else:
             say("Kept. You can delete them yourself later.")
     elif delete_data and docker_ok:
-        _remove_listed(run, ["volume", "ls", "-q", "--filter", f"label={APP_LABEL}={APP}"], ["volume", "rm"])
+        _remove_owned(run, ["volume", "ls"], ["volume", "rm"], data)
     say("Your own folders were not touched.")
     return 0
 
@@ -153,7 +172,49 @@ def _running(data: Path) -> bool:
     return any(launch_is_live(data, entry.name) for entry in folder.iterdir() if entry.is_dir())
 
 
+def is_installed_copy(data: Path) -> bool:
+    """Whether `data` is the installed UM-Codex's data folder (the default
+    one), not a development or test copy's (`UMCODEX_DATA_DIR`)."""
+    return _key(data.resolve()) == _key(default_data_dir().resolve())
+
+
+def _owned(run: Run, kind: list[str], data: Path) -> tuple[list[str], list[str]]:
+    """UM-Codex's containers, networks or volumes (`kind`: ["ps", "-a"],
+    ["network", "ls"], ["volume", "ls"]): this data folder's, and other
+    data folders'. By label only."""
+    field = "{{.Name}}" if kind[0] == "volume" else "{{.ID}}"
+    shape = f'{field}|{{{{.Label "{INSTANCE_LABEL}"}}}}'
+    listing = _docker(run, *kind, "--filter", f"label={APP_LABEL}={APP}", "--format", shape)
+    instance = instance_of(data)
+    mine: list[str] = []
+    others: list[str] = []
+    for line in (listing or "").splitlines():
+        name, owner = ([*line.split("|"), ""])[:2]
+        if name.strip():
+            (mine if owner.strip() == instance else others).append(name.strip())
+    return mine, others
+
+
+def _remove_owned(run: Run, kind: list[str], then: list[str], data: Path) -> None:
+    mine, _ = _owned(run, kind, data)
+    if mine:
+        _docker(run, *then, *mine)
+
+
+def _others(run: Run, data: Path) -> bool:
+    """Whether another data folder has containers here (running or not)."""
+    return bool(_owned(run, ["ps", "-a"], data)[1])
+
+
 def _remove_images(run: Run, say: Say, confirm: Callable[[str], bool]) -> None:
+    # The images are shared by every data folder on this computer.
+    data = data_dir()
+    if not is_installed_copy(data):
+        say("Kept UM-Codex's Docker images: the installed UM-Codex uses them too.")
+        return
+    if _others(run, data):
+        say("Kept UM-Codex's Docker images: another UM-Codex data folder's containers use them.")
+        return
     agent_ids: list[str] = []
     for repository in AGENT_REPOSITORIES:
         listed = _docker(run, "images", "-q", repository)
@@ -186,13 +247,6 @@ def _docker(run: Run, *args: str) -> str | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     return done.stdout if done.returncode == 0 else None
-
-
-def _remove_listed(run: Run, query: list[str], then: list[str]) -> None:
-    listed = _docker(run, *query)
-    ids = (listed or "").split()
-    if ids:
-        _docker(run, *then, *ids)
 
 
 def _entries(folder: Path) -> list[Path]:
