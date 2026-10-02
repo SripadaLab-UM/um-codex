@@ -857,9 +857,9 @@ def test_the_windows_copy_never_uses_the_persons_own_folders(tmp_path):
 def test_the_windows_copy_is_the_exe_itself_with_its_own_home(data_folder):
     app = Path(WINDOWS_PACKAGE) / "app" / "ChatGPT.exe"
     person = {
-        "PATH": r"C:\Windows", "CODEX_HOME": r"C:\Users\x\.codex", "CODEX_APP_SERVER_WS_URL": "ws://x",
-        "OPENAI_API_KEY": "sk-x", "OPENAI_BASE_URL": "https://x",
-        "HTTPS_PROXY": "http://p:1", "no_proxy": "*",
+        "Path": r"C:\Git\usr\bin;C:\Windows", "CODEX_HOME": r"C:\Users\x\.codex",
+        "CODEX_APP_SERVER_WS_URL": "ws://x", "OPENAI_API_KEY": "sk-x", "OPENAI_BASE_URL": "https://x",
+        "HTTPS_PROXY": "http://p:1", "no_proxy": "*", "SHELL": "/usr/bin/bash",
     }  # fmt: skip
     command, env = codex_app.windows_open(app, link=codex_app.deep_link("thesis-a1"), environ=person)
     home, user_data = codex_app.copy_paths()
@@ -871,6 +871,9 @@ def test_the_windows_copy_is_the_exe_itself_with_its_own_home(data_folder):
     assert env["CODEX_HOME"] == str(home) and str(data_folder) in env["CODEX_HOME"]  # never ~/.codex
     assert env["CODEX_ELECTRON_USER_DATA_PATH"] == str(user_data)
     assert set(env) == {"PATH", "CODEX_HOME", "CODEX_ELECTRON_USER_DATA_PATH"}  # nothing leads it elsewhere
+    # Windows' own ssh first (Git's ssh runs a ProxyCommand through /bin/sh); the rest is kept.
+    assert env["PATH"].split(";")[0].lower().endswith(r"\system32\openssh")
+    assert env["PATH"].split(";")[1:] == [r"C:\Git\usr\bin", r"C:\Windows"]
     assert codex_app.windows_open(app, environ={})[0] == [str(app), f"--user-data-dir={user_data}"]
 
 
@@ -1222,12 +1225,18 @@ def test_a_runtime_download_is_seen_by_its_staging_folder(tmp_path):
 def test_on_windows_only_our_copy_is_ever_stopped(data_folder):
     _, user_data = codex_app.copy_paths(data_folder)
     exe = f'"{WINDOWS_PACKAGE}\\app\\ChatGPT.exe"'
+    ours = f'4242 {exe} --user-data-dir="{user_data}"'
     calls: list[list[str]] = []
 
-    def now_running(listing):
+    def now_running(listing, *, after="", taskkill_code=0):
+        """Win32_Process shows `listing`, and `after` once taskkill has run."""
+
         def run(command, **options):
             calls.append(command)
-            return subprocess.CompletedProcess(command, 0, listing, "")
+            if command[0].lower().endswith("taskkill.exe"):
+                return subprocess.CompletedProcess(command, taskkill_code, "", "")
+            killed = any(c[0].lower().endswith("taskkill.exe") for c in calls)
+            return subprocess.CompletedProcess(command, 0, after if killed else listing, "")
 
         return run
 
@@ -1235,8 +1244,13 @@ def test_on_windows_only_our_copy_is_ever_stopped(data_folder):
     assert win.stop(4242, user_data, now_running(f"4242 {exe} ")) is False
     assert win.stop(4242, user_data, now_running(f"999 {exe} --user-data-dir={user_data}")) is False
     assert not any(c[0].lower().endswith("taskkill.exe") for c in calls)
-    assert win.stop(4242, user_data, now_running(f'4242 {exe} --user-data-dir="{user_data}"')) is True
-    assert calls[-1][1:] == ["/PID", "4242", "/T", "/F"]
+    assert win.stop(4242, user_data, now_running(ours)) is True
+    assert [c for c in calls if c[0].lower().endswith("taskkill.exe")][-1][1:] == ["/PID", "4242", "/T", "/F"]
+    # taskkill /T says 128 when a helper was already ending, but the copy is gone: stopped.
+    calls.clear()
+    assert win.stop(4242, user_data, now_running(ours, taskkill_code=128)) is True
+    calls.clear()
+    assert win.stop(4242, user_data, now_running(ours, after=ours, taskkill_code=1)) is False  # still there
 
 
 def test_on_windows_a_copy_that_doesnt_start_ends_the_launch(tmp_path, data_folder):

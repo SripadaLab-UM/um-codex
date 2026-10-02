@@ -186,6 +186,13 @@ def open_command(
     person's other CODEX_, OPENAI_ and proxy variables left out (nothing
     leads it elsewhere)."""
     env = {key: value for key, value in environ.items() if not _left_out(key)}
+    # The app runs the first ssh.exe on its PATH. Git for Windows' (usr\bin,
+    # OpenSSH 10.3) runs a ProxyCommand through /bin/sh or $SHELL, which
+    # loses the Windows path's backslashes (seen 2026-10-02): so Windows'
+    # own OpenSSH goes first, and SHELL is left out.
+    path = next((value for key, value in env.items() if key.upper() == "PATH"), "")
+    env = {key: value for key, value in env.items() if key.upper() not in ("PATH", "SHELL")}
+    env["PATH"] = ";".join(part for part in (str(system_dir() / "OpenSSH"), path) if part)
     env["CODEX_HOME"] = str(home)
     env["CODEX_ELECTRON_USER_DATA_PATH"] = str(user_data)
     return [str(app), f"--user-data-dir={user_data}", *([link] if link else [])], env
@@ -302,9 +309,10 @@ def stop(pid: int, user_data: Path, run: Runner = subprocess.run) -> bool:
     if find_copy(user_data, run, pid=pid) != pid:
         return False
     with contextlib.suppress(OSError, subprocess.SubprocessError):
-        done = run(
+        run(
             [str(system_dir() / "taskkill.exe"), "/PID", str(int(pid)), "/T", "/F"],
             capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=hidden(),
         )  # fmt: skip
-        return done.returncode == 0
-    return False
+    # taskkill's own code isn't enough: with /T it reports a helper that was
+    # already ending as a failure though the copy itself ended (live test).
+    return find_copy(user_data, run, pid=pid) is None
