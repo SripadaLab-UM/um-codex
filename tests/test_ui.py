@@ -896,7 +896,7 @@ def test_the_cli_takes_launch_setup_and_ui(monkeypatch):
     seen = {}
     monkeypatch.setattr(cli, "_launch", lambda args, **kw: seen.update(kw, args=args) or 0)
     assert cli.main(["launch", "--setup", "x y"]) == 0
-    assert seen == {"from_app": False, "setup_name": "x y", "args": [], "in_app": False}
+    assert seen == {"from_app": False, "setup_name": "x y", "args": [], "in_app": False, "local": False}
     assert cli.main(["launch", "--setup", "x y", "--open", "app"]) == 0
     assert seen["in_app"] is True
     monkeypatch.setattr(server, "detach", lambda open_browser: 7)
