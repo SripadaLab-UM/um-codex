@@ -306,11 +306,13 @@ class Docker:
     def __init__(self, run: Runner = subprocess.run) -> None:
         self._run = run
 
-    def status(self, *args: str, timeout: float = 120) -> tuple[int, str, str]:
+    def status(self, *args: str, timeout: float = 120, input: str | None = None) -> tuple[int, str, str]:
+        """`input`: text for the command's stdin (none: no stdin is passed)."""
+        extra = {} if input is None else {"input": input}
         try:
             done = self._run(
                 ["docker", *args], capture_output=True, text=True, timeout=timeout,
-                encoding="utf-8", errors="replace",
+                encoding="utf-8", errors="replace", **extra,
             )  # fmt: skip
         except FileNotFoundError as error:
             raise DockerError("Docker's `docker` command isn't installed or isn't on PATH.") from error

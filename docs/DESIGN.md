@@ -904,27 +904,50 @@ modes, rigor, and the frontend.
    - **This computer's ssh files:**
      - `~/.ssh/um-codex/` (0700): a key pair per setup
        (`<setup>_ed25519`, 0600, kept between launches) and `config` (0600),
-       rewritten whole at each launch in the app: one `Host` per setup with
-       a key, with `User agent`, its `IdentityFile`, `IdentitiesOnly`,
-       `IdentityAgent none`, `ForwardAgent no`, `ForwardX11 no`, no password
-       or keyboard-interactive, `StrictHostKeyChecking no` and
-       `UserKnownHostsFile /dev/null` (the transport is `docker exec` on this
-       computer, and every container has a new host key), and `ProxyCommand
-       <um-codex> ssh-proxy <setup> --docker <docker>`, with absolute paths
-       (the app checks the command in its own short PATH): an installed copy's
-       launcher (`<app>/bin/um-codex`, which follows updates), else this
-       Python (`-m umcodex`); `--data-dir` only when `UMCODEX_DATA_DIR` is
-       set. Words with spaces are double-quoted, `%` doubled (ssh's tokens).
-       The app adds only `BatchMode`, timeouts and keep-alives itself.
+       rewritten whole (through a temporary file and a rename) at each
+       launch in the app: one `Host` per **saved** setup that has a key here
+       (a key that belongs to no saved setup, such as the spike's
+       `app-test`, is removed then), with `User agent`, its `IdentityFile`,
+       `IdentitiesOnly`, `IdentityAgent none`, `ForwardAgent no`,
+       `ForwardX11 no`, `ForwardX11Trusted no`, `Tunnel no`, `ControlMaster
+       no`, `ControlPath none`, `GSSAPIAuthentication no`, `UpdateHostKeys
+       no`, no password or keyboard-interactive, `StrictHostKeyChecking no`
+       and `UserKnownHostsFile /dev/null` (the transport is `docker exec` on
+       this computer, and every container has a new host key), and
+       `ProxyCommand <um-codex> ssh-proxy <setup> --docker <docker>`, with
+       absolute paths (the app checks the command in its own short PATH): an
+       installed copy's launcher (`<app>/bin/um-codex`, which follows
+       updates), else this Python (`-m umcodex`); `--data-dir` only when
+       `UMCODEX_DATA_DIR` is set. `%` is doubled (ssh's tokens); on a Mac
+       each word is then `shlex.quote`d, since ssh runs the command with the
+       person's shell (checked with real ssh under sh, bash and zsh: paths
+       with spaces, `$`, backticks, quotes, `;`, `&`, `|`, `%` and globs
+       arrive unchanged); on Windows, where OpenSSH splits it as a Windows
+       command line, a word with a space is double-quoted. The app adds only
+       `BatchMode`, timeouts and keep-alives itself.
+     - Because the Include is the first line of `~/.ssh/config`, these
+       values win (ssh keeps the first value it reads). Options set only in
+       the person's own `Host *` (a `LocalForward`, `DynamicForward` and the
+       like) still apply to these hosts; the container's sshd allows only
+       local forwards to its own localhost, so they reach nothing on the
+       person's side.
+     - The person's own ChatGPT app reads the same `~/.ssh/config`, so it
+       lists the `umcodex-*` hosts too (switched off). The README says so;
+       they work there only while the setup runs, and the work is still in
+       the sandbox.
      - **The one line in the person's own file:** `Include
        ~/.ssh/um-codex/config` at the very top of `~/.ssh/config` (the app
        follows only top-level Includes; an Include after a `Host` belongs to
        it). Added **only with consent**: the launcher shows the explanation
        (`codex_app.INCLUDE_EXPLAINED`) with Allow the first time an app setup
        is started; the terminal asks the same with "[y/N]"; a launch with
-       no terminal and no line stops with a plain message. The file is
-       backed up first (`~/.ssh/config.um-codex-backup`, once), changed in
-       place (its permissions kept), or created 0600 if there was none.
+       no terminal and no line stops with a plain message. The file is read
+       as bytes (its line endings, CRLF too, are kept) and backed up first
+       (`~/.ssh/config.um-codex-backup`; a backup that no longer matches the
+       file is refreshed), then replaced atomically (a temporary file renamed
+       onto the real path, so a `~/.ssh/config` that's a link stays one), with
+       its permissions kept, or created 0600 if there was none. A file that
+       isn't UTF-8 text is left alone, with a plain message.
        `um-codex uninstall` removes the line, the backup when the file is
        then the same as it, and `~/.ssh/um-codex`. Deleting a setup removes
        its key and Host.
@@ -941,13 +964,17 @@ modes, rigor, and the frontend.
      sshd per connection, on ssh's stdin and stdout. With nothing running it
      says so on stderr and exits 1.
    - **Codex's settings in the container** go in the same `/etc/codex`
-     layers as every launch (#12), with two differences for an app launch:
-     - `requirements.toml`: the provider's credential is
+     layers as every launch (#12):
+     - every launch, terminal too: `requirements.toml` has
+       `default_permissions = ":danger-full-access"` with
+       `[allowed_permission_profiles]` allowing only `:danger-full-access`
+       (below). Checked in the terminal: Codex starts ("permissions: YOLO
+       mode") and `/permissions` offers only "Full Access"; the two other
+       choices are shown disabled.
+     - an app launch only: the provider's credential is
        `[model_providers.toolkit.auth] command =
        "/usr/local/bin/umcodex-token"` instead of `env_key` (ssh sessions
-       don't get `docker run -e`; Codex 0.157.1 refuses both together), and
-       `default_permissions = ":danger-full-access"` with
-       `[allowed_permission_profiles]` allowing only `:danger-full-access`.
+       don't get `docker run -e`; Codex 0.157.1 refuses both together).
        The app starts each chat with a permission profile of its choosing
        (`thread/start` `permissions`); a disallowed one falls back to the
        requirements' default (core config's `resolve_default_permissions`),
@@ -975,14 +1002,30 @@ modes, rigor, and the frontend.
      started: it's brought forward (AppKit's `activateWithOptions` through
      `osascript -l JavaScript`, which needs no permission to control other
      apps); if macOS declines, the launcher says to switch to it.
-     - **Its own (local) side:** its `config.toml` gets UM-Codex's provider
-       at each launch (the Toolkit through this launch's relay on
-       127.0.0.1, `auth.command = /bin/cat <data>/codex-app/launch-token`, a
-       0600 file removed when the launch ends, `forced_login_method =
-       "api"`, analytics, feedback and update checks off); the app's other
-       settings there are kept. So it opens with no sign-in (the test). Its
-       local chats run on the Mac, not in the sandbox, and work only while a
-       launch runs; the launcher says so.
+     - **Local chats are blocked** (the maintainer's decision, 2026-10-01).
+       A chat that isn't Remote · `umcodex-…` would run on the Mac, outside
+       the sandbox. The copy's `config.toml` gets UM-Codex's provider at
+       each launch: a custom one without `requires_openai_auth` (so the copy
+       opens with no sign-in, as in the test), `forced_login_method = "api"`,
+       analytics, feedback and update checks off, whose base URL is the
+       launch's relay at `/um-codex-local/<alias>/v1`, with no credential.
+       The relay answers `POST …/responses` there itself, before any token
+       check and without reading the key, with a normal streamed assistant
+       message: "This UM-Codex window only works in Remote chats. Start a
+       chat on Remote · `<alias>` (project "work"). Local chats would run on
+       your Mac, outside the sandbox." Anything else there gets 404; nothing
+       under that path is ever sent upstream (`relay.LOCAL_PREFIX`). Chosen
+       over a failing `auth.command` because the person reads a plain
+       sentence in the chat instead of an error. Checked: the app's bundled
+       Codex (0.159.2) with this config against a real relay whose key
+       function fails and whose upstream doesn't exist showed the message,
+       made no model call and never read the key; the image's Codex
+       (0.157.1) showed it too. With no launch running, local chats fail to
+       connect. `codex_app.LOCAL_CHATS = True` switches back to the test's
+       behaviour (the Toolkit through the relay with the launch token).
+     - The app's other settings in that `config.toml` are kept. If it
+       doesn't parse, it's moved aside as `config.toml.bad-<time>` (and
+       logged) before UM-Codex's settings are written.
      - Not installed: "Codex app" in the form is disabled with "The Codex
        app isn't installed. It's part of OpenAI's ChatGPT desktop app: get
        it from https://chatgpt.com/download, then come back. Terminal works
@@ -1009,9 +1052,9 @@ modes, rigor, and the frontend.
      steps to `um-codex.log`), which holds the relay until it's stopped. The
      running list and the card say "Running in the Codex app"; below it the
      guide or "Connected ✓", and the plain lines: "Chats must show Remote ·
-     `<alias>` to run in the sandbox. Other chats in that Codex window run on
-     this computer, not in the sandbox, and work only while a setup is
-     running." and "The Codex app's own browser runs on this computer, not
+     `<alias>` to run in the sandbox. Other (local) chats in that Codex
+     window would run on this computer, outside the sandbox, so they're
+     blocked: they only answer with that reminder." and "The Codex app's own browser runs on this computer, not
      in the sandbox; use the Browser tool for browsing inside it." (also on
      the summary before Start). Stop removes the containers (the launch then
      ends and cleans up); its question adds that the app will say it can't
@@ -1066,8 +1109,9 @@ modes, rigor, and the frontend.
      `docs/spikes/2026-10-01-m6-codex-app-gui-test.md`): turning the host on
      and opening `/work` in the copy, that the app's permission control
      shows only full access, that a later launch reconnects with no steps,
-     the copy's local chats after a launch with a new relay port, the
-     bring-forward when the copy is behind other windows, and Windows.
+     the local-chats message inside the app (and after a launch with a new
+     relay port), the bring-forward when the copy is behind other windows,
+     and Windows.
 8. **Acceptance, on a fresh Mac and a fresh Windows machine:**
    1. install from the README in under 20 minutes;
    2. launch with internet off: Codex answers, `curl https://example.com`

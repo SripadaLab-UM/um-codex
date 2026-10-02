@@ -28,8 +28,9 @@ start new plan documents; update DESIGN.md.
   diagnostics. A change near the relay or containers keeps the test for it.
 - Tests at a boundary (Docker CLI output, Codex config, Toolkit responses)
   use real shapes taken from a live run.
-- Public repo: no hostnames beyond the documented Toolkit URL, no IPs,
-  emails, credentials or machine-specific paths.
+- Public repo: no internal or environment-specific hostnames, IPs, emails,
+  credentials or machine paths; public vendor documentation and download
+  links are fine.
 - Code style: ruff; plain-language user messages (the people using this aren't
   developers of it). No prettier.
 - Line endings: LF everywhere (.gitattributes), PowerShell files ASCII-only.

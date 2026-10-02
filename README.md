@@ -75,6 +75,8 @@ is only the window you use. What to know:
   add one line at the top of your `~/.ssh/config`
   (`Include ~/.ssh/um-codex/config`; your file is backed up first, and
   uninstalling takes it out). Choose **Allow**, or use Terminal instead.
+  Settings in your own `Host *` entries (such as port forwards) still apply
+  to these hosts, as ssh does for every host.
 - **The first time for each setup**, in UM-Codex's Codex window: open
   Settings → Connections and turn on `umcodex-<setup>`; then start a chat in
   the project "work" (Remote · `umcodex-<setup>`), or add the folder `/work`.
@@ -83,8 +85,12 @@ is only the window you use. What to know:
   setup again; if it doesn't, "show the steps" in the launcher brings them
   back.
 - **Chats must show "Remote · umcodex-<setup>"** to run in the sandbox. Other
-  chats in that window run on your computer, not in the sandbox (and only
-  while a setup is running).
+  (local) chats in that window would run on your computer, outside the
+  sandbox, so UM-Codex blocks them: they only answer with a reminder to start
+  a chat on Remote · `umcodex-<setup>`.
+- Your own ChatGPT app reads the same `~/.ssh/config`, so it lists the
+  `umcodex-*` hosts under Settings → Connections too (switched off). You can
+  leave them off there; use UM-Codex's copy.
 - The app's own browser runs on your computer, not in the sandbox. For
   browsing inside the sandbox, turn on the setup's Browser tool.
 - The setup runs until you press **Stop** in the launcher; the app then says

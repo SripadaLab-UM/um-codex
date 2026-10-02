@@ -40,11 +40,13 @@ def test_an_app_launch_reads_the_token_with_a_command():
     }
 
 
-def test_a_terminal_launch_keeps_the_token_variable():
+def test_a_terminal_launch_keeps_the_token_variable_and_full_access_only():
     requirements = tomllib.loads(codex_config.render_requirements(internet=False))
     provider = requirements["model_providers"]["toolkit"]
     assert provider["env_key"] == "UMCODEX_TOKEN" and "auth" not in provider
-    assert "allowed_permission_profiles" not in requirements and "default_permissions" not in requirements
+    # The TUI's /permissions too: only full access (Codex's own sandbox can't run in the container).
+    assert requirements["default_permissions"] == ":danger-full-access"
+    assert [k for k, v in requirements["allowed_permission_profiles"].items() if v] == [":danger-full-access"]
     managed = tomllib.loads(codex_config.render(model="m", approvals="never", internet=False))
     assert "forced_login_method" not in managed
 
@@ -167,21 +169,81 @@ def test_the_host_block():
         "IdentityAgent none",
         "ForwardAgent no",
         "ForwardX11 no",
+        "ForwardX11Trusted no",
+        "Tunnel no",
+        "ControlMaster no",
+        "ControlPath none",
+        "GSSAPIAuthentication no",
+        "UpdateHostKeys no",
         "StrictHostKeyChecking no",
         "UserKnownHostsFile /dev/null",
-        'ProxyCommand "/Users/x/Library/Application Support/UM-Codex/app/bin/um-codex" ssh-proxy '
-        "thesis-a1b2c3 --docker /usr/local/bin/docker",
     ):
         assert wanted in lines, wanted
+    proxy = next(line for line in lines if line.startswith("ProxyCommand "))
+    if sys.platform == "win32":
+        assert proxy.startswith('ProxyCommand "/Users/x/Library/Application Support/')
+    else:
+        assert proxy == (
+            "ProxyCommand '/Users/x/Library/Application Support/UM-Codex/app/bin/um-codex' ssh-proxy "
+            "thesis-a1b2c3 --docker /usr/local/bin/docker"
+        )
 
 
 def test_proxy_command_words_are_safe_for_ssh():
-    assert codex_app._ssh_arg("C:\\Program Files\\UM-Codex\\um-codex.exe") == (
-        '"C:\\Program Files\\UM-Codex\\um-codex.exe"'
-    )
-    assert codex_app._ssh_arg("/a/100%/b") == "/a/100%%/b"  # ssh's own % tokens
+    windows = "C:\\Program Files\\UM-Codex\\um-codex.exe"
+    assert codex_app._ssh_arg(windows, "win32") == f'"{windows}"'
+    assert codex_app._ssh_arg("/a/100%/b", "win32") == "/a/100%%/b"  # ssh's own % tokens
     with pytest.raises(ValueError):
-        codex_app._ssh_arg('/a"b')
+        codex_app._ssh_arg('/a"b', "win32")
+    assert codex_app._ssh_arg("/a/100%/b", "darwin") == "/a/100%%/b"
+    assert codex_app._ssh_arg("/a b/$x`y`'z;&w", "darwin") == "'/a b/$x`y`'\"'\"'z;&w'"
+    with pytest.raises(ValueError):
+        codex_app._ssh_arg("/a\nb", "darwin")
+
+
+NASTY_PARTS = ["/tmp/a b/$HOME/`id`/it's;x&y|z", "100% sure", 'say "hi"', "*?[a]~"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the Codex app is Mac only for now")
+@pytest.mark.parametrize("shell", ["/bin/sh", "/bin/zsh", "/bin/bash"])
+def test_ssh_runs_the_proxy_command_with_every_word_unchanged(tmp_path, shell):
+    """The real ssh client runs the ProxyCommand (with the person's shell):
+    a stand-in records the words it gets, which must be exactly ours."""
+    if not (ssh := _which("ssh")) or not Path(shell).exists():
+        pytest.skip("no ssh client or no such shell here")
+    folder = tmp_path / "it's $a `b` ;&"
+    folder.mkdir()
+    record = tmp_path / "words.txt"
+    program = folder / "proxy"
+    program.write_text(
+        f'#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done > {shlex_quote(str(record))}\n'
+    )
+    program.chmod(0o755)
+    config = tmp_path / "config"
+    config.write_text(codex_app.host_block("thesis-a1", [str(program), *NASTY_PARTS]))
+    subprocess.run(
+        [
+            ssh,
+            "-F",
+            str(config),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            "umcodex-thesis-a1",
+            "true",
+        ],
+        capture_output=True,
+        timeout=30,
+        env={**os.environ, "SHELL": shell},
+    )
+    assert record.read_text().splitlines() == NASTY_PARTS
+
+
+def shlex_quote(text: str) -> str:
+    import shlex
+
+    return shlex.quote(text)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the Codex app is Mac only for now")
@@ -199,7 +261,7 @@ def test_ssh_reads_the_host_as_written(ssh_home, tmp_path):
     assert seen["user"] == "agent"
     assert seen["forwardagent"] == "no"
     assert seen["identitiesonly"] == "yes"
-    assert seen["proxycommand"] == f'"{PROXY[0]}" ssh-proxy thesis-a1b2c3'
+    assert seen["proxycommand"] == f"'{PROXY[0]}' ssh-proxy thesis-a1b2c3"
 
 
 def _which(name: str) -> str | None:
@@ -214,7 +276,8 @@ def test_keys_and_config_are_private_and_a_deleted_setup_goes(ssh_home):
     for setup_id in ("thesis-a1b2c3", "data-d4e5f6"):
         public = codex_app.ensure_key(setup_id)
         assert public.read_text().startswith("ssh-ed25519 ")
-    path = codex_app.write_config(lambda setup_id: ["/x/um-codex", "ssh-proxy", setup_id])
+    proxy = lambda setup_id: ["/x/um-codex", "ssh-proxy", setup_id]  # noqa: E731
+    path = codex_app.write_config(proxy, setup_ids=["thesis-a1b2c3", "data-d4e5f6"])
     folder = ssh_home / ".ssh" / "um-codex"
     if sys.platform != "win32":
         assert stat.S_IMODE(folder.stat().st_mode) == 0o700
@@ -226,12 +289,28 @@ def test_keys_and_config_are_private_and_a_deleted_setup_goes(ssh_home):
     codex_app.ensure_key("thesis-a1b2c3")
     assert (folder / "thesis-a1b2c3_ed25519").read_bytes() == key  # kept between launches
 
-    codex_app.forget_setup(
-        "data-d4e5f6",
-    )
+    codex_app.forget_setup("data-d4e5f6")
     assert not (folder / "data-d4e5f6_ed25519").exists()
     assert codex_app.known_setups() == ["thesis-a1b2c3"]
     assert codex_app.remove_ssh_files() and not folder.exists()
+
+
+def test_keys_of_no_saved_setup_are_removed_at_a_launch(ssh_home, data_folder):
+    from umcodex.setups import SetupStore
+
+    folder = ssh_home / ".ssh" / "um-codex"
+    folder.mkdir(parents=True)
+    for name in ("app-test", "thesis-a1", "gone-b2"):  # a spike's key, a saved setup's, a deleted one's
+        (folder / f"{name}_ed25519").write_text("private")
+        (folder / f"{name}_ed25519.pub").write_text("ssh-ed25519 AAAA\n")
+    SetupStore().save(Setup(id="thesis-a1", name="Thesis", working="/tmp"))
+    text = codex_app.write_config(lambda s: ["/x/um-codex", "ssh-proxy", s]).read_text()
+    assert "Host umcodex-thesis-a1" in text and "app-test" not in text and "gone-b2" not in text
+    assert sorted(p.name for p in folder.iterdir()) == [
+        "config",
+        "thesis-a1_ed25519",
+        "thesis-a1_ed25519.pub",
+    ]
 
 
 def test_an_odd_setup_id_gets_no_key(ssh_home):
@@ -287,10 +366,10 @@ def test_the_container_is_prepared_as_root_with_the_key_on_stdin(tmp_path):
         calls.append((command, options))
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    codex_app.prepare_container(Docker(run), "umcodex-ab12cd34-agent", public, run=run)
+    codex_app.prepare_container(Docker(run), "umcodex-ab12cd34-agent", public)
     command, options = calls[0]
     assert command[:6] == ["docker", "exec", "-i", "-u", "root", "umcodex-ab12cd34-agent"]
-    assert options["input"] == public.read_bytes()
+    assert options["input"] == public.read_text()
     script = command[-1]
     assert '"$UMCODEX_TOKEN"' in script and "/run/um-codex/token" in script  # never the token itself
     assert "authorized_keys" in script and "ssh_host_ed25519_key" in script
@@ -368,20 +447,39 @@ def test_the_running_copy_is_found_by_its_profile_folder(data_folder):
     )
 
 
-def test_the_copys_config_uses_the_relay_and_keeps_the_apps_own_settings(tmp_path):
-    existing = 'model = "gpt-5.5"\npersonality = "friendly"\n[projects."/x"]\ntrust_level = "trusted"\n'
+EXISTING = 'model = "gpt-5.5"\npersonality = "friendly"\n[projects."/x"]\ntrust_level = "trusted"\n'
+
+
+def test_the_copys_local_chats_are_blocked_and_its_own_settings_kept():
+    assert codex_app.LOCAL_CHATS is False  # the maintainer's decision (2026-10-01)
     config = tomllib.loads(
-        codex_app.local_config(existing, 41234, tmp_path / "launch token", "gpt-5.6-terra")
+        codex_app.local_config(EXISTING, 41234, "gpt-5.6-terra", setup_alias="umcodex-thesis-a1")
     )
     provider = config["model_providers"]["toolkit"]
     assert config["model_provider"] == "toolkit" and config["forced_login_method"] == "api"
-    assert provider["base_url"] == "http://127.0.0.1:41234/relay/v1"
-    assert provider["auth"] == {"command": "/bin/cat", "args": [str(tmp_path / "launch token")]}
-    assert "env_key" not in provider and "requires_openai_auth" not in provider
+    # The relay's own answer, never the Toolkit; no credential at all.
+    assert provider["base_url"] == "http://127.0.0.1:41234/um-codex-local/umcodex-thesis-a1/v1"
+    assert "auth" not in provider and "env_key" not in provider
+    assert "requires_openai_auth" not in provider  # so the copy opens with no sign-in
     assert config["personality"] == "friendly" and config["projects"]["/x"]["trust_level"] == "trusted"
     assert config["model"] == "gpt-5.5"  # the person's choice in the app
-    fresh = tomllib.loads(codex_app.local_config("not toml [", 1, tmp_path / "t", "gpt-5.6-terra"))
-    assert fresh["model"] == "gpt-5.6-terra"
+    assert (
+        tomllib.loads(codex_app.local_config("", 1, "gpt-5.6-terra", setup_alias="umcodex-a"))["model"]
+        == "gpt-5.6-terra"
+    )
+
+
+def test_local_chats_can_be_switched_back_on(tmp_path):
+    config = tomllib.loads(
+        codex_app.local_config(
+            EXISTING, 41234, "m", setup_alias="umcodex-a", token_file=tmp_path / "t", local_chats=True
+        )
+    )
+    provider = config["model_providers"]["toolkit"]
+    assert provider["base_url"] == "http://127.0.0.1:41234/relay/v1"
+    assert provider["auth"] == {"command": "/bin/cat", "args": [str(tmp_path / "t")]}
+    assert any("work only while a setup is running" in n for n in codex_app.notes("a", local_chats=True))
+    assert any("blocked" in n for n in codex_app.notes("a"))
 
 
 def test_connected_setups_are_remembered(data_folder):
@@ -397,6 +495,7 @@ class FakeDocker(Docker):
     """The agent runs for `running_for` checks; the app-server shows up after `connects_after`."""
 
     def __init__(self, running_for: int, connects_after: int | None) -> None:
+        self.commands: list[list[str]] = []
         self.running_for = running_for
         self.connects_after = connects_after
         self.checks = 0
@@ -404,6 +503,7 @@ class FakeDocker(Docker):
         super().__init__(self._run)
 
     def _run(self, command, **options):
+        self.commands.append(command)
         if command[1:3] == ["inspect", "-f"]:
             self.checks += 1
             alive = self.checks <= self.running_for
@@ -457,7 +557,7 @@ def test_the_first_launch_opens_the_copy_on_the_add_link_and_notices_the_connect
     assert hold(running) == 0
     opened = next(c for c in calls if c[0] == "/usr/bin/open")
     assert opened[-1] == "codex://settings/connections/ssh/add?name=umcodex-thesis-a1"
-    assert any(c[:2] == ["docker", "exec"] and "root" in c for c in calls)  # prepared
+    assert any(c[:2] == ["docker", "exec"] and "root" in c for c in docker.commands)  # prepared
     info = json.loads((running.folder / "launch.json").read_text())
     assert info["app"]["connected"] is True and info["app"]["alias"] == "umcodex-thesis-a1"
     assert info["setup_id"] == "thesis-a1" and info["started_at"] == 100.0
@@ -466,8 +566,8 @@ def test_the_first_launch_opens_the_copy_on_the_add_link_and_notices_the_connect
     assert any(line.startswith("Connected") for line in said)
     # The copy's config and its token file; the token file goes at the end.
     home, _ = codex_app.copy_paths(data_folder)
-    assert "127.0.0.1:41234" in (home / "config.toml").read_text()
-    assert not (codex_app.app_folder(data_folder) / "launch-token").exists()
+    assert "127.0.0.1:41234/um-codex-local/umcodex-thesis-a1/v1" in (home / "config.toml").read_text()
+    assert not (codex_app.app_folder(data_folder) / "launch-token").exists()  # never written
     assert "tok-123" not in (home / "config.toml").read_text()
     assert (ssh_home / ".ssh" / "um-codex" / "config").read_text().count("Host umcodex-thesis-a1") == 1
 
@@ -529,3 +629,57 @@ def test_running_launches_carry_the_app_state(tmp_path, data_folder):
         lock.release()
     assert found.app == {"alias": "umcodex-thesis-a1", "connected": True}
     assert found.started_at == 100.0
+
+
+def test_a_broken_copy_config_is_moved_aside(tmp_path, data_folder, caplog):
+    home, _ = codex_app.copy_paths(data_folder)
+    home.mkdir(parents=True)
+    (home / "config.toml").write_text("this isn't [ toml")
+    running = _running(tmp_path, data_folder)
+    hold = codex_app.AppHold(
+        "thesis-a1", say=lambda _: None, data=data_folder, app=None,
+        docker=FakeDocker(running_for=1, connects_after=None), run=_ran([]), sleep=lambda _: None,
+        proxy_for=lambda s: ["/x/um-codex", "ssh-proxy", s],
+    )  # fmt: skip
+    with caplog.at_level("WARNING"):
+        hold(running)
+    (aside,) = home.glob("config.toml.bad-*")
+    assert aside.read_text() == "this isn't [ toml"
+    assert tomllib.loads((home / "config.toml").read_text())["model_provider"] == "toolkit"
+    assert "didn't parse" in caplog.text
+
+
+def test_the_include_keeps_crlf_links_and_mode_and_refreshes_a_stale_backup(ssh_home):
+    ssh = ssh_home / ".ssh"
+    ssh.mkdir()
+    real = ssh / "real-config"
+    real.write_bytes(b"Host a\r\n  User me\r\n")
+    os.chmod(real, 0o640)
+    (ssh / "config").symlink_to(real)
+    (ssh / "config.um-codex-backup").write_bytes(b"an old backup\n")
+    assert codex_app.add_include() == "added"
+    assert (ssh / "config").is_symlink()  # the link still works
+    assert real.read_bytes() == b"Include ~/.ssh/um-codex/config\r\nHost a\r\n  User me\r\n"
+    assert stat.S_IMODE(real.stat().st_mode) == 0o640
+    assert (ssh / "config.um-codex-backup").read_bytes() == b"Host a\r\n  User me\r\n"  # refreshed
+    assert not [p for p in ssh.iterdir() if p.name.startswith(".")]  # no temporary files left
+    codex_app.remove_include()
+    assert real.read_bytes() == b"Host a\r\n  User me\r\n"
+    assert not (ssh / "config.um-codex-backup").exists()
+
+
+@pytest.mark.parametrize("first", ["Host=a", "Host = a", "Match all", "host\ta"])
+def test_an_include_after_any_host_form_doesnt_count(ssh_home, first):
+    ssh = ssh_home / ".ssh"
+    ssh.mkdir()
+    (ssh / "config").write_text(f"{first}\nInclude ~/.ssh/um-codex/config\n")
+    assert not codex_app.include_present()
+
+
+def test_a_config_that_isnt_text_is_left_alone(ssh_home):
+    ssh = ssh_home / ".ssh"
+    ssh.mkdir()
+    (ssh / "config").write_bytes(b"\xff\xfe binary")
+    with pytest.raises(UnicodeDecodeError):
+        codex_app.add_include()
+    assert (ssh / "config").read_bytes() == b"\xff\xfe binary"

@@ -51,6 +51,13 @@ for _noisy in ("httpcore", "httpx", "aiohttp.access"):
 
 PREFIX = "/relay/v1/"
 ALIVE = "_umcodex/alive"
+# The Codex app copy's own ("local", "this computer") side (M6, codex_app.py):
+# local chats are blocked, so its provider leads here, under the setup's ssh
+# alias: `/um-codex-local/<alias>/v1/`. Answered by the relay itself, with
+# no token, and never sent upstream: `responses` gets one assistant message
+# saying to use a Remote chat; anything else, 404.
+LOCAL_PREFIX = "/um-codex-local/"
+_LOCAL_PATH = re.compile(r"/um-codex-local/(umcodex-[A-Za-z0-9][A-Za-z0-9_.-]{0,127})/v1/(.*)")
 REDACTED = b"[removed by UM-Codex]"
 
 # Response headers passed back to Codex. Everything else (cookies, upstream
@@ -106,6 +113,51 @@ def bearer_token(authorization: str | None) -> str | None:
     return None
 
 
+def local_chats_message(alias: str) -> str:
+    return (
+        f"This UM-Codex window only works in Remote chats. Start a chat on Remote · {alias} "
+        '(project "work"). Local chats would run on your Mac, outside the sandbox.'
+    )
+
+
+def _sse(data: dict) -> bytes:
+    return f"event: {data['type']}\ndata: {json.dumps(data)}\n\n".encode()
+
+
+def local_chats_answer(alias: str) -> bytes:
+    """A complete streamed Responses API answer (the events Codex reads) with
+    one assistant message and no model call."""
+    response_id = "resp_umcodex_local_" + secrets.token_hex(8)
+    item_id = "msg_umcodex_local_" + secrets.token_hex(8)
+    text = local_chats_message(alias)
+    item = {
+        "type": "message",
+        "id": item_id,
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": text, "annotations": []}],
+    }
+    base = {"id": response_id, "object": "response", "model": "um-codex-local"}
+    usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    events = [
+        {"type": "response.created", "response": {**base, "status": "in_progress"}},
+        {"type": "response.output_item.added", "output_index": 0, "item": {**item, "content": []}},
+        {
+            "type": "response.output_text.delta",
+            "item_id": item_id,
+            "output_index": 0,
+            "content_index": 0,
+            "delta": text,
+        },
+        {"type": "response.output_item.done", "output_index": 0, "item": item},
+        {
+            "type": "response.completed",
+            "response": {**base, "status": "completed", "output": [item], "usage": usage},
+        },
+    ]
+    return b"".join(_sse(event) for event in events)
+
+
 class Relay:
     def __init__(
         self,
@@ -128,6 +180,8 @@ class Relay:
         return presented is not None and secrets.compare_digest(presented.encode(), self._token.encode())
 
     async def handle(self, request: web.Request) -> web.StreamResponse:
+        if request.path.startswith(LOCAL_PREFIX):
+            return await _local_chats(request)
         if not self.token_ok(bearer_token(request.headers.get("authorization"))):
             return _refused(401, "this launch's token is missing or wrong")
         if not request.path.startswith(PREFIX):
@@ -288,6 +342,19 @@ def _key_or_none(api_key: Callable[[], str]) -> str | None:
         return api_key()
     except MissingCredential:
         return None
+
+
+async def _local_chats(request: web.Request) -> web.Response:
+    """The app copy's local side (see LOCAL_PREFIX): never upstream."""
+    found = _LOCAL_PATH.fullmatch(request.path)
+    if found is None or request.method != "POST" or found.group(2) != "responses":
+        return _refused(404, "local chats are off in UM-Codex")
+    await request.read()  # the request itself is ignored
+    log.info("local chat in the Codex app copy answered by UM-Codex (no model call)")
+    return web.Response(
+        body=local_chats_answer(found.group(1)),
+        headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"},
+    )
 
 
 def _refused(status: int, reason: str) -> web.Response:

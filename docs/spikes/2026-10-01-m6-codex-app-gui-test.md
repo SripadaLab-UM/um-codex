@@ -79,8 +79,8 @@ UM-Codex's:
    - Record: did the copy show any sign-in screen? Did it open on Settings →
      Connections, or on its home screen?
 3. **Settings → Connections** in UM-Codex's copy. Record what's listed under
-   SSH (expect `umcodex-m6-test-…`; `umcodex-app-test`, a leftover of the
-   spike, may be listed too: ignore it). Turn on `umcodex-m6-test-…`.
+   SSH (expect `umcodex-m6-test-…`; the spike's `umcodex-test` should be
+   gone: UM-Codex removes keys of no saved setup). Turn on `umcodex-m6-test-…`.
    Record what it shows (connecting, connected, an error).
 4. **Open a chat in the sandbox.** Start a new chat on that host with the
    folder `/work` (the project "work", Remote · `umcodex-m6-test-…`, or
@@ -107,12 +107,14 @@ UM-Codex's:
    `use the browser tool to open https://example.com and tell me the page title`.
    Expect an approval question for opening the page (approve it) and the
    title "Example Domain". Record how the approval looked in the app.
-9. **A local chat (on the Mac).** In UM-Codex's copy, start a new chat that
+9. **A local chat is blocked.** In UM-Codex's copy, start a new chat that
    is **not** on the remote host (the local "this computer" kind). Send:
    `reply with the single word hi; don't run any commands`.
-   Record whether it answers (it goes through the Toolkit by way of the
-   running launch), and how the app shows that it's local. Don't ask it to
-   run anything.
+   Expected: no model answer, but this message from UM-Codex: "This UM-Codex
+   window only works in Remote chats. Start a chat on Remote ·
+   umcodex-m6-test-… (project "work"). Local chats would run on your Mac,
+   outside the sandbox." Record exactly what the app shows (the message, an
+   error, or nothing), and how the app marks the chat as local.
 10. **Stop.** In the launcher, press Stop on the running setup. Record the
     question's text; press Stop. In the app, record what the sandbox chat
     shows (expected: it can't reconnect to `umcodex-m6-test-…`).
@@ -125,8 +127,8 @@ UM-Codex's:
       took. If it doesn't within a minute, record what you had to do.
     - In the old sandbox chat, send `run pwd` and record the result.
 12. **The local chat after a restart.** In the local chat from step 9, send
-    `reply with the single word again`. Record whether it answers (the
-    launch's relay has a new port now).
+    `reply with the single word again`. Expected: the same UM-Codex message
+    (the launch's relay has a new port now). Record what it shows.
 13. **End.** Stop the setup in the launcher. Quit **UM-Codex's copy only**
     (Cmd-Q while it's in front; check the maintainer's normal copy is still
     running). In the launcher's Terminal tab press Ctrl-C.
@@ -140,11 +142,12 @@ UM-Codex's:
 5. Step 5: the permission control's label and every option it offered.
 6. Steps 6–8: the outputs; whether hello.txt appeared on the Mac; the model
    list; the browser approval and the title.
-7. Step 9: whether the local chat answered, and how the app marks it local.
+7. Step 9: what the local chat showed (expected: UM-Codex's message), and
+   how the app marks it local.
 8. Step 10: the Stop question's text and what the app showed.
 9. Step 11: whether the copy came forward, whether the app reconnected by
    itself (and how long), and `pwd` in the old chat.
-10. Step 12: whether the local chat still worked.
+10. Step 12: what the local chat showed after the restart.
 11. Anything confusing for a non-developer, and anything that looked wrong.
 
 ## Undo (only if the maintainer asks)

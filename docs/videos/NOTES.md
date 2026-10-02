@@ -62,6 +62,8 @@ plain; no product pitch. These are separate from DataLab's users.
    - the launcher turning to "Connected ✓";
    - asking Codex to list the files and make one in the working folder, and
      the file appearing in Finder; the diff and "View changes" in the app;
+   - optionally, a local (not Remote) chat answering with the reminder to
+     use a Remote chat;
    - Stop in the launcher (its question says the app will show it can't
      reconnect), and the app showing that;
    - starting the setup again later: the app reconnects by itself (record
@@ -164,10 +166,15 @@ Later, when built: "On this computer" mode (M4).
   uninstalling takes it out). The first time for each setup there are a few
   steps in the app (turn on its connection, open the "work" project); the
   launcher shows them and says "Connected" when done. Chats run in the
-  environment only when they show "Remote · umcodex-…": other chats in that
-  window run on the person's computer. The app's own browser is on the
-  person's computer too; the Browser tool is the one inside the environment.
-  The setup runs until Stop in the launcher.
+  environment only when they show "Remote · umcodex-…". Other (local) chats
+  in that window would run on the person's computer, so UM-Codex blocks
+  them: they answer only "This UM-Codex window only works in Remote chats.
+  Start a chat on Remote · umcodex-… (project "work"). Local chats would run
+  on your Mac, outside the sandbox." The person's own ChatGPT app also lists
+  the `umcodex-*` hosts in its Connections (it reads the same ssh settings);
+  they can stay off there. The app's own browser is on the person's computer
+  too; the Browser tool is the one inside the environment. The setup runs
+  until Stop in the launcher.
 
 ## Careful wording
 

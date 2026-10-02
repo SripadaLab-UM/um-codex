@@ -200,8 +200,8 @@ def render_requirements(*, internet: bool, catalog: bool = True, app: bool = Fal
     `app` (opened in the Codex app, M6): the provider gets the launch token
     from TOKEN_COMMAND (`[model_providers.toolkit.auth]`) instead of the
     UMCODEX_TOKEN variable, which ssh sessions don't have (Codex 0.157.1
-    refuses `auth` together with `env_key`: model-provider-info's validate);
-    and full access is the only permission profile (see below)."""
+    refuses `auth` together with `env_key`: model-provider-info's validate).
+    For every launch, full access is the only permission profile (see below)."""
     lines = [
         "# Written by UM-Codex for one launch, and mounted read-only. Do not edit.",
         "# Codex enforces these over every other setting.",
@@ -234,24 +234,25 @@ def render_requirements(*, internet: bool, catalog: bool = True, app: bool = Fal
     ]
     if app:
         lines += ["", "[model_providers.toolkit.auth]", f"command = {json.dumps(TOKEN_COMMAND)}"]
-        # The app starts each chat with a permission profile of its choosing
-        # (`thread/start` `permissions`, e.g. ":workspace"); a disallowed
-        # sandbox mode falls back to read-only, and in the container both need
-        # a Linux sandbox it can't make (bwrap: "No permissions to create a new
-        # namespace"). With only full access allowed, any other profile falls
-        # back to it (core config's resolve_default_permissions), and the app
-        # reads these to offer only full access. Checked live (M6) with
-        # rust-v0.157.1's app-server: none, ":workspace" and ":read-only" all
-        # ran with full access.
-        at = lines.index("[feedback]") - 1  # before the blank line that ends the top-level keys
-        lines.insert(at, 'default_permissions = ":danger-full-access"')
-        lines += [
-            "",
-            "[allowed_permission_profiles]",
-            '":danger-full-access" = true',
-            '":read-only" = false',
-            '":workspace" = false',
-        ]
+    # Every launch: full access is the only permission profile. Codex's own
+    # sandbox (read-only, ":workspace") can't run in the container (bwrap: "No
+    # permissions to create a new namespace"), and a profile asked for that
+    # isn't allowed falls back to the default here (core config's
+    # resolve_default_permissions), where a disallowed sandbox mode would
+    # fall back to read-only. The Codex app starts each chat with a profile of
+    # its choosing (`thread/start` `permissions`, ":workspace" by default),
+    # and reads these to offer only full access; the TUI's /permissions too.
+    # Checked live (M6) with rust-v0.157.1: none, ":workspace" and
+    # ":read-only" all ran with full access.
+    at = lines.index("[feedback]") - 1  # before the blank line that ends the top-level keys
+    lines.insert(at, 'default_permissions = ":danger-full-access"')
+    lines += [
+        "",
+        "[allowed_permission_profiles]",
+        '":danger-full-access" = true',
+        '":read-only" = false',
+        '":workspace" = false',
+    ]
     return "\n".join(lines) + "\n"
 
 

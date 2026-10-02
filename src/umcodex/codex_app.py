@@ -24,9 +24,10 @@ its SSH "Connections":
 - **A separate copy of the app**, with UM-Codex's own CODEX_HOME and Electron
   profile under the data folder (`codex-app/`), as the app's own "Codex Demo"
   launcher opens one. The person's own copy and ~/.codex are never touched.
-  Its own (local, "this computer") side uses the Toolkit through the current
-  launch's relay; those chats run on the Mac, not in the sandbox, and only
-  while a launch runs.
+  Its own (local, "this computer") chats would run on the Mac, outside the
+  sandbox, so they're blocked: its provider is the launch's relay, which
+  answers them with a reminder to use a Remote chat and never calls the
+  model (LOCAL_CHATS).
 - **The first time** for a setup, the copy opens on the documented link that
   adds the host (switched off); the person switches it on and opens /work
   once (the launcher shows the steps). The launch watches for Codex's
@@ -46,12 +47,14 @@ import logging
 import os
 import plistlib
 import re
+import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import time
 import tomllib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -88,8 +91,7 @@ INCLUDE_EXPLAINED = (
 
 # The plain lines the launcher and the terminal show for a setup in the app.
 APP_NOTES = (
-    "Chats must show Remote · {alias} to run in the sandbox. Other chats in that Codex window "
-    "run on this computer, not in the sandbox, and work only while a setup is running.",
+    "Chats must show Remote · {alias} to run in the sandbox. {other}",
     "The Codex app's own browser runs on this computer, not in the sandbox; use the Browser tool "
     "for browsing inside it.",
 )
@@ -101,8 +103,17 @@ def alias(setup_id: str) -> str:
     return ALIAS_PREFIX + setup_id
 
 
-def notes(setup_id: str) -> list[str]:
-    return [note.format(alias=alias(setup_id)) for note in APP_NOTES]
+OTHER_CHATS = {
+    True: "Other chats in that Codex window run on this computer, not in the sandbox, and work only "
+    "while a setup is running.",
+    False: "Other (local) chats in that Codex window would run on this computer, outside the sandbox, "
+    "so they're blocked: they only answer with that reminder.",
+}
+
+
+def notes(setup_id: str, *, local_chats: bool | None = None) -> list[str]:
+    other = OTHER_CHATS[LOCAL_CHATS if local_chats is None else local_chats]
+    return [note.format(alias=alias(setup_id), other=other) for note in APP_NOTES]
 
 
 def first_steps(setup_id: str) -> list[str]:
@@ -142,14 +153,32 @@ def app_folder(data: Path | None = None) -> Path:
 
 
 def _private_write(path: Path, text: str) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as file:
-        file.write(text)
-    with contextlib.suppress(OSError):
-        os.chmod(path, 0o600)
+    """Write a file only the person can read (0600), whole: through a
+    temporary file beside it and a rename, so a reader never sees half of it."""
+    _replace(path, text.encode("utf-8"), mode=0o600)
+
+
+def _replace(path: Path, data: bytes, *, mode: int) -> None:
+    """Replace `path` (or, if it's a link, the file it leads to, so the link
+    keeps working) with `data` atomically, with the given permissions."""
+    target = Path(os.path.realpath(path))
+    temporary = target.with_name(f".{target.name}.um-codex-{os.getpid()}-{time.monotonic_ns()}")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        with os.fdopen(fd, "wb") as file:
+            file.write(data)
+        with contextlib.suppress(OSError):
+            os.chmod(temporary, mode)
+        os.replace(temporary, target)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 # --- The Include line in ~/.ssh/config (only with consent) ------------------------
+
+# A Host or Match line, in any of ssh's forms: "Host a", "Host=a", "Host = a".
+_BLOCK_START = re.compile(r"(?i)(host|match)(\s*=|\s)")
 
 
 def _top_lines(text: str) -> list[str]:
@@ -157,10 +186,14 @@ def _top_lines(text: str) -> list[str]:
     lines = []
     for raw in text.splitlines():
         line = raw.strip()
-        if re.match(r"(?i)(host|match)\s", line):
+        if _BLOCK_START.match(line):
             break
         lines.append(line)
     return lines
+
+
+def _read(path: Path) -> bytes:
+    return path.read_bytes()
 
 
 def include_present(home: Path | None = None) -> bool:
@@ -168,34 +201,41 @@ def include_present(home: Path | None = None) -> bool:
     it (before any Host or Match block)."""
     config = ssh_dir(home) / "config"
     try:
-        text = config.read_text(encoding="utf-8")
+        text = _read(config).decode("utf-8")
     except (OSError, UnicodeDecodeError):
         return False
     return INCLUDE_LINE in _top_lines(text)
 
 
+def _mode(path: Path) -> int:
+    try:
+        return stat.S_IMODE(os.stat(path).st_mode)
+    except OSError:
+        return 0o600
+
+
 def add_include(home: Path | None = None) -> str:
     """Put the Include line at the very top of ~/.ssh/config, after backing
-    the file up (once: an older backup is the person's original). Returns
-    "created", "added" or "already there"."""
+    the file up (the backup is refreshed whenever it no longer matches the
+    file as it is before the line goes in). The file keeps its own
+    permissions and line endings, is replaced atomically, and a link to it
+    keeps working. Returns "created", "added" or "already there". Raises
+    OSError or UnicodeDecodeError (a file that isn't text) and changes nothing."""
     folder = ssh_dir(home)
     config = folder / "config"
     if not config.exists():
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         _private_write(config, INCLUDE_LINE + "\n")
         return "created"
-    if include_present(home):
+    data = _read(config)
+    text = data.decode("utf-8")
+    if INCLUDE_LINE in _top_lines(text):
         return "already there"
-    text = config.read_text(encoding="utf-8")
     backup = folder / BACKUP_NAME
-    if not backup.exists():
-        shutil.copy2(config, backup)
+    if not backup.exists() or _read(backup) != data:
+        _replace(backup, data, mode=_mode(config))
     newline = "\r\n" if "\r\n" in text else "\n"
-    # In place, so the file keeps its own permissions (and stays a link's target).
-    with config.open("r+", encoding="utf-8", newline="") as file:
-        file.seek(0)
-        file.write(INCLUDE_LINE + newline + text)
-        file.truncate()
+    _replace(config, (INCLUDE_LINE + newline + text).encode("utf-8"), mode=_mode(config))
     return "added"
 
 
@@ -209,7 +249,7 @@ def remove_include(home: Path | None = None) -> list[str]:
     backup = folder / BACKUP_NAME
     done: list[str] = []
     try:
-        text = config.read_text(encoding="utf-8")
+        text = _read(config).decode("utf-8")
     except (OSError, UnicodeDecodeError):
         text = None
     if text is not None and INCLUDE_LINE in text:
@@ -218,13 +258,11 @@ def remove_include(home: Path | None = None) -> list[str]:
             config.unlink()
             done.append(f"Removed {config} (UM-Codex had made it for its one line).")
         else:
-            with config.open("r+", encoding="utf-8", newline="") as file:
-                file.write(kept)
-                file.truncate()
+            _replace(config, kept.encode("utf-8"), mode=_mode(config))
             done.append(f"Took the line “{INCLUDE_LINE}” out of {config}.")
     if backup.exists():
         try:
-            same = config.exists() and backup.read_bytes() == config.read_bytes()
+            same = config.exists() and _read(backup) == _read(config)
         except OSError:
             same = False
         if same:
@@ -249,14 +287,22 @@ def remove_ssh_files(home: Path | None = None) -> list[str]:
 # --- UM-Codex's own ssh config ------------------------------------------------------
 
 
-def _ssh_arg(part: str) -> str:
-    """One ProxyCommand word for ssh: `%` doubled (ssh's own tokens), and
-    double quotes around a word with a space (the shell on a Mac, Windows'
-    command line on Windows)."""
-    if '"' in part or "\n" in part:
-        raise ValueError("a ProxyCommand part can't hold a double quote or a line break")
+def _ssh_arg(part: str, platform: str = sys.platform) -> str:
+    """One ProxyCommand word for ssh, with `%` doubled (ssh's own tokens).
+    On a Mac ssh runs the command with the person's shell (`$SHELL -c "exec
+    ..."`), so each word is shell-quoted (`shlex.quote`: `$`, backticks,
+    quotes, `;` and `&` stay plain characters). Windows OpenSSH runs it
+    itself, splitting it as a Windows command line: double quotes around a
+    word with a space, and a double quote inside one is refused (no Windows
+    path has one)."""
+    if "\n" in part or "\r" in part or "\0" in part:
+        raise ValueError("a ProxyCommand part can't hold a line break")
     part = part.replace("%", "%%")
-    return f'"{part}"' if re.search(r"\s", part) else part
+    if platform == "win32":
+        if '"' in part:
+            raise ValueError("a ProxyCommand part can't hold a double quote on Windows")
+        return f'"{part}"' if re.search(r"\s", part) else part
+    return shlex.quote(part)
 
 
 def proxy_command(setup_id: str) -> list[str]:
@@ -282,7 +328,11 @@ def proxy_command(setup_id: str) -> list[str]:
 
 def host_block(setup_id: str, proxy: Sequence[str]) -> str:
     """One Host for a setup. Everything ssh needs is here: the app adds only
-    BatchMode, timeouts and keep-alives to its ssh commands."""
+    BatchMode, timeouts and keep-alives to its ssh commands. The Include is
+    the first line of ~/.ssh/config, so these values win (ssh keeps the first
+    value it reads for each option); options set only in the person's own
+    `Host *` (LocalForward, DynamicForward and the like) still apply, though
+    the container's sshd allows only local forwards to its own localhost."""
     name = alias(setup_id)
     return "\n".join(
         [
@@ -295,6 +345,12 @@ def host_block(setup_id: str, proxy: Sequence[str]) -> str:
             "  IdentityAgent none",
             "  ForwardAgent no",
             "  ForwardX11 no",
+            "  ForwardX11Trusted no",
+            "  Tunnel no",
+            "  ControlMaster no",
+            "  ControlPath none",
+            "  GSSAPIAuthentication no",
+            "  UpdateHostKeys no",
             "  PasswordAuthentication no",
             "  KbdInteractiveAuthentication no",
             # The transport is `docker exec` on this computer, and each
@@ -320,13 +376,36 @@ def known_setups(home: Path | None = None) -> list[str]:
     return sorted(s for s in found if SETUP_ID.fullmatch(s))
 
 
-def write_config(proxy_for: Callable[[str], Sequence[str]] = proxy_command, home: Path | None = None) -> Path:
-    """~/.ssh/um-codex/config: one Host per setup with a key, rewritten whole."""
+def _saved_setup_ids() -> set[str]:
+    from umcodex.setups import SetupStore
+
+    return {setup.id for setup in SetupStore().all()}
+
+
+def write_config(
+    proxy_for: Callable[[str], Sequence[str]] = proxy_command,
+    home: Path | None = None,
+    setup_ids: Iterable[str] | None = None,
+) -> Path:
+    """~/.ssh/um-codex/config, rewritten whole: one Host per saved setup that
+    has a key here (`setup_ids`: the saved setups; default, the setup store).
+    Keys that belong to no saved setup (a deleted setup's, a test's) are
+    removed."""
     folder = own_ssh_dir(home)
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     with contextlib.suppress(OSError):
         os.chmod(folder, 0o700)
-    blocks = [host_block(setup_id, proxy_for(setup_id)) for setup_id in known_setups(home)]
+    saved = set(_saved_setup_ids() if setup_ids is None else setup_ids)
+    hosts = []
+    for setup_id in known_setups(home):
+        if setup_id in saved:
+            hosts.append(setup_id)
+            continue
+        key = key_path(setup_id, home)
+        key.unlink(missing_ok=True)
+        key.with_name(key.name + ".pub").unlink(missing_ok=True)
+        log.info("removed the ssh key of %s, which is no saved setup", setup_id)
+    blocks = [host_block(setup_id, proxy_for(setup_id)) for setup_id in hosts]
     header = [
         "# Written by UM-Codex, rewritten at each launch in the Codex app; changes here are lost.",
         "# Each Host reaches one setup's sandbox while it runs (um-codex ssh-proxy, through Docker).",
@@ -370,8 +449,9 @@ def forget_setup(setup_id: str, home: Path | None = None) -> None:
         return
     key.unlink(missing_ok=True)
     key.with_name(key.name + ".pub").unlink(missing_ok=True)
+    remaining = [other for other in known_setups(home) if other != setup_id]
     with contextlib.suppress(OSError, ValueError):
-        write_config(home=home)
+        write_config(home=home, setup_ids=remaining)
 
 
 # --- ssh's ProxyCommand ---------------------------------------------------------------
@@ -442,15 +522,12 @@ PREPARE = (
 APP_SERVER_PATTERN = "app-server --listen"
 
 
-def prepare_container(docker: Docker, agent: str, public_key: Path, run: Runner = subprocess.run) -> None:
-    done = run(
-        ["docker", "exec", "-i", "-u", "root", agent, "sh", "-c", PREPARE],
-        input=public_key.read_bytes(),
-        capture_output=True,
-        timeout=60,
-        check=False,
-    )
-    if done.returncode != 0:
+def prepare_container(docker: Docker, agent: str, public_key: Path) -> None:
+    code, _, _ = docker.status(
+        "exec", "-i", "-u", "root", agent, "sh", "-c", PREPARE,
+        input=public_key.read_text(encoding="utf-8"), timeout=60,
+    )  # fmt: skip
+    if code != 0:
         raise DockerError("the sandbox couldn't be prepared for the Codex app")
 
 
@@ -583,26 +660,55 @@ def bring_forward(pid: int, run: Runner = subprocess.run) -> bool:
     return False
 
 
-def local_config(existing: str, relay_port: int, token_file: Path, model: str) -> str:
-    """The copy's own config.toml: its local side ("this computer") uses the
-    Toolkit through this launch's relay, with the launch token read from a
-    private file, so the copy needs no ChatGPT or OpenAI sign-in. The other
-    settings the app saved there are kept."""
-    try:
-        config = tomllib.loads(existing) if existing.strip() else {}
-    except tomllib.TOMLDecodeError:
-        config = {}
+# Chats on the copy's own side ("this computer": local, not Remote ·
+# umcodex-...) would run on the Mac, outside the sandbox. The maintainer
+# decided (2026-10-01) to block them: the copy's provider leads to the
+# launch's relay at `/um-codex-local/<alias>/v1` (relay.LOCAL_PREFIX), which
+# answers every request itself with a message saying to use a Remote chat,
+# and never calls the model. True switches back to what the hands-on test
+# did: local chats through the relay to the Toolkit, with the launch token.
+LOCAL_CHATS = False
+
+
+def local_config(
+    existing: str,
+    relay_port: int,
+    model: str,
+    *,
+    setup_alias: str,
+    token_file: Path | None = None,
+    local_chats: bool = LOCAL_CHATS,
+) -> str:
+    """The copy's own config.toml. Its provider is a custom one without
+    `requires_openai_auth`, so the copy opens with no ChatGPT or OpenAI
+    sign-in. With local chats blocked (the default), it leads to the relay's
+    local-chats answer (no credential, no model call); with them on, to the
+    Toolkit through the relay, with the launch token read from `token_file`.
+    The other settings the app saved there are kept. `existing` must parse
+    (AppHold moves a broken file aside first)."""
+    config = tomllib.loads(existing) if existing.strip() else {}
     providers = config.get("model_providers")
     providers = providers if isinstance(providers, dict) else {}
-    providers["toolkit"] = {
-        "name": "U-M GPT Toolkit (through UM-Codex)",
-        "base_url": f"http://127.0.0.1:{relay_port}/relay/v1",
-        "wire_api": "responses",
-        "request_max_retries": 1,
-        "stream_max_retries": 2,
-        "stream_idle_timeout_ms": 300000,
-        "auth": {"command": "/bin/cat", "args": [str(token_file)]},
-    }
+    if local_chats:
+        if token_file is None:
+            raise ValueError("local chats need the launch token's file")
+        providers["toolkit"] = {
+            "name": "U-M GPT Toolkit (through UM-Codex)",
+            "base_url": f"http://127.0.0.1:{relay_port}/relay/v1",
+            "wire_api": "responses",
+            "request_max_retries": 1,
+            "stream_max_retries": 2,
+            "stream_idle_timeout_ms": 300000,
+            "auth": {"command": "/bin/cat", "args": [str(token_file)]},
+        }
+    else:
+        providers["toolkit"] = {
+            "name": "UM-Codex: use a Remote chat",
+            "base_url": f"http://127.0.0.1:{relay_port}/um-codex-local/{setup_alias}/v1",
+            "wire_api": "responses",
+            "request_max_retries": 0,
+            "stream_max_retries": 0,
+        }
     config.update(
         {
             "model_provider": "toolkit",
@@ -668,6 +774,7 @@ class AppHold:
     poll_seconds: float = 2.0
     sleep: Callable[[float], None] = time.sleep
     proxy_for: Callable[[str], Sequence[str]] = proxy_command
+    local_chats: bool = LOCAL_CHATS
     labels: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
@@ -680,8 +787,8 @@ class AppHold:
         name = alias(setup.id)
         self.say("Preparing the sandbox for the Codex app...")
         public = ensure_key(setup.id, run=self.run)
-        write_config(self.proxy_for)
-        prepare_container(self.docker, spec.agent, public, run=self.run)
+        write_config(self.proxy_for, setup_ids={*_saved_setup_ids(), setup.id})
+        prepare_container(self.docker, spec.agent, public)
         token_file = self._write_copy_files(running.relay_port, running.token, setup)
         first = not connected_before(setup.id, self.data)
         state = {
@@ -689,7 +796,7 @@ class AppHold:
             "connected": False,
             "first_time": first,
             "steps": first_steps(setup.id),
-            "notes": notes(setup.id),
+            "notes": notes(setup.id, local_chats=self.local_chats),
             "copy": "not-opened",
         }
         try:
@@ -712,10 +819,30 @@ class AppHold:
         for folder in (app_folder(self.data), home, user_data):
             folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         token_file = app_folder(self.data) / "launch-token"
-        _private_write(token_file, token)
+        if self.local_chats:
+            _private_write(token_file, token)
+        else:
+            token_file.unlink(missing_ok=True)  # from a copy that allowed local chats
         config = home / "config.toml"
-        existing = config.read_text(encoding="utf-8") if config.exists() else ""
-        _private_write(config, local_config(existing, relay_port, token_file, setup.model))
+        existing = ""
+        if config.exists():
+            try:
+                existing = config.read_text(encoding="utf-8")
+                tomllib.loads(existing)
+            except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+                aside = config.with_name(f"config.toml.bad-{time.strftime('%Y%m%d-%H%M%S')}")
+                os.replace(config, aside)
+                log.warning("the Codex app copy's config.toml didn't parse; moved it to %s", aside)
+                existing = ""
+        text = local_config(
+            existing,
+            relay_port,
+            setup.model,
+            setup_alias=alias(setup.id),
+            token_file=token_file if self.local_chats else None,
+            local_chats=self.local_chats,
+        )
+        _private_write(config, text)
         return token_file
 
     def _open_copy(self, setup_id: str, first: bool) -> str:

@@ -502,6 +502,12 @@ class Launcher:
             result = codex_app.add_include(self.ssh_home)
         except OSError:
             raise Invalid("Your ssh settings (~/.ssh/config) couldn't be changed.", status=500) from None
+        except UnicodeDecodeError:
+            raise Invalid(
+                "Your ssh settings (~/.ssh/config) aren't plain text UM-Codex can read, so they weren't "
+                "changed. Use Terminal instead, or ask for help.",
+                status=409,
+            ) from None
         log.info("launcher window: ~/.ssh/config Include line %s", result)
         return {"result": result}
 

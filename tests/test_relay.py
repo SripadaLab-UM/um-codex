@@ -344,3 +344,49 @@ def test_the_upstream_override_is_only_a_local_stub(monkeypatch, value, allowed)
     else:
         with pytest.raises(relay_module.UpstreamRefused):
             relay_module.upstream_base_url("https://default/v1")
+
+
+# --- The Codex app copy's local chats (M6): answered here, never upstream ---------
+
+
+def _events(text: str) -> list[dict]:
+    return [json.loads(line[6:]) for line in text.splitlines() if line.startswith("data: ")]
+
+
+@pytest.mark.parametrize("headers", [{}, bearer(TOKEN), bearer("umc_wrong")])
+def test_local_chats_get_the_remote_reminder_and_never_reach_the_toolkit(headers):
+    keys_asked = []
+
+    def key() -> str:
+        keys_asked.append(1)
+        return FAKE_KEY
+
+    async def test(client: httpx.AsyncClient, upstream: Upstream) -> None:
+        response = await client.post(
+            "/um-codex-local/umcodex-thesis-a1/v1/responses", content=codex_request(), headers=headers
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        events = _events(response.text)
+        assert [e["type"] for e in events] == [
+            "response.created",
+            "response.output_item.added",
+            "response.output_text.delta",
+            "response.output_item.done",
+            "response.completed",
+        ]
+        message = relay_module.local_chats_message("umcodex-thesis-a1")
+        assert events[3]["item"]["content"][0]["text"] == message
+        assert "Remote · umcodex-thesis-a1" in message and 'project "work"' in message
+        assert events[-1]["response"]["status"] == "completed"
+        for other in ("models", "chat/completions", "responses/x"):
+            refused = await client.post(f"/um-codex-local/umcodex-thesis-a1/v1/{other}", headers=headers)
+            assert refused.status_code == 404
+        assert (await client.get("/um-codex-local/umcodex-thesis-a1/v1/models")).status_code == 404
+        # Not a setup's alias: refused too, and nothing slips into the relayed path.
+        for odd in ("/um-codex-local/x/v1/responses", "/um-codex-local/umcodex-a/../relay/v1/responses"):
+            assert (await client.post(odd, content=codex_request())).status_code in (401, 404)
+        assert FAKE_KEY not in response.text
+
+    assert run_with_relay(test, key=key).seen == []
+    assert keys_asked == []  # the key wasn't even read
