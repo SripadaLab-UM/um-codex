@@ -77,7 +77,7 @@ log("click");
 await targets.start().click();
 await wait(() => page.locator("article.card").count().then((n) => n > 0), 900, "the card");
 log("card");
-await wait(() => page.locator("article.card .status-line").first().innerText().then((t) => /Connected/.test(t)).catch(() => false), 300, "Connected");
+await wait(() => page.locator("article.card .status-line").first().innerText().then((t) => /Connected|Running in Terminal/.test(t)).catch(() => false), 300, "Connected");
 log("connected");
 save();
 await wait(async () => existsSync(path.join(DIR, "stop-now")), 3600, "stop-now");

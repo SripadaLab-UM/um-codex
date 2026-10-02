@@ -9,7 +9,7 @@ Status: **draft for review.**
 | For | Anyone installing UM-Codex on a Windows computer for the first time |
 | Closing line | Next: Your first launch on Windows |
 | Command | `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/SripadaLab-UM/um-codex/releases/latest/download/install-windows.ps1 \| iex` |
-| Sources | Windows PowerShell is drawn from a recording of the real installer (release v0.1.0-alpha.4, the user's name in paths shown as "you"); the Desktop and the Start menu on a Windows computer, recorded (cropped to the shortcut, other results blurred); the launcher window, filmed live. Three things are labelled illustrations, drawn in the installer's own words: the administrator step and restart (this computer already has Docker Desktop), the fix for Docker's virtual machine, and typing the key at its prompt (keys are never typed on camera). |
+| Sources | Windows PowerShell is drawn from a recording of the real installer (release v0.1.0-alpha.4, the user's name in paths shown as "you"; this computer already had a key saved, so the run shows "kept" and step 6's prompt is drawn); the Desktop and the Start menu on a Windows computer, recorded (cropped to the shortcut, other results blurred); the launcher window, filmed live. Three things are labelled illustrations, drawn in the installer's own words: the administrator step and restart (this computer already has Docker Desktop), the fix for Docker's virtual machine, and typing the key at its prompt (keys are never typed on camera). |
 
 ## Rules for this video
 
@@ -151,8 +151,10 @@ Status: **draft for review.**
 **Shot 4.5**
 
 - **Visual (PowerShell, then a labelled illustration of typing):** Step 6's prompt; stars appear as a key is pasted.
-  - term · "" · "Toolkit API key"
-  - typed · "****************************************"
+  - term · "-" · "-"
+  - typed · "   Paste your Toolkit API key (see ITS's 'Codex Setup' articles for how to get one)."
+  - typed · "   It's kept in Windows Credential Manager and never goes into the container."
+  - typed · "   Toolkit API key: ****************************************"
   - typed · "The Toolkit accepted the key."
   - typed · "Saved in the keychain."
 - **Narration:**
@@ -164,7 +166,7 @@ Status: **draft for review.**
 **Shot 4.6**
 
 - **Visual (PowerShell):** Step 7 and the end.
-  - term · "" · "To remove it later"
+  - term · "Step 7 of 7" · "To remove it later"
 - **Narration:**
   > Step seven adds UM-Codex to your Start menu, and a shortcut to your
   > Desktop. Then it's done, and it tells you how to open it.
