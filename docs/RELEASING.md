@@ -293,6 +293,22 @@ most once a day, in the log only).
 are caught at a launch too. Before tagging, `um-codex launchers --refresh
 --dry-run` on an installed Mac shows what the update will change.
 
+**From the launcher window** (M7): when the daily check (or **Check for
+updates**, which asks GitHub at once through `update.check_now`, with the
+same signature checks) finds a newer release, the window's status strip
+says "UM-Codex X is available · Update". Update runs this very version's
+`um-codex update --from-launcher` in the background: the same code path,
+checks and undo as in a terminal, except that it doesn't close the window
+that asked (its own version is the one kept beside the new one). The page
+shows only fixed words for its progress (`ui/server.py` `UPDATE_STEPS`:
+"Checking for a newer version…", "Downloading…", "Installing…", "Getting
+the new image…"), each chosen by a line the update prints and never that
+line itself; the update's output goes to `um-codex.log`. Then "Updated to
+UM-Codex X · Reopen" (Reopen ends this window's server and starts the
+installed version's), or one plain line pointing to `um-codex.log`. It's
+refused while a setup is running ("Stop running setups first: …").
+Rollback stays in the terminal (`um-codex update --rollback`).
+
 **At launch**, at most once a day, `um-codex` asks the same question and,
 when a newer release is out, prints one line: "UM-Codex X is available: run
 um-codex update". It waits for GitHub 3 seconds at most (a slower answer is

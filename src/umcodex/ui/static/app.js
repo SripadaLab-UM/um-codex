@@ -1,17 +1,30 @@
 // The launcher window. Plain JavaScript: everything shown is built with
 // textContent (never innerHTML), and every request is a same-origin JSON
 // fetch (the server refuses anything else; see ui/protection.py).
+//
+// M7, "one click": a returning person presses one Start; the first time, one
+// "Choose a folder and start" and Codex starts with the defaults. No summary
+// page and no pop-ups on the way: what a setup gives Codex is always on its
+// card, problems and questions show on the card, and a pop-up question is
+// kept only before Stop and Delete (and Windows' administrator prompt).
 "use strict";
 
-const BROWSER_PLAIN =
-  "Codex can open websites in a fresh browser inside the sandbox; it has none of your logins.";
 const START_WAIT_MS = 90000; // how long a card says "Starting…" before giving up
+const DOCKER_WAIT_MS = 180000; // how long Start waits for Docker Desktop it opened
 
 let state = null; // the last /api/state
-let view = { name: "list" }; // "list" | "form" | "summary"
+let view = { name: "home" }; // "home" | "form"
 let models = null;
 let polling = true;
-const starting = new Map(); // setup id -> when Start was pressed (until its launch shows as running)
+// Per setup, what this page is doing for it now (until its launch shows as running):
+// { phase: "starting" | "docker" | "key" | "include" | "failed", since, text }
+const cards = new Map();
+let pending = null; // a Start waiting for the key or Docker: { id, extra }
+let hero = null; // the first-run button's own line: { text, bad }
+const renaming = new Map(); // setup id -> the name being typed on its card (kept across redraws)
+const warned = new Map(); // setup id -> the folder notes from choosing it (a network drive, ...)
+const said = new Map(); // setup id -> its status line as last announced
+const shownSteps = new Set(); // launch ids whose Codex app steps were opened by hand
 
 // ---------------------------------------------------------------- helpers
 
@@ -41,6 +54,10 @@ function render(...children) {
   if (key) main.querySelector(`[data-key="${CSS.escape(key)}"]`)?.focus();
 }
 
+function focusKey(key) {
+  document.querySelector(`#main [data-key="${CSS.escape(key)}"]`)?.focus();
+}
+
 class ApiError extends Error {
   constructor(status, data) {
     super(data.error || "That didn't work.");
@@ -65,6 +82,14 @@ async function api(method, path, body) {
   return data;
 }
 
+// One line under the status strip, for what belongs to no card (a copied
+// path, a saved key, a request that failed).
+// One polite announcement (a status line that changed), for screen readers.
+function announce(text) {
+  const box = document.getElementById("announce");
+  if (box) box.textContent = text;
+}
+
 function notice(text, bad = false) {
   const box = document.getElementById("notice");
   box.textContent = text;
@@ -85,17 +110,6 @@ function confirmBox(title, text, yes) {
   return new Promise((resolve) => {
     dialog.addEventListener("close", () => resolve(dialog.returnValue === "yes"), { once: true });
   });
-}
-
-const approvalsWords = (s) =>
-  s.approvals === "never" ? "Runs commands without asking" : "Asks before commands";
-
-function internetWords(s) {
-  if (!s.internet) return ["Internet off"];
-  const words = ["Internet on"];
-  if (s.browser) words.push(s.browser_asks ? "Browser tool on (asks before each action)" : "Browser tool on");
-  else words.push("Browser tool off");
-  return words;
 }
 
 function openerLabel(key) {
@@ -120,6 +134,12 @@ function middle(text, max) {
   return text.slice(0, head) + "…" + text.slice(text.length - (max - 1 - head));
 }
 
+function shortHome(path) {
+  const home = state?.home;
+  if (!home) return path;
+  return path === home || path.startsWith(home + "/") || path.startsWith(home + "\\") ? "~" + path.slice(home.length) : path;
+}
+
 async function copyPath(path, name) {
   try {
     await navigator.clipboard.writeText(path);
@@ -136,7 +156,7 @@ function pathView(folder, { copy = true, key } = {}) {
   return el(
     "span",
     { class: "pathview", title: folder.path },
-    parent ? el("span", { class: "parent", text: middle(parent, 34) }) : null,
+    parent ? el("span", { class: "parent", text: middle(parent, 30) }) : null,
     el("b", { class: "name", text: name }),
     copy
       ? el("button", {
@@ -156,58 +176,147 @@ function chip(folder, extra) {
     "span",
     { class: folder.write ? "chip write" : "chip" },
     pathView(folder, { copy: !extra }),
-    extra || el("span", { class: "access", text: folder.write ? "READ & WRITE" : "READ" }),
+    extra || el("span", { class: "access", text: folder.write ? "READ & WRITE" : "READ ONLY" }),
   );
 }
 
-// ---------------------------------------------------------------- status line
+// ---------------------------------------------------------------- what a setup gives Codex
+
+// The safety facts, short, always on the card and under the form (they used
+// to be a summary page before every start). Same facts as the terminal's
+// summary (setups.summary).
+const WORDS = {
+  writes: "Codex can change and delete files there: your real files, no undo.",
+  internetOn:
+    "Internet on: Codex can reach the whole internet, so it could send what it can read anywhere " +
+    "(also programs on this computer and your local network or VPN).",
+  internetOff: "Internet off: Codex can reach only the model.",
+  browserOn: "Browser tool on: a fresh browser in the sandbox, with none of your logins",
+  key: "Your Toolkit key stays on this computer; the sandbox never sees it.",
+};
+
+function accessLines(s) {
+  const lines = [s.internet ? WORDS.internetOn : WORDS.internetOff];
+  if (s.internet && s.browser) lines.push(WORDS.browserOn + (s.browser_asks ? " (asks before each action)." : "."));
+  return lines;
+}
+
+function codexLine(s) {
+  const asks = s.approvals === "never" ? "runs commands without asking" : "asks before commands";
+  return [openerLabel(s.open_in), s.model, asks].join(" · ");
+}
+
+// The facts block: folders (working + more), access, Codex.
+function facts(s, { key = "" } = {}) {
+  const more = s.folders || [];
+  return el(
+    "div",
+    { class: "facts" },
+    el(
+      "div",
+      { class: "fact" },
+      el("span", { class: "label", text: "Folder" }),
+      el(
+        "div",
+        { class: "chips" },
+        s.working ? chip({ ...s.working, write: true }, el("span", { class: "access", text: "READ & WRITE" })) : el("span", { class: "faint", text: "No folder yet" }),
+        more.map((f) => chip(f)),
+        s.working ? el("button", { type: "button", class: "copy", key: `copy-${key}`, text: "Copy path", onclick: () => copyPath(s.working.path, splitPath(s.working.shown).name) }) : null,
+      ),
+      el("p", { class: "line", text: WORDS.writes }),
+    ),
+    el("div", { class: "fact" }, el("span", { class: "label", text: "Access" }), accessLines(s).map((t) => el("p", { class: "line", text: t }))),
+    el("div", { class: "fact" }, el("span", { class: "label", text: "Codex" }), el("p", { class: "line", text: codexLine(s) })),
+  );
+}
+
+// ---------------------------------------------------------------- the status strip
 
 function renderStatus() {
   const box = document.getElementById("status");
   box.replaceChildren();
   if (!state) return;
-  document.getElementById("version").textContent = `· version ${state.version}`;
   const d = state.docker;
-  const dockerItem = el(
-    "span",
-    { class: "item" },
-    el("span", { class: `dot ${d.state === "ready" ? "ok" : d.state === "starting" ? "attn" : "bad"}` }),
-    el("span", { text: d.words }),
-  );
-  if (d.can_open) dockerItem.append(el("button", { class: "link", onclick: openDocker, text: "Open Docker Desktop" }));
-  if (d.can_fix) dockerItem.append(el("button", { class: "link", onclick: fixDocker, text: "Fix it…" }));
-  box.append(dockerItem);
-  if (d.fix_explained) box.append(el("span", { class: "explain", text: d.fix_explained }));
-  box.append(
-    el(
-      "span",
-      { class: "item" },
-      el("span", { class: `dot ${state.key.saved ? "ok" : "bad"}` }),
-      el("span", { text: state.key.saved ? "Toolkit key saved" : "No Toolkit key saved" }),
-      el("button", { class: "link", onclick: openKeyDialog, text: state.key.saved ? "Replace key…" : "Add key…" }),
-    ),
-  );
-  if (state.installed) {
-    box.append(
-      el(
-        "span",
-        { class: "item stale" },
-        el("span", { class: "dot attn" }),
-        el("span", { text: `UM-Codex ${state.installed} is installed; this window is still ${state.version}.` }),
-        el("button", { class: "link", onclick: reopenNewer, text: "Reopen" }),
-      ),
-    );
-  } else if (state.update) {
-    box.append(
+  const quiet = [];
+  const loud = [];
+  if (d.state === "ready") quiet.push(el("span", { class: "item" }, el("span", { class: "dot ok" }), "Docker running"));
+  else {
+    const item = el("div", { class: "item loud" }, el("span", { class: `dot ${d.state === "starting" ? "attn" : "bad"}` }), el("span", { text: d.words }));
+    if (d.can_open) item.append(el("button", { class: "link", onclick: openDocker, text: "Open Docker Desktop" }));
+    if (d.can_fix) item.append(el("button", { class: "link", onclick: fixDocker, text: "Fix it…" }));
+    loud.push(item);
+    if (d.fix_explained) loud.push(el("p", { class: "explain", text: d.fix_explained }));
+  }
+  if (state.key.saved) {
+    quiet.push(
       el(
         "span",
         { class: "item" },
-        el("span", { class: "dot attn" }),
-        el("span", { text: "A new version is available: in a terminal, run " }),
-        el("code", { text: "um-codex update" }),
+        el("span", { class: "dot ok" }),
+        "Toolkit key saved",
+        el("button", { class: "link", onclick: () => showKeyPanel(), text: "Replace" }),
       ),
     );
+  } else {
+    loud.push(el("div", { class: "item loud" }, el("span", { class: "dot bad" }), el("span", { text: "Add your Toolkit key to start (below)." })));
   }
+  loud.push(...updateItems());
+  quiet.push(
+    el(
+      "span",
+      { class: "item faint" },
+      `version ${state.version}`,
+      el("button", { class: "link", key: "check-updates", onclick: checkUpdates, text: "Check for updates" }),
+    ),
+  );
+  box.append(el("div", { class: "quiet" }, quiet), ...loud);
+  // No key: its field is shown, without a Cancel.
+  if (!state.key.saved) showKeyPanel({ required: true, focus: false });
+}
+
+// Updates (M7): "X is available · Update", its progress, then "Updated to X · Reopen".
+let updateSaid = null; // { text, bad }: what Update or Check for updates said last
+
+function updateItems() {
+  const u = state.update;
+  const item = (dot, text, ...rest) => el("div", { class: "item loud" }, el("span", { class: `dot ${dot}` }), el("span", { text }), ...rest);
+  if (u.words && u.words !== said.get("update")) announce(u.words);
+  said.set("update", u.words);
+  if (u.phase === "running") return [item("attn", `Updating… ${u.words || ""}`)];
+  if (u.phase === "updated")
+    return [item("ok", `${u.words} Reopen to use it.`, el("button", { class: "link", key: "reopen", onclick: reopenNewer, text: "Reopen" }))];
+  if (u.phase === "failed") return [item("bad", u.words)];
+  const found = [];
+  if (u.phase === "newest") found.push(item("ok", u.words));
+  if (state.installed)
+    found.push(
+      item("attn", `UM-Codex ${state.installed} is installed; this window is still ${state.version}.`, el("button", { class: "link", key: "reopen", onclick: reopenNewer, text: "Reopen" })),
+    );
+  else if (u.available)
+    found.push(item("attn", `UM-Codex ${u.available} is available.`, el("button", { class: "link", key: "update", onclick: startUpdate, text: "Update" })));
+  if (updateSaid) found.push(el("p", { class: updateSaid.bad ? "explain message" : "explain", role: "status", text: updateSaid.text }));
+  return found;
+}
+
+async function startUpdate() {
+  updateSaid = null;
+  try {
+    await api("POST", "/api/update");
+  } catch (error) {
+    updateSaid = { text: error.message, bad: true };
+  }
+  refresh();
+}
+
+async function checkUpdates() {
+  updateSaid = { text: "Checking for a newer version…" };
+  renderStatus();
+  try {
+    updateSaid = { text: (await api("POST", "/api/update/check")).words };
+  } catch (error) {
+    updateSaid = { text: error.message, bad: true };
+  }
+  refresh();
 }
 
 async function openDocker() {
@@ -244,18 +353,25 @@ async function reopenNewer() {
   }
 }
 
-// ---------------------------------------------------------------- the key
+// ---------------------------------------------------------------- the key (inline)
 
 function keyInput() {
   return document.getElementById("key-input");
 }
 
-function openKeyDialog() {
-  const dialog = document.getElementById("key-dialog");
-  keyInput().value = "";
-  document.getElementById("key-message").hidden = true;
-  dialog.showModal();
-  keyInput().focus();
+function showKeyPanel({ required = false, focus = true } = {}) {
+  const panel = document.getElementById("key-panel");
+  const wasHidden = panel.hidden;
+  panel.hidden = false;
+  document.getElementById("key-cancel").hidden = required;
+  if (wasHidden) document.getElementById("key-message").hidden = true;
+  if (focus) keyInput().focus();
+}
+
+// Cancel, Escape or saving: the field is emptied whenever it's put away.
+function hideKeyPanel() {
+  keyField.value = "";
+  document.getElementById("key-panel").hidden = true;
 }
 
 async function saveKey(event) {
@@ -268,10 +384,11 @@ async function saveKey(event) {
   message.textContent = "Checking the key with the Toolkit…";
   try {
     const result = await api("POST", "/api/key", { key: keyInput().value });
-    document.getElementById("key-dialog").close();
+    hideKeyPanel();
     models = null;
     notice(result.words);
-    refresh();
+    await refresh();
+    if (pending && cards.get(pending.id)?.phase === "key") startSetup(pending.id, pending.extra);
   } catch (error) {
     message.className = "message";
     message.textContent = error.message;
@@ -281,216 +398,90 @@ async function saveKey(event) {
   }
 }
 
-// ---------------------------------------------------------------- the list
+// ---------------------------------------------------------------- starting
+
+function setupOf(id) {
+  return state?.setups.find((s) => s.id === id);
+}
 
 function runningOf(setupId) {
   return state.running.find((run) => run.setup_id === setupId);
 }
 
-function renderList() {
-  const parts = [];
-  if (state.running.length) {
-    parts.push(
-      el(
-        "section",
-        { class: "block", "aria-label": "Running" },
-        el("div", { class: "block-head" }, el("h2", { class: "label", text: "Running now" })),
-        state.running.flatMap((run) => [
-          el(
-            "div",
-            { class: "running-row" },
-            el("span", { class: "pulse", "aria-hidden": "true" }),
-            el("span", { class: "name", text: run.setup_name }),
-            el("span", { class: "since", text: `${run.app ? "Running in the Codex app" : "Running"} since ${run.since}` }),
-            el("span", { class: "grow" }),
-            el("button", { key: `stop-${run.launch_id}`, onclick: () => stopLaunch(run), text: "Stop" }),
-          ),
-          run.app ? appPanel(run) : null,
-        ]),
-      ),
-    );
+// Start a setup now: no summary, no question. What stops it shows on its card.
+async function startSetup(id, extra = {}) {
+  notice("");
+  cards.set(id, { phase: "starting", since: Date.now() });
+  pending = null;
+  redraw();
+  try {
+    await api("POST", `/api/setups/${encodeURIComponent(id)}/start`, extra);
+    cards.set(id, { phase: "starting", since: Date.now() });
+  } catch (error) {
+    if (error.field === "key") {
+      pending = { id, extra };
+      cards.set(id, { phase: "key" });
+      redraw();
+      showKeyPanel({ required: !state?.key.saved });
+      return;
+    }
+    if (error.field === "docker" && state?.docker.can_open) {
+      // Docker Desktop is closed: open it, and start once it's running.
+      pending = { id, extra };
+      cards.set(id, { phase: "docker", since: Date.now() });
+      api("POST", "/api/docker/open").catch((e) => cards.set(id, { phase: "failed", text: e.message }));
+    } else if (error.field === "ssh_include") {
+      cards.set(id, { phase: "include" });
+    } else if (error.field === "moved") {
+      cards.delete(id); // the card shows the moved folders and its own Start
+    } else {
+      cards.set(id, { phase: "failed", text: error.message });
+    }
   }
-  if (!state.setups.length) {
-    parts.push(firstRun());
-  } else {
-    const head = el(
-      "div",
-      { class: "block-head" },
-      el("h2", { class: "label", text: "Your setups" }),
-      el("button", { class: "primary", key: "new", onclick: () => showForm(null), text: "New setup" }),
-    );
-    parts.push(el("section", { class: "block", "aria-label": "Setups" }, head, el("div", { class: "cards" }, state.setups.map(card))));
-  }
-  render(...parts);
+  await refresh();
 }
 
-// The first time: what's needed, in order.
-function firstRun() {
-  const docker = state.docker;
-  const step = (done, title, detail, action) =>
-    el(
-      "li",
-      { class: done ? "done" : "" },
-      el("span", { class: "tick", "aria-hidden": "true", text: done ? "✓" : "" }),
-      el("span", { class: "step" }, el("strong", { text: title }), el("span", { class: "help", text: done ? "Done." : detail })),
-      done ? null : action,
-    );
-  return el(
-    "section",
-    { class: "block", "aria-label": "Getting started" },
-    el("h2", { text: "Getting started" }),
-    el("p", { class: "muted", text: "Three things, then Codex opens (in a terminal window, or the Codex app) whenever you start a setup." }),
-    el(
-      "ol",
-      { class: "checklist" },
-      step(
-        state.key.saved,
-        "Add your Toolkit key",
-        "It's kept in this computer's keychain and never goes into the sandbox.",
-        el("button", { key: "first-key", onclick: openKeyDialog, text: "Add key…" }),
-      ),
-      step(
-        docker.state === "ready",
-        "Docker Desktop running",
-        docker.words,
-        docker.can_open
-          ? el("button", { key: "first-docker", onclick: openDocker, text: "Open Docker Desktop" })
-          : docker.can_fix
-            ? el("button", { key: "first-fix", onclick: fixDocker, text: "Fix it…" })
-            : null,
-      ),
-      step(
-        false,
-        "Make your first setup",
-        "Which folders Codex can use, and whether it can reach the internet.",
-        el("button", { class: "primary", key: "new", onclick: () => showForm(null), text: "New setup" }),
-      ),
-    ),
-  );
-}
-
-// A launch in the Codex app: connected or not, the first-time steps, and
-// the plain lines about where chats run.
-const shownSteps = new Set(); // launch ids whose steps were opened by hand
-
-function appPanel(run) {
-  const app = run.app;
-  const copy = {
-    "already-open": "UM-Codex's Codex window was already open: switch to it (a second ChatGPT icon in the Dock).",
-    failed: "UM-Codex's Codex window couldn't be opened. Stop, then Start again.",
-  }[app.copy];
-  let head;
-  if (app.connected) {
-    head = el("p", { class: "connected", role: "status" }, el("span", { class: "tick", "aria-hidden": "true", text: "✓ " }), `Connected: the Codex app is working in the sandbox (${app.alias}).`);
-  } else if (app.seeded) {
-    head = el("p", { role: "status", text: `UM-Codex's Codex window opens on this setup's project, connected to ${app.alias}. Waiting for it to connect…` });
-  } else if (app.first_time) {
-    head = el("p", { class: "strong", role: "status", text: "The first time for this setup, in UM-Codex's Codex window:" });
-  } else {
-    head = el("p", { role: "status", text: `Waiting for the Codex app to reconnect to ${app.alias}…` });
-  }
-  const showSteps = !app.connected && (app.first_time || shownSteps.has(run.launch_id));
-  return el(
-    "div",
-    { class: "app-panel", "aria-label": `${run.setup_name} in the Codex app` },
-    head,
-    copy ? el("p", { class: "note", text: copy }) : null,
-    showSteps ? el("ol", { class: "steps" }, app.steps.map((step) => el("li", { text: step }))) : null,
-    !app.connected && !showSteps
-      ? el("button", {
-          class: "link",
-          key: `steps-${run.launch_id}`,
-          text: "It doesn't connect: show the steps",
-          onclick: () => {
-            shownSteps.add(run.launch_id);
-            renderList();
-          },
-        })
-      : null,
-    el("ul", { class: "app-notes" }, app.notes.map((line) => el("li", { text: line }))),
-  );
-}
-
-// The notice Start put up for a setup in the Codex app, replaced as its state changes.
-const appNotices = new Map(); // setup id -> the last state it was told ("starting" | "running" | "connected")
-
-function updateAppNotice(s, run) {
-  const said = appNotices.get(s.id);
-  if (!said || !run || !run.app) return;
-  const now = run.app.connected ? "connected" : "running";
-  if (now === said) return;
-  appNotices.set(s.id, now);
-  if (now === "connected") {
-    notice(`“${s.name}”: the Codex app is working in the sandbox (${run.app.alias}).`);
-    appNotices.delete(s.id);
-  } else {
-    notice(`“${s.name}” is running; UM-Codex's Codex window is opening. Waiting for it to connect…`);
-  }
-}
-
-function card(s) {
-  const run = runningOf(s.id);
-  if (run) starting.delete(s.id);
-  updateAppNotice(s, run);
-  const since = starting.get(s.id);
-  if (since && Date.now() - since > START_WAIT_MS) {
-    starting.delete(s.id);
-    notice(
-      s.open_in === "codex-app"
-        ? `“${s.name}” didn't start. Why is in UM-Codex's data folder, ui/app-launch.log.`
-        : `“${s.name}” didn't start. Its terminal window says why.`,
-      true,
-    );
-  }
-  let start;
+// What a card's one status line says now: Starting → Opening Codex → Connected.
+function statusOf(s, run) {
+  const mine = cards.get(s.id);
   if (run) {
-    start = el(
-      "span",
-      { class: "running-tag" },
-      el("span", { class: "pulse", "aria-hidden": "true" }),
-      run.app ? "Running in the Codex app · " : "Running · ",
-      el("button", { class: "link", key: `stop-card-${s.id}`, onclick: () => stopLaunch(run), text: "Stop" }),
-    );
-  } else if (starting.has(s.id)) {
-    start = el("button", { class: "primary", disabled: true, text: "Starting…" });
-  } else {
-    start = el("button", {
-      class: "primary",
-      key: `start-${s.id}`,
-      disabled: Boolean(s.problem),
-      onclick: (e) => showSummary(s, e.currentTarget),
-      text: "Start",
-    });
+    const app = run.app;
+    if (!app && s.open_in === "codex-app") return { text: "Opening Codex… preparing the sandbox for the Codex app.", live: true };
+    if (!app) return { text: `Running in Terminal since ${run.since}. Quit Codex there, or Stop here.`, live: true };
+    if (app.copy === "failed") return { text: "UM-Codex's Codex window couldn't be opened. Stop, then Start again.", bad: true, live: true };
+    if (app.connected) return { text: `Connected ✓ The Codex app is working in the sandbox (${app.alias}).`, ok: true, live: true };
+    if (app.copy === "already-open")
+      return { text: "Opening Codex… UM-Codex's Codex window was already open: switch to it (a second ChatGPT icon in the Dock).", live: true };
+    return { text: app.seeded || !app.first_time ? "Opening Codex… waiting for the Codex app to connect." : "Opening Codex… the first time needs a few steps (below).", live: true };
   }
-  return el(
-    "article",
-    { class: "card", "aria-label": s.name },
-    el(
-      "div",
-      { class: "card-head" },
-      el("h3", { text: s.name }),
-      el("span", { class: "opens", text: `Opens in ${openerLabel(s.open_in)}` }),
-    ),
-    el(
-      "div",
-      { class: "working" },
-      el("span", { class: "label", text: "Working folder (read & write)" }),
-      pathView(s.working, { key: `copy-${s.id}` }),
-    ),
-    s.folders.length
-      ? el("div", {}, el("span", { class: "label", text: "More folders" }), el("div", { class: "chips" }, s.folders.map((f) => chip(f))))
-      : null,
-    el("p", { class: "facts" }, [...internetWords(s), approvalsWords(s), s.model].map((w) => el("span", { text: w }))),
-    s.problem ? el("p", { class: "problem", text: `Can't start as it is: ${s.problem}` }) : null,
-    el(
-      "div",
-      { class: "actions" },
-      start,
-      el("button", { key: `edit-${s.id}`, onclick: () => showForm(s), text: "Edit" }),
-      el("button", { class: "quiet", key: `dup-${s.id}`, onclick: () => duplicate(s), text: "Duplicate" }),
-      el("button", { class: "quiet danger", key: `del-${s.id}`, onclick: () => remove(s), text: "Delete" }),
-    ),
-  );
+  if (!mine) return null;
+  if (mine.phase === "starting") return { text: "Starting…", busy: true };
+  if (mine.phase === "docker") return { text: "Opening Docker Desktop… Codex starts as soon as it's running.", busy: true };
+  if (mine.phase === "key") return { text: "Add your Toolkit key (above); then it starts.", bad: true };
+  if (mine.phase === "failed") return { text: mine.text, bad: true };
+  return null;
+}
+
+// Starts that waited too long, and Starts waiting for Docker that's ready now.
+function checkPending() {
+  for (const [id, mine] of cards) {
+    const run = runningOf(id);
+    if (run && mine.phase === "starting") cards.delete(id);
+    else if (mine.phase === "starting" && Date.now() - mine.since > START_WAIT_MS) {
+      const s = setupOf(id);
+      cards.set(id, {
+        phase: "failed",
+        text:
+          s?.open_in === "codex-app"
+            ? "It didn't start. Why is in UM-Codex's data folder, ui/app-launch.log."
+            : "It didn't start. Its terminal window says why.",
+      });
+    } else if (mine.phase === "docker") {
+      if (state.docker.state === "ready" && pending?.id === id) startSetup(id, pending.extra);
+      else if (Date.now() - mine.since > DOCKER_WAIT_MS)
+        cards.set(id, { phase: "failed", text: "Docker Desktop didn't start. Open it yourself, then Start again." });
+    }
+  }
 }
 
 async function stopLaunch(run) {
@@ -507,17 +498,334 @@ async function stopLaunch(run) {
   if (!ok) return;
   try {
     await api("POST", `/api/launches/${encodeURIComponent(run.launch_id)}/stop`);
-    notice(`Stopped “${run.setup_name}”.`);
   } catch (error) {
     notice(error.message, true);
   }
   refresh();
 }
 
+// ---------------------------------------------------------------- home
+
+function redraw() {
+  if (!state) return;
+  if (view.name === "home") renderHome();
+}
+
+function renderHome() {
+  const parts = [];
+  if (!state.setups.length) parts.push(firstRun());
+  else {
+    parts.push(lastHero());
+    parts.push(
+      el(
+        "section",
+        { class: "block", "aria-label": "Your setups" },
+        el(
+          "div",
+          { class: "block-head" },
+          el("h2", { class: "label", text: "Your setups" }),
+          el(
+            "span",
+            { class: "head-actions" },
+            el("button", { key: "another", onclick: quickStart, "aria-describedby": "another-help", text: "Choose another folder…" }),
+            el("button", { class: "quiet", key: "new", onclick: () => showForm(null), text: "New setup with options…" }),
+          ),
+        ),
+        el("p", { class: "help", id: "another-help", text: `Choose another folder: it starts at once, as the first one did. ${WORDS.writes} Internet on.` }),
+        el("div", { class: "cards" }, state.setups.map(card)),
+      ),
+    );
+  }
+  const loose = state.running.filter((run) => !setupOf(run.setup_id));
+  if (loose.length) {
+    parts.push(
+      el(
+        "section",
+        { class: "block", "aria-label": "Also running" },
+        el("h2", { class: "label", text: "Also running" }),
+        loose.map((run) =>
+          el(
+            "p",
+            { class: "running-row" },
+            el("span", { class: "pulse", "aria-hidden": "true" }),
+            `${run.setup_name} · since ${run.since} `,
+            el("button", { class: "link", key: `stop-${run.launch_id}`, onclick: () => stopLaunch(run), text: "Stop" }),
+          ),
+        ),
+      ),
+    );
+  }
+  render(...parts);
+}
+
+// The first time: one button. The folder chosen, Codex starts with the defaults.
+function firstRun() {
+  const where = state.default_open_in === "codex-app" ? "the Codex app" : "a Terminal window";
+  return el(
+    "section",
+    { class: "hero", "aria-label": "Start" },
+    el("h2", { text: "Work with Codex in a folder" }),
+    el("button", {
+      class: "primary big",
+      key: "choose",
+      onclick: quickStart,
+      "aria-describedby": "quick-help",
+      text: "Choose a folder and start…",
+    }),
+    hero ? el("p", { class: hero.bad ? "message" : "help", text: hero.text }) : null,
+    el(
+      "div",
+      { class: "help", id: "quick-help" },
+      el("p", { text: `Codex starts in ${where}, working in the folder you choose. ${WORDS.writes}` }),
+      el("p", { text: `${WORDS.internetOn} Change any of it later with Edit.` }),
+    ),
+    el("button", { class: "link", key: "options", onclick: () => showForm(null), text: "Choose options first…" }),
+  );
+}
+
+// Returning: the last setup used, one click away (while it runs, its status).
+function lastHero() {
+  const s = setupOf(state.last_used) || state.setups[0];
+  const run = runningOf(s.id);
+  const status = statusOf(s, run);
+  const blocked = Boolean(s.problem) || s.moved.length > 0;
+  return el(
+    "section",
+    { class: "hero", "aria-label": "Start the last setup" },
+    run
+      ? el(
+          "p",
+          { class: `hero-status${status?.ok ? " ok" : ""}` },
+          el("span", { class: "pulse", "aria-hidden": "true" }),
+          el("strong", { text: `“${s.name}”: ` }),
+          status?.text || "Running.",
+        )
+      : el("button", {
+          class: "primary big",
+          key: "start-last",
+          disabled: blocked || Boolean(status?.busy),
+          onclick: () => startSetup(s.id, needsInclude(s) ? { allow_ssh_include: true } : {}),
+          text: status?.busy ? `Starting “${s.name}”…` : needsInclude(s) ? `Add the line and start “${s.name}”` : `Start “${s.name}”`,
+        }),
+    el("p", { class: "help hero-line" }, pathView(s.working, { copy: false }), el("span", { text: ` · ${codexLine(s)}` })),
+    !run && blocked ? el("p", { class: "note", text: "It needs a look on its card below first." }) : null,
+    !run && !blocked && needsInclude(s) ? el("p", { class: "help", text: INCLUDE_REASON }) : null,
+  );
+}
+
+const INCLUDE_REASON =
+  "The Codex app reaches the sandbox through your ssh settings: this adds one line at the top of " +
+  "~/.ssh/config (Include ~/.ssh/um-codex/config), backed up first; uninstalling takes it out.";
+
+function needsInclude(s) {
+  return s.open_in === "codex-app" && !state.ssh_include;
+}
+
+// The card's own Start: the ssh line, when it's missing, is part of it (the
+// explanation is right there on the card).
+function startOrAsk(s) {
+  if (needsInclude(s)) {
+    cards.set(s.id, { phase: "include" });
+    redraw();
+    focusKey(`allow-${s.id}`);
+    return;
+  }
+  startSetup(s.id);
+}
+
+function card(s) {
+  const run = runningOf(s.id);
+  const status = statusOf(s, run);
+  // Screen readers hear a card's line when it changes, not every redraw.
+  if (status && said.get(s.id) !== status.text) announce(`${s.name}: ${status.text}`);
+  said.set(s.id, status?.text);
+  const head = renaming.has(s.id)
+    ? renameField(s)
+    : el(
+        "div",
+        { class: "card-title" },
+        el("h3", { text: s.name }),
+        el("button", { class: "link small", key: `rename-${s.id}`, "aria-label": `Rename ${s.name}`, text: "Rename", onclick: () => startRename(s) }),
+      );
+  let start;
+  if (run) {
+    start = el("button", { key: `stop-card-${s.id}`, onclick: () => stopLaunch(run), text: "Stop" });
+  } else if (s.moved.length) {
+    start = el("button", {
+      class: "primary",
+      key: `start-moved-${s.id}`,
+      // The places shown on the card: if a folder moved again since, the server refuses.
+      onclick: () => startSetup(s.id, { confirm_moved: s.moved.map((m) => m.now) }),
+      text: "Use them where they go now, and start",
+    });
+  } else if (needsInclude(s)) {
+    start = el("button", {
+      class: "primary",
+      key: `allow-${s.id}`,
+      disabled: Boolean(s.problem) || Boolean(status?.busy),
+      onclick: () => startSetup(s.id, { allow_ssh_include: true }),
+      text: "Add the line and start",
+    });
+  } else {
+    start = el("button", {
+      class: "primary",
+      key: `start-${s.id}`,
+      disabled: Boolean(s.problem) || Boolean(status?.busy),
+      onclick: () => startSetup(s.id),
+      text: status?.busy ? "Starting…" : "Start",
+    });
+  }
+  return el(
+    "article",
+    { class: run ? "card live" : "card", "aria-label": s.name },
+    head,
+    status
+      ? el(
+          "p",
+          { class: `status-line${status.bad ? " bad" : ""}${status.ok ? " ok" : ""}` },
+          status.live ? el("span", { class: "pulse", "aria-hidden": "true" }) : null,
+          status.text,
+        )
+      : null,
+    run?.app ? appDetails(run) : null,
+    s.problem ? el("p", { class: "problem", text: `Can't start as it is: ${s.problem} Edit it to change that.` }) : null,
+    (warned.get(s.id) || []).map((w) => el("p", { class: "note", text: w })),
+    s.moved.length ? movedBlock(s) : null,
+    !run && needsInclude(s) ? includeBlock(s) : null,
+    facts(s, { key: s.id }),
+    el(
+      "div",
+      { class: "actions" },
+      start,
+      el("button", { key: `edit-${s.id}`, onclick: () => showForm(s), text: "Edit" }),
+      el("button", { class: "quiet", key: `dup-${s.id}`, onclick: () => duplicate(s), text: "Duplicate" }),
+      el("button", { class: "quiet danger", key: `del-${s.id}`, onclick: () => remove(s), text: "Delete" }),
+    ),
+  );
+}
+
+// A saved folder that now leads somewhere else: a real risk, so Start needs
+// a deliberate click on the card (no pop-up).
+function movedBlock(s) {
+  return el(
+    "div",
+    { class: "warning", role: "alert" },
+    el("p", { class: "strong", text: "A saved folder now leads somewhere else (a link was put in its path):" }),
+    s.moved.map((m) => el("p", { class: "path" }, `${shortHome(m.saved)} → now ${shortHome(m.now)}`)),
+    el("p", {
+      class: "help",
+      text: "Something (an earlier launch, a sync, an unpacked archive) replaced part of the path with a link. Check that's what you want, or Edit the setup.",
+    }),
+  );
+}
+
+// The Codex app's one line in ~/.ssh/config, when the installer didn't add it.
+function includeBlock(s) {
+  const asked = cards.get(s.id)?.phase === "include";
+  return el(
+    "div",
+    { class: asked ? "warning" : "inline-note" },
+    el("p", {
+      text:
+        "The Codex app reaches the sandbox through your ssh settings: Start adds one line at the top of " +
+        "~/.ssh/config (Include ~/.ssh/um-codex/config). Your file is backed up first, nothing else in it " +
+        "changes, and uninstalling UM-Codex takes it out.",
+    }),
+    el("button", { class: "link", key: `terminal-${s.id}`, onclick: () => useTerminal(s), text: "Open in Terminal instead" }),
+  );
+}
+
+async function useTerminal(s) {
+  try {
+    await api("PUT", `/api/setups/${encodeURIComponent(s.id)}`, { ...bodyOf(s), open_in: "terminal" });
+    cards.delete(s.id);
+  } catch (error) {
+    cards.set(s.id, { phase: "failed", text: error.message });
+  }
+  refresh();
+}
+
+// A launch in the Codex app: the first-time steps when UM-Codex couldn't
+// set the copy up itself, and the plain lines about where chats run.
+function appDetails(run) {
+  const app = run.app;
+  const showSteps = !app.connected && ((app.first_time && !app.seeded) || shownSteps.has(run.launch_id));
+  return el(
+    "div",
+    { class: "app-panel" },
+    showSteps ? el("ol", { class: "steps" }, app.steps.map((step) => el("li", { text: step }))) : null,
+    !app.connected && !showSteps
+      ? el("button", {
+          class: "link small",
+          key: `steps-${run.launch_id}`,
+          text: "It doesn't connect: show the steps",
+          onclick: () => {
+            shownSteps.add(run.launch_id);
+            redraw();
+          },
+        })
+      : null,
+    el(
+      "details",
+      { class: "app-notes-block" },
+      el("summary", { text: `Use chats that show Remote · ${app.alias}; local chats are blocked.` }),
+      el("ul", { class: "app-notes" }, app.notes.map((line) => el("li", { text: line }))),
+    ),
+  );
+}
+
+function startRename(s) {
+  renaming.set(s.id, s.name);
+  redraw();
+  const field = document.querySelector(`#main [data-key="name-${CSS.escape(s.id)}"]`);
+  field?.focus();
+  field?.select();
+}
+
+function endRename(s) {
+  renaming.delete(s.id);
+  redraw();
+  focusKey(`rename-${s.id}`);
+}
+
+function renameField(s) {
+  const message = el("span", { class: "message", role: "alert", hidden: true });
+  const save = async (event) => {
+    event.preventDefault();
+    try {
+      await api("POST", `/api/setups/${encodeURIComponent(s.id)}/rename`, { name: renaming.get(s.id) });
+      renaming.delete(s.id);
+      await refresh();
+      focusKey(`rename-${s.id}`);
+    } catch (error) {
+      message.textContent = error.message;
+      message.hidden = false;
+    }
+  };
+  return el(
+    "form",
+    { class: "card-title rename", onsubmit: save },
+    el("input", {
+      type: "text",
+      name: "name",
+      key: `name-${s.id}`,
+      value: renaming.get(s.id),
+      maxlength: "80",
+      "aria-label": "Setup name",
+      oninput: (e) => renaming.set(s.id, e.target.value),
+      onkeydown: (e) => {
+        if (e.key === "Escape") endRename(s);
+      },
+    }),
+    el("button", { type: "submit", class: "primary", text: "Save" }),
+    el("button", { type: "button", text: "Cancel", onclick: () => endRename(s) }),
+    message,
+  );
+}
+
 async function duplicate(s) {
   try {
-    const copy = await api("POST", `/api/setups/${encodeURIComponent(s.id)}/duplicate`);
-    notice(`Made “${copy.name}”.`);
+    await api("POST", `/api/setups/${encodeURIComponent(s.id)}/duplicate`);
   } catch (error) {
     notice(error.message, true);
   }
@@ -533,24 +841,75 @@ async function remove(s) {
   if (!ok) return;
   try {
     await api("DELETE", `/api/setups/${encodeURIComponent(s.id)}`);
-    notice(`Deleted “${s.name}”.`);
   } catch (error) {
     notice(error.message, true);
   }
   refresh();
 }
 
+async function pickFolder(start) {
+  try {
+    const chosen = await api("POST", "/api/folders/pick", start ? { start } : {});
+    return chosen.cancelled ? null : chosen;
+  } catch (error) {
+    return { error: error.message };
+  }
+}
+
+// "Choose a folder and start": the computer's own folder picker, then a
+// setup with the defaults (named after the folder), started at once.
+async function quickStart() {
+  notice("");
+  hero = { text: "Choose the folder in the window that opened (it may be behind this one)." };
+  redraw();
+  const chosen = await pickFolder();
+  hero = null;
+  if (!chosen) return redraw();
+  if (chosen.error) {
+    hero = { text: chosen.error, bad: true };
+    if (state.setups.length) notice(chosen.error, true);
+    return redraw();
+  }
+  let made;
+  try {
+    made = await api("POST", "/api/setups", { working: chosen.path });
+  } catch (error) {
+    hero = { text: error.message, bad: true };
+    if (state.setups.length) notice(error.message, true);
+    return redraw();
+  }
+  if (chosen.warnings?.length) warned.set(made.id, chosen.warnings);
+  await refresh();
+  startOrAsk(made);
+}
+
 // ---------------------------------------------------------------- the form
 
 // Each field's control, for focusing the first problem (in the form's order).
 const FIELD_CONTROLS = {
+  moved: "confirm-moved",
   working: "pick-working",
-  name: "name",
   folders: "pick-more",
-  approvals: "ask",
   model: "model",
   open_in: "open-terminal",
+  name: "name",
+  approvals: "ask",
 };
+
+// A saved setup as the API takes it back (an edit sends every field).
+function bodyOf(s) {
+  return {
+    name: s.name,
+    working: s.working?.path || "",
+    folders: (s.folders || []).map((f) => ({ path: f.path, write: Boolean(f.write) })),
+    internet: Boolean(s.internet),
+    browser: Boolean(s.internet && s.browser),
+    browser_asks: s.browser_asks !== false,
+    approvals: s.approvals,
+    model: s.model,
+    open_in: s.open_in,
+  };
+}
 
 function showForm(existing) {
   notice("");
@@ -561,16 +920,16 @@ function showForm(existing) {
         name: "",
         working: null,
         folders: [],
-        internet: false,
+        internet: true,
         browser: false,
         browser_asks: true,
         approvals: "never",
         model: null,
-        open_in: "terminal",
+        open_in: state?.default_open_in || "terminal",
       };
-  view = { name: "form", draft, errors: {}, nameTouched: Boolean(existing) };
+  view = { name: "form", draft, errors: {}, more: Boolean(existing && existing.approvals !== "never") };
   renderForm();
-  document.querySelector('#main [data-key="pick-working"]')?.focus();
+  focusKey(existing ? "pick-working" : "pick-working");
   loadModels();
 }
 
@@ -584,17 +943,9 @@ async function loadModels() {
   if (view.name === "form") renderForm();
 }
 
-async function pickFolder(start) {
-  try {
-    const chosen = await api("POST", "/api/folders/pick", start ? { start } : {});
-    return chosen.cancelled ? null : chosen;
-  } catch (error) {
-    return { error: error.message };
-  }
-}
-
 function renderForm() {
   const { draft, errors } = view;
+  const running = Boolean(draft.id && state?.running.some((run) => run.setup_id === draft.id));
   const errorId = (field) => (errors[field] ? `err-${field}` : null);
   const describe = (...ids) => ids.filter(Boolean).join(" ") || null;
   const error = (field) => (errors[field] ? el("p", { class: "message", id: `err-${field}`, text: errors[field] }) : null);
@@ -603,13 +954,9 @@ function renderForm() {
       "label",
       { class: `switch ${extraClass || ""}` },
       el("input", { type: "checkbox", role: "switch", key, checked, onchange, "aria-describedby": help ? `help-${key}` : null }),
-      el(
-        "span",
-        { class: "text" },
-        el("strong", { text: label }),
-        help ? el("span", { class: "help", id: `help-${key}`, text: help }) : null,
-      ),
+      el("span", { class: "text" }, el("strong", { text: label }), help ? el("span", { class: "help", id: `help-${key}`, text: help }) : null),
     );
+  const section = (title, ...children) => el("fieldset", { class: "section" }, el("legend", { text: title }), ...children);
 
   const chooseWorking = async () => {
     const chosen = await pickFolder(draft.working?.path);
@@ -618,33 +965,26 @@ function renderForm() {
     else {
       delete errors.working;
       draft.working = chosen;
-      if (!view.nameTouched || !draft.name) draft.name = splitPath(chosen.shown).name;
     }
     renderForm();
   };
 
   const working = el(
-    "fieldset",
+    "div",
     { class: "field" },
-    el("legend", { class: "label", text: "Working folder" }),
+    el("span", { class: "label", id: "label-working", text: "Working folder" }),
     draft.working
       ? el(
           "div",
           { class: "folder-line" },
           pathView(draft.working, { key: "copy-working" }),
-          el("button", {
-            type: "button",
-            key: "pick-working",
-            text: "Change…",
-            "aria-describedby": describe("help-working", errorId("working")),
-            onclick: chooseWorking,
-          }),
+          el("button", { type: "button", key: "pick-working", text: "Change…", "aria-describedby": describe("help-working", errorId("working")), onclick: chooseWorking }),
         )
       : el("button", {
           type: "button",
-          class: "primary big",
+          class: "primary",
           key: "pick-working",
-          text: "Choose working folder…",
+          text: "Choose folder…",
           "aria-describedby": describe("help-working", errorId("working")),
           "aria-invalid": errors.working ? "true" : null,
           onclick: chooseWorking,
@@ -654,30 +994,10 @@ function renderForm() {
     error("working"),
   );
 
-  const nameField = el(
+  const more = el(
     "div",
     { class: "field" },
-    el("label", { class: "label", for: "setup-name", text: "Name" }),
-    el("input", {
-      type: "text",
-      id: "setup-name",
-      key: "name",
-      value: draft.name,
-      maxlength: "80",
-      "aria-invalid": errors.name ? "true" : null,
-      "aria-describedby": errorId("name"),
-      oninput: (e) => {
-        draft.name = e.target.value;
-        view.nameTouched = true;
-      },
-    }),
-    error("name"),
-  );
-
-  const more = el(
-    "fieldset",
-    { class: "field" },
-    el("legend", { class: "label", text: "More folders" }),
+    el("span", { class: "label", text: "More folders" }),
     el(
       "div",
       { class: "chips" },
@@ -699,12 +1019,7 @@ function renderForm() {
           el(
             "span",
             { class: "controls" },
-            el(
-              "span",
-              { class: "segmented", role: "group", "aria-label": `Access to ${name}` },
-              access(false, "Read only"),
-              access(true, "Read & write"),
-            ),
+            el("span", { class: "segmented", role: "group", "aria-label": `Access to ${name}` }, access(false, "Read only"), access(true, "Read & write")),
             el("button", {
               type: "button",
               class: "remove",
@@ -714,7 +1029,7 @@ function renderForm() {
               onclick: () => {
                 draft.folders.splice(index, 1);
                 renderForm();
-                document.querySelector('#main [data-key="pick-more"]')?.focus();
+                focusKey("pick-more");
               },
             }),
           ),
@@ -724,7 +1039,7 @@ function renderForm() {
     el("button", {
       type: "button",
       key: "pick-more",
-      text: "Choose folder…",
+      text: "Add a folder…",
       "aria-describedby": describe("help-more", errorId("folders")),
       onclick: async () => {
         const chosen = await pickFolder();
@@ -737,26 +1052,23 @@ function renderForm() {
         renderForm();
       },
     }),
-    el("span", {
-      class: "help",
-      id: "help-more",
-      text: "Optional. Read only: Codex can look but not change. Read & write: Codex can change and delete files there too.",
-    }),
+    el("span", { class: "help", id: "help-more", text: "Optional. Read only: Codex can look but not change. Read & write: it can change and delete there too." }),
     draft.folders.flatMap((f) => f.warnings || []).map((w) => el("p", { class: "note", text: w })),
     error("folders"),
   );
 
+  // Newest release first (the server sorts); the setup's own model stays selected.
   const modelList = models ? [...models.models] : [];
   const currentModel = draft.model || models?.default || "gpt-5.6-terra";
   if (!modelList.includes(currentModel)) modelList.unshift(currentModel);
   draft.model = currentModel;
   const modelField = el(
     "div",
-    { class: "field" },
+    { class: "field inline" },
     el("label", { class: "label", for: "setup-model", text: "Model" }),
     el(
       "select",
-      { id: "setup-model", key: "model", "aria-describedby": errorId("model"), onchange: (e) => (draft.model = e.target.value) },
+      { id: "setup-model", key: "model", "aria-describedby": errorId("model"), onchange: (e) => ((draft.model = e.target.value), renderSummary()) },
       modelList.map((m) => el("option", { value: m, selected: m === currentModel, text: m })),
     ),
     error("model"),
@@ -783,25 +1095,55 @@ function renderForm() {
     ),
   );
 
+  const nameField = el(
+    "div",
+    { class: "field" },
+    el("label", { class: "label", for: "setup-name", text: "Name" }),
+    el("input", {
+      type: "text",
+      id: "setup-name",
+      key: "name",
+      value: draft.name,
+      maxlength: "80",
+      placeholder: draft.working ? splitPath(draft.working.shown).name : "The working folder's name",
+      "aria-invalid": errors.name ? "true" : null,
+      "aria-describedby": describe("help-name", errorId("name")),
+      oninput: (e) => (draft.name = e.target.value),
+    }),
+    el("span", { class: "help", id: "help-name", text: "Shown on its card and as its project in the Codex app. Empty: the working folder's name." }),
+    error("name"),
+  );
+
+  const moreOptions = el(
+    "details",
+    { class: "more-options", open: view.more || errors.name || errors.approvals ? true : null, ontoggle: (e) => (view.more = e.target.open) },
+    el("summary", { text: "More options" }),
+    switchRow(
+      "ask",
+      "Ask before commands",
+      "Off (recommended): Codex runs commands without asking; the sandbox is what keeps it in.",
+      draft.approvals === "on-request",
+      (e) => ((draft.approvals = e.target.checked ? "on-request" : "never"), renderSummary()),
+    ),
+    error("approvals"),
+    nameField,
+    // M4 adds "Where Codex runs: In the sandbox / On this computer" here.
+  );
+
   const form = el(
     "form",
-    { class: "setup", onsubmit: saveForm, novalidate: true },
+    { class: "setup", onsubmit: (e) => saveForm(e, !running), novalidate: true },
     el("h2", { text: draft.id ? `Edit “${draft.name}”` : "New setup" }),
-    el("p", { class: "muted", text: "What Codex can see and do when it starts. You can change this later." }),
-    working,
-    nameField,
-    more,
-    el(
-      "fieldset",
-      { class: "field" },
-      el("legend", { class: "label", text: "Internet and approvals" }),
-      switchRow("internet", "Internet", "Off: Codex can reach only the model. On: the whole internet.", draft.internet, (e) => {
+    section("Folder", working, more),
+    section(
+      "Access",
+      switchRow("internet", "Internet", "On: the whole internet. Off: Codex can reach only the model.", draft.internet, (e) => {
         draft.internet = e.target.checked;
         if (!draft.internet) draft.browser = false;
         renderForm();
       }),
       draft.internet
-        ? switchRow("browser", "Browser tool", BROWSER_PLAIN, draft.browser, (e) => {
+        ? switchRow("browser", "Browser tool", "A fresh browser inside the sandbox; it has none of your logins.", draft.browser, (e) => {
             draft.browser = e.target.checked;
             renderForm();
           }, "indent")
@@ -812,261 +1154,98 @@ function renderForm() {
             "Approve each browser action",
             "Opening pages, clicking, typing. Reading a page doesn't ask.",
             draft.browser_asks,
-            (e) => (draft.browser_asks = e.target.checked),
+            (e) => ((draft.browser_asks = e.target.checked), renderSummary()),
             "indent",
           )
         : null,
-      switchRow(
-        "ask",
-        "Ask me before commands",
-        "Off (recommended): Codex runs commands without asking; the sandbox is what keeps it in.",
-        draft.approvals === "on-request",
-        (e) => (draft.approvals = e.target.checked ? "on-request" : "never"),
+    ),
+    section(
+      "Codex",
+      modelField,
+      el(
+        "div",
+        { class: "field" },
+        el("span", { class: "label", text: "Open in" }),
+        el("div", { class: "radios" }, openers),
+        draft.open_in === "codex-app"
+          ? el("span", { class: "help", text: "Codex's desktop app, in a separate copy with UM-Codex's own settings; the work happens in the sandbox." })
+          : null,
+        error("open_in"),
       ),
-      error("approvals"),
+      moreOptions,
     ),
-    modelField,
-    el(
-      "fieldset",
-      { class: "field" },
-      el("legend", { class: "label", text: "Open in" }),
-      el("div", { class: "radios" }, openers),
-      draft.open_in === "codex-app"
-        ? el("span", {
-            class: "help",
-            text: "Codex's desktop app, in a separate copy with UM-Codex's own settings; the work happens in the sandbox.",
-          })
-        : null,
-      error("open_in"),
-    ),
+    el("div", { class: "form-summary", id: "form-summary" }),
+    errors.moved ? movedInForm(draft, errors.moved) : null,
     errors.general ? el("p", { class: "message", role: "alert", text: errors.general }) : null,
+    running ? el("p", { class: "note", text: "It's running now: changes apply the next time it starts." }) : null,
     el(
       "div",
       { class: "actions" },
-      el("button", { type: "submit", class: "primary", key: "save", text: "Save" }),
-      el("button", { type: "button", key: "cancel", onclick: backToList, text: "Cancel" }),
+      running
+        ? el("button", { type: "button", class: "primary", key: "save", onclick: (e) => saveForm(e, false), text: "Save" })
+        : [
+            el("button", { type: "submit", class: "primary", key: "save-start", text: "Save and start" }),
+            el("button", { type: "button", key: "save", onclick: (e) => saveForm(e, false), text: "Save" }),
+          ],
+      el("button", { type: "button", key: "cancel", onclick: backHome, text: "Cancel" }),
     ),
   );
   render(form);
+  renderSummary();
 }
 
-async function saveForm(event) {
+// Under the form: what Codex gets with it, as the card will show it.
+function renderSummary() {
+  const box = document.getElementById("form-summary");
+  if (!box) return;
+  box.replaceChildren(el("h3", { class: "label", text: "What Codex gets" }), facts(view.draft, { key: "form" }), el("p", { class: "help", text: WORDS.key }));
+}
+
+// Saving a setup whose saved folder now leads somewhere else needs the same
+// confirmation as Start: both places, and a deliberate click.
+function movedInForm(draft, message) {
+  return el(
+    "div",
+    { class: "warning", role: "alert" },
+    el("p", { class: "strong", text: message }),
+    (draft.moved || []).map((m) => el("p", { class: "path" }, `${shortHome(m.saved)} → now ${shortHome(m.now)}`)),
+    el("button", {
+      type: "button",
+      key: "confirm-moved",
+      onclick: (e) => saveForm(e, false, { confirm_moved: (draft.moved || []).map((m) => m.now) }),
+      text: "Use them where they go now, and save",
+    }),
+  );
+}
+
+async function saveForm(event, andStart, extra = {}) {
   event.preventDefault();
   const { draft } = view;
-  const body = {
-    name: draft.name,
-    working: draft.working?.path || "",
-    folders: draft.folders.map((f) => ({ path: f.path, write: Boolean(f.write) })),
-    internet: draft.internet,
-    browser: draft.internet && draft.browser,
-    browser_asks: draft.browser_asks,
-    approvals: draft.approvals,
-    model: draft.model,
-    open_in: draft.open_in,
-  };
+  const body = { ...bodyOf(draft), name: draft.name, ...extra };
   try {
     const saved = draft.id
       ? await api("PUT", `/api/setups/${encodeURIComponent(draft.id)}`, body)
       : await api("POST", "/api/setups", body);
-    notice(`Saved “${saved.name}”.`);
-    backToList();
+    view = { name: "home" };
+    await refresh();
+    if (andStart) startOrAsk(saved);
   } catch (error) {
+    if (error.field === "moved" && draft.id) {
+      await refresh(); // where the folders lead now, to show (and confirm) exactly that
+      draft.moved = setupOf(draft.id)?.moved || [];
+    }
     // Every problem at once, in the form's order; the first one gets the focus.
     view.errors = Object.keys(error.errors).length ? { ...error.errors } : { general: error.message };
+    if (view.errors.name || view.errors.approvals) view.more = true;
     renderForm();
     const first = Object.keys(view.errors).find((field) => FIELD_CONTROLS[field]);
-    if (first) document.querySelector(`#main [data-key="${FIELD_CONTROLS[first]}"]`)?.focus();
+    if (first) focusKey(FIELD_CONTROLS[first]);
   }
 }
 
-function backToList() {
-  view = { name: "list" };
+function backHome() {
+  view = { name: "home" };
   refresh();
-}
-
-// ---------------------------------------------------------------- before a start
-
-async function showSummary(s, button) {
-  notice("");
-  if (button) button.disabled = true;
-  try {
-    const prepared = await api("POST", `/api/setups/${encodeURIComponent(s.id)}/prepare`);
-    view = { name: "summary", setup: s, prepared, confirmed: false, busy: false };
-    renderSummary();
-    document.querySelector('#main [data-key="go"]:not([disabled]), #main [data-key="back"]')?.focus();
-  } catch (error) {
-    notice(error.message, true);
-    if (button) button.disabled = false;
-  }
-}
-
-function shortHome(path) {
-  const home = state?.home;
-  if (!home) return path;
-  return path === home || path.startsWith(home + "/") || path.startsWith(home + "\\") ? "~" + path.slice(home.length) : path;
-}
-
-// A summary folder line, "  <folder>   (<where in the sandbox>)", as
-// "/work ← <short path>".
-function folderLine(line) {
-  const at = line.lastIndexOf("   (");
-  const path = line.slice(0, at).trim();
-  const where = line.slice(at + 4, -1).split(", ").pop();
-  return el(
-    "div",
-    { class: "path-line" },
-    el("code", { class: "target", text: where }),
-    el("span", { class: "arrow", "aria-label": "is", text: " ← " }),
-    pathView({ path, shown: shortHome(path) }),
-  );
-}
-
-function summaryBlock(lines) {
-  // The terminal's summary lines (setups.summary): a folder line is
-  // "  <folder>   (<where in the sandbox>)"; other indented lines are notes;
-  // a plain line ending in "." or ":" ends its paragraph (the terminal wraps
-  // longer ones over several lines).
-  const block = el("div", { class: "summary" });
-  let paragraph = [];
-  const flush = () => {
-    if (paragraph.length) block.append(el("p", { text: paragraph.join(" ") }));
-    paragraph = [];
-  };
-  for (const line of lines) {
-    const text = line.trim();
-    if (!text || line.startsWith("Setup: ")) flush();
-    else if (line.startsWith("  ") && line.includes("   (") && line.endsWith(")")) {
-      flush();
-      block.append(folderLine(line));
-    } else if (line.startsWith("  ")) {
-      flush();
-      block.append(el("p", { class: text.startsWith("Note:") ? "note" : "muted", text }));
-    } else {
-      if (/^[A-Z][A-Za-z ]*: /.test(text)) flush(); // "Model: …", "Approvals: …" start their own
-      paragraph.push(text);
-      if (/[.:]$/.test(text)) flush();
-    }
-  }
-  flush();
-  return block;
-}
-
-function renderSummary() {
-  const { setup, prepared } = view;
-  const docker = state.docker;
-  const dockerReady = docker.state === "ready";
-  const needsConfirm = prepared.moved.length > 0;
-  const start = el("button", {
-    class: "primary",
-    key: "go",
-    onclick: startSetup,
-    text: view.busy ? "Starting…" : `Start in ${openerLabel(setup.open_in)}`,
-  });
-  start.disabled = view.busy || !dockerReady || (needsConfirm && !view.confirmed);
-  const dockerBox = dockerReady
-    ? null
-    : el(
-        "div",
-        { class: "warning", role: "status" },
-        el("p", { class: "strong", text: docker.state === "stopped" ? "Docker Desktop isn't running. Open it first." : docker.words }),
-        docker.can_open ? el("button", { key: "open-docker", onclick: openDocker, text: "Open Docker Desktop" }) : null,
-        docker.can_fix ? el("button", { key: "fix-docker", onclick: fixDocker, text: "Fix it…" }) : null,
-      );
-  const warning = needsConfirm
-    ? el(
-        "div",
-        { class: "warning", role: "alert" },
-        el("p", { class: "strong", text: "A saved folder now leads somewhere else (a link was put in its path):" }),
-        prepared.moved.map((m) =>
-          el("p", {}, el("span", { class: "path", text: m.saved }), el("span", { class: "path", text: `now goes to ${m.now}` })),
-        ),
-        el("p", {
-          text:
-            "This can happen when something (an earlier launch, a sync, an unpacked archive) replaced part of the path " +
-            "with a link. Check that this is what you want, or go back and edit the setup.",
-        }),
-        el(
-          "label",
-          {},
-          el("input", {
-            type: "checkbox",
-            key: "confirm-moved",
-            checked: view.confirmed,
-            onchange: (e) => {
-              view.confirmed = e.target.checked;
-              renderSummary();
-            },
-          }),
-          "Use them where they go now",
-        ),
-      )
-    : null;
-  render(
-    el(
-      "section",
-      { class: "block" },
-      el("h2", { text: `Start “${setup.name}”?` }),
-      el("p", { class: "muted", text: "Here's what Codex will be able to see and do." }),
-      dockerBox,
-      warning,
-      summaryBlock(prepared.summary),
-      prepared.app_notes && prepared.app_notes.length
-        ? el(
-            "div",
-            { class: "app-notes-block" },
-            el("p", { class: "strong", text: "In the Codex app:" }),
-            el("ul", { class: "app-notes" }, prepared.app_notes.map((line) => el("li", { text: line }))),
-          )
-        : null,
-      el("div", { class: "actions" }, start, el("button", { key: "back", onclick: backToList, text: "Back" })),
-    ),
-  );
-}
-
-// The Codex app needs UM-Codex's line in ~/.ssh/config: asked once, with the reason.
-async function allowSshInclude() {
-  const ok = await confirmBox("Let the Codex app find the sandbox?", state.include_explained, "Allow");
-  if (!ok) return false;
-  await api("POST", "/api/codex-app/allow");
-  return true;
-}
-
-async function startSetup() {
-  const { setup } = view;
-  view.busy = true;
-  renderSummary();
-  const start = () =>
-    api("POST", `/api/setups/${encodeURIComponent(setup.id)}/start`, { confirm_moved: Boolean(view.confirmed) });
-  try {
-    let result;
-    try {
-      result = await start();
-    } catch (error) {
-      if (error.field !== "ssh_include") throw error;
-      if (!(await allowSshInclude())) {
-        notice("Not started: the Codex app can't reach the sandbox without that line. Terminal works without it.", true);
-        view.busy = false;
-        renderSummary();
-        return;
-      }
-      result = await start();
-    }
-    starting.set(setup.id, Date.now());
-    if (result.in_background) appNotices.set(setup.id, "starting");
-    notice(
-      result.in_background
-        ? "Starting in the Codex app: UM-Codex's Codex window opens when the sandbox is ready. Stop it here."
-        : `Opened in ${result.opened}: Codex is starting there. Quit Codex there (or Stop here) to end it.`,
-    );
-    backToList();
-  } catch (error) {
-    notice(error.message, true);
-    view.busy = false;
-    if (view.name === "summary") {
-      await refresh();
-      renderSummary();
-    }
-  }
 }
 
 // ---------------------------------------------------------------- refresh
@@ -1083,12 +1262,12 @@ async function refresh(force = true) {
   }
   // A poll that finds nothing new changes nothing on screen.
   const seen = JSON.stringify(fresh);
-  if (!force && seen === lastSeen && !starting.size) return;
+  if (!force && seen === lastSeen && !cards.size) return;
   lastSeen = seen;
   state = fresh;
+  checkPending();
   renderStatus();
-  if (view.name === "list") renderList();
-  else if (view.name === "summary" && !view.busy) renderSummary();
+  redraw();
 }
 
 // The key field: shown as dots, but not a password field, so browsers don't
@@ -1098,12 +1277,16 @@ async function refresh(force = true) {
 const keyField = keyInput();
 if (!CSS.supports("-webkit-text-security", "disc")) keyField.type = "password";
 document.getElementById("key-form").addEventListener("submit", saveKey);
-document.getElementById("key-cancel").addEventListener("click", () => document.getElementById("key-dialog").close());
-// Escape, Cancel or saving: the field is emptied whenever the box closes.
-document.getElementById("key-dialog").addEventListener("close", () => (keyField.value = ""));
+document.getElementById("key-cancel").addEventListener("click", hideKeyPanel);
+keyField.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    keyField.value = "";
+    if (state?.key.saved) hideKeyPanel();
+  }
+});
 refresh();
-// Polling goes on while a dialog is open, so an open box never makes the
-// server think the page has gone.
+// Polling goes on while a question is open, so an open question never makes
+// the server think the page has gone.
 setInterval(() => {
   if (polling) refresh(false);
 }, 4000);

@@ -10,35 +10,37 @@
 </head>
 <body>
   <header class="top">
-    <img class="mark" src="/static/mark.svg" alt="" width="40" height="40">
+    <img class="mark" src="/static/mark.svg" alt="" width="36" height="36">
     <div class="title">
       <h1>UM-Codex</h1>
-      <p class="sub">Codex on the U-M GPT Toolkit, in a sandbox on this computer <span id="version" class="faint"></span></p>
+      <p class="sub">Codex on the U-M GPT Toolkit, in a sandbox on this computer</p>
     </div>
   </header>
-  <section id="status" class="status" aria-label="Status"></section>
-  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
-  <main id="main" aria-live="polite"><p class="faint">Loading…</p></main>
+  <section id="status" class="strip" aria-label="Status"></section>
 
-  <dialog id="key-dialog" aria-labelledby="key-title">
-    <form id="key-form" method="dialog" autocomplete="off">
-      <h2 id="key-title">Toolkit API key</h2>
-      <p>Paste your U-M GPT Toolkit API key. It's checked with the Toolkit, saved in this
-        computer's keychain, and never goes into the sandbox.</p>
-      <label class="field">
-        <span class="label">Key (shown as dots)</span>
+  <!-- The key, inline (not a pop-up): shown when none is saved, or by Replace key. -->
+  <section id="key-panel" class="key-panel" aria-labelledby="key-title" hidden>
+    <form id="key-form" autocomplete="off">
+      <h2 id="key-title" class="label">Toolkit API key</h2>
+      <p class="help">Paste your U-M GPT Toolkit API key. It's checked with the Toolkit, saved in
+        this computer's keychain, and never goes into the sandbox.</p>
+      <div class="key-row">
         <input id="key-input" type="text" class="masked" autocomplete="new-password" autocapitalize="off"
           autocorrect="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore
-          data-form-type="other" aria-describedby="key-message" required>
-      </label>
-      <p id="key-message" class="message" role="alert" hidden></p>
-      <div class="actions">
+          data-form-type="other" aria-label="Toolkit API key (shown as dots)" aria-describedby="key-message" required>
         <button type="submit" class="primary" id="key-save">Save key</button>
         <button type="button" id="key-cancel">Cancel</button>
       </div>
+      <p id="key-message" class="message" role="alert" hidden></p>
     </form>
-  </dialog>
+  </section>
 
+  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+  <main id="main"><p class="faint">Loading…</p></main>
+  <!-- What changed on a card (its status line), said once; main itself isn't announced on every redraw. -->
+  <div id="announce" class="visually-hidden" role="status" aria-live="polite"></div>
+
+  <!-- Only before something that can't be undone (Stop, Delete) or Windows' administrator prompt. -->
   <dialog id="confirm-dialog" aria-labelledby="confirm-title">
     <form method="dialog">
       <h2 id="confirm-title"></h2>

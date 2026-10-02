@@ -792,3 +792,61 @@ def test_the_notice_can_never_stop_a_launch(monkeypatch, capsys):
     monkeypatch.setattr(update, "launch_notice", broken)
     cli._update_notice()  # doesn't raise
     assert capsys.readouterr().out == ""
+
+
+def test_from_the_launcher_the_window_stays_open(app, github, key, data_folder, monkeypatch):
+    """`um-codex update --from-launcher` (the launcher's Update): the window
+    that asked stays open, to offer Reopen."""
+    from umcodex.ui import server
+
+    closed = []
+    monkeypatch.setattr(server, "close_running", lambda data: closed.append(data))
+    private, public = key
+    github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
+    said: list[str] = []
+    up = updater(app, github, public, FakeTools(), said, data_folder, close_window=False)
+    assert up.update() == 0
+    assert closed == []
+    assert "Updated to UM-Codex 0.1.0a3. The next launch uses it." in said
+    # The words the launcher looks for (ui/server.py UPDATE_STEPS) are what an update says.
+    for marker, _ in server.UPDATE_STEPS:
+        assert any(marker in line for line in said), marker
+    assert server._UPDATED.search("\n".join(said)).group(1) == "0.1.0a3"  # type: ignore[union-attr]
+
+
+def test_check_now_asks_github_and_remembers(app, github, key, data_folder, tmp_path):
+    from umcodex.update import CheckFailed, check_now
+
+    private, public = key
+    github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
+    layout = Layout(app, windows=False, prefix=app / "versions" / "0.1.0a1")
+    options = {"layout": layout, "keys": [public], "current": "0.1.0a1", "data": data_folder}
+    assert check_now(source=lambda: ReleaseSource(api=github.api), **options) == "0.1.0a3"
+    assert json.loads((data_folder / "update-check.json").read_text())["available"] == "0.1.0a3"
+    newest = {**options, "current": "0.1.0a3"}
+    assert check_now(source=lambda: ReleaseSource(api=github.api), **newest) is None
+    with pytest.raises(CheckFailed, match="development copy"):
+        check_now(**{**options, "layout": Layout(tmp_path, prefix=tmp_path / ".venv")})
+    with pytest.raises(CheckFailed, match="aren't set up"):
+        check_now(**{**options, "keys": ()})
+    github.close()
+    with pytest.raises(CheckFailed, match="Couldn't check for updates"):
+        check_now(source=lambda: ReleaseSource(api=github.api), **options)
+
+
+def test_the_cli_takes_from_launcher(monkeypatch):
+    from umcodex import cli, update
+
+    made = []
+
+    class Fake:
+        def __init__(self, **kw):
+            made.append(kw)
+
+        def update(self):
+            return 0
+
+    monkeypatch.setattr(update, "Updater", Fake)
+    assert cli.main(["update", "--from-launcher"]) == 0
+    assert cli.main(["update"]) == 0
+    assert made == [{"close_window": False}, {"close_window": True}]

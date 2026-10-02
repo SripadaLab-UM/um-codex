@@ -2,8 +2,8 @@
 
 Full-power OpenAI Codex on U-M GPT Toolkit, running in a Docker container on
 your Mac or Windows computer. You choose which folders Codex can read, which
-it can change, and whether it can use the internet; then Codex opens in a
-terminal window.
+it can change, and whether it can use the internet; then Codex opens in the
+Codex desktop app (Mac) or a terminal window. Usually that's one click.
 
 Status: under construction (see [docs/DESIGN.md](docs/DESIGN.md)). The
 install commands below work once the first release is published
@@ -23,7 +23,10 @@ curl -q -fsSL https://github.com/SripadaLab-UM/um-codex/releases/latest/download
 
 It sets up Docker Desktop (if it isn't there, it asks first), UM-Codex and
 your key, then adds the UM-Codex app to Applications and a shortcut to the
-Desktop. Details: [docs/INSTALLING.md](docs/INSTALLING.md).
+Desktop. If you have the Codex app (ChatGPT's desktop app), it also asks
+once whether to add the one line the Codex app needs in your `~/.ssh/config`
+(Return is yes; see below). If you say no, installing again doesn't ask
+again (`um-codex ssh-include --ask-again` does). Details: [docs/INSTALLING.md](docs/INSTALLING.md).
 
 ## Install on Windows
 
@@ -43,18 +46,27 @@ Open the **UM-Codex** app (Mac: the Desktop shortcut, Applications, or
 Spotlight; Windows: the Desktop shortcut or the Start menu). It opens
 UM-Codex's window in your web browser. The page runs on your own computer
 (at `127.0.0.1`, signed in by the link the app opens) and isn't on the web.
-There you:
 
-- make a **setup**: a name, the working folder Codex starts in, any more
-  folders (each read only, or read & write), the internet on or off (and,
-  with it on, the browser tool), whether Codex asks before commands, and the
-  model. "Choose folder…" opens your computer's own folder picker;
-- press **Start** on a setup: the page shows what Codex will be able to see
-  and do, then opens a terminal window with Codex in it (or the Codex app:
-  see below);
-- see what's **running** ("Running since 14:05") and **Stop** it;
-- see whether Docker is running, whether your key is saved ("Replace key…"),
-  and whether a new version is out.
+- **The first time:** press **Choose a folder and start…**, pick the folder
+  in your computer's own folder picker, and Codex starts there: in the Codex
+  app if you have it (Mac), otherwise in a terminal window. It starts with
+  the internet on, running commands without asking, on `gpt-5.6-terra`. (If
+  no key is saved yet, the page asks for it right there first.)
+- **Next time:** press **Start "<your folder>"** at the top. That's it.
+- Each folder you've used is a **setup**, shown as a card named after its
+  folder (**Rename** changes that). The card always says what Codex can do
+  with it: the folders (and that changes there are real, with no undo), the
+  internet on or off, the browser tool, where it opens, the model. A line on
+  the card follows a start: Starting… → Opening Codex… → Connected ✓.
+- **Edit** a setup for more: more folders (each read only, or read &
+  write), the internet and the browser tool, the model (newest first), where
+  it opens, and, under More options, "Ask before commands" and its name.
+  **New setup with options…** starts from that form.
+- **Stop** ends a running setup (it asks first, as **Delete** does).
+- The strip at the top says whether Docker is running and your key is saved
+  (**Replace**), and offers an **Update** when a new version is out. If
+  Docker Desktop is closed when you press Start, UM-Codex opens it and
+  starts once it's running.
 
 The window closes by itself a while after you close its page; opening the
 app again brings it back. In a terminal, `um-codex ui` opens it too, and
@@ -71,10 +83,12 @@ is only the window you use. What to know:
 - UM-Codex opens **its own copy** of the app, with its own settings, beside
   your normal one (a second ChatGPT icon in the Dock). Your own Codex/ChatGPT
   app and its settings aren't touched, and the copy needs no sign-in.
-- The app reaches the sandbox through ssh. The first time, UM-Codex asks to
-  add one line at the top of your `~/.ssh/config`
-  (`Include ~/.ssh/um-codex/config`; your file is backed up first, and
-  uninstalling takes it out). Choose **Allow**, or use Terminal instead.
+- The app reaches the sandbox through ssh, which needs one line at the top
+  of your `~/.ssh/config` (`Include ~/.ssh/um-codex/config`; your file is
+  backed up first, and uninstalling takes it out). The installer asks about
+  it once. If it isn't there (you said no, or installed the Codex app
+  later), the setup's card explains it and its button says **Add the line
+  and start**; or choose **Open in Terminal instead**.
   Settings in your own `Host *` entries (such as port forwards) still apply
   to these hosts, as ssh does for every host.
 - **No set-up in the app:** UM-Codex prepares its copy before opening it,
@@ -109,6 +123,16 @@ is only the window you use. What to know:
 In a terminal: `um-codex launch --setup <name> --open app`.
 
 ## Updating
+
+When a new version is out, UM-Codex's window says so at the top: press
+**Update**. It shows its progress (Downloading… Installing… Getting the new
+image…), then "Updated to …": press **Reopen** to use it. It doesn't start
+while a setup is running (stop them first), and if anything fails nothing
+changes (the reason is in `um-codex.log`, in UM-Codex's data folder).
+**Check for updates** at the top asks right away; otherwise UM-Codex checks
+once a day.
+
+In a terminal it's:
 
 ```sh
 um-codex update

@@ -38,7 +38,9 @@
 #   5. Downloads UM-Codex's containers (`um-codex pull`).
 #   6. Asks for your U-M GPT Toolkit API key (each character shows as *) and
 #      saves it in Windows Credential Manager (`um-codex key --from-stdin`).
-#   7. Adds UM-Codex to the Start menu and the Desktop.
+#   7. Adds UM-Codex to the Start menu and the Desktop. Where the Codex app
+#      works with UM-Codex (a Mac, for now: so not yet here), it would ask
+#      once about its line in ~/.ssh/config (`um-codex ssh-include`).
 #
 # Everything after step 1 runs as you, without administrator rights.
 #
@@ -1944,6 +1946,22 @@ if ($Wrote -ne 0) {
         "installer again; UM-Codex itself is installed (type um-codex in a new terminal).")
 }
 Good "Added $LinkName to the Start menu$(if ($Desktop) { ' and the Desktop' }) (it opens UM-Codex's window in your browser)."
+# The Codex app's one line in ~/.ssh/config, asked here once so that starting
+# a setup in the Codex app needs no question later (`um-codex ssh-include`:
+# the reason, then [Y/n], Return is yes). It asks only where "Open in: Codex
+# app" works, and the line isn't there yet: on Windows that's not yet (the
+# Codex app works with UM-Codex on a Mac only), so for now it says nothing
+# here. With -Yes it isn't asked: the consent must be the person's, and the
+# launcher window asks on the setup's card when it's needed.
+if (-not $Yes) {
+    $SavedUtf8 = $Env:PYTHONUTF8
+    $Env:PYTHONUTF8 = "1"
+    try {
+        & $UmCodex ssh-include
+    } finally {
+        if ($null -eq $SavedUtf8) { Remove-Item Env:PYTHONUTF8 -ErrorAction SilentlyContinue } else { $Env:PYTHONUTF8 = $SavedUtf8 }
+    }
+}
 Remove-Item $ResumeFile -ErrorAction SilentlyContinue
 Remove-Tree (Split-Path $ResumeScript -Parent)
 
@@ -1958,8 +1976,8 @@ Say "Program files:     $Root"
 Say "Command:           um-codex (in any new terminal window, and this one)"
 Say "Toolkit key:       $KeyState"
 Say "To open it: double-click $LinkName on your Desktop, or Start menu > type $LinkName"
-Say "> press Enter. Its window opens in your browser: make a setup there, then Start opens"
-Say "Codex in a terminal. Or type um-codex in a terminal, in the folder you want Codex to work in."
+Say "> press Enter. Its window opens in your browser: choose a folder to work in, and Codex"
+Say "starts there in a terminal. Next time, one Start. Or type um-codex in a terminal."
 Say "To remove it later: run uninstall.ps1 from the same release (it runs um-codex uninstall)."
 } finally {
     if (-not $State.Finished -and -not $State.StoppedSaying) {

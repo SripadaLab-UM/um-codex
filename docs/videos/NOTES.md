@@ -6,9 +6,9 @@ and shorter. Kept up to date as features land. **Check each claim against
 the code and docs/DESIGN.md at the commit you record from**, and mark
 anything still in "Not built yet" as left out.
 
-Last updated: 2026-10-01 (M1 launcher, M2 installers, M2b browser tool, M3
-releases and updates, M5 launcher window and M6 "Open in: Codex app" (Mac)
-built; no release published yet, so record installs once one is).
+Last updated: 2026-10-02 (M1 launcher, M2 installers, M2b browser tool, M3
+releases and updates, M5 launcher window, M6 "Open in: Codex app" (Mac) and
+M7 "one click" built; record installs from a published release).
 
 ## Who it's for
 
@@ -27,17 +27,19 @@ plain; no product pitch. These are separate from DataLab's users.
    each): the one install command, Docker Desktop (installed for you if
    missing; on Windows the one-time administrator step and the VM fix), the
    Toolkit key prompt, the UM-Codex app on the Desktop.
-4. **Your first launch** (about 3 min), in the launcher window: open the
-   UM-Codex app and its window opens in the browser (the status line at the
-   top: Docker running, key saved). "New setup": choose the working folder
-   with "Choose folder…" (the computer's own folder picker), the name fills
-   in from it; add a read-only folder (a chip with "Read only / Read &
-   write"); leave the internet off; Save. The setup appears as a card. Press
-   Start: the page shows what Codex will be able to see and do (pause on
-   it), then "Start in Terminal" opens a terminal window with Codex in it.
-   Ask Codex to do something in the working folder. Back in the browser,
-   "Running now: *setup* · Running since 14:05 · Stop". Quit Codex (or press
-   Stop), and the card is still there for next time.
+4. **Your first launch** (about 2 min; M7 made it one button): open the
+   UM-Codex app and its window opens in the browser (the quiet line at the
+   top: Docker running, key saved). Press **Choose a folder and start…**,
+   pick a demo folder in the computer's own folder picker, and that's all:
+   Codex opens on it (in the Codex app on a Mac that has it, otherwise a
+   terminal window). Back in the browser, the folder is now a card named
+   after it; its line goes Starting… → Opening Codex… → Connected ✓. Pause
+   on the card: it says what Codex can do (it can change and delete files
+   in that folder, with no undo; the internet is on, so it could send what
+   it reads anywhere). Ask Codex to do something in the folder. Then Stop
+   (it asks first). Next time: one **Start "<folder>"** at the top.
+   Then, briefly, **Edit**: the Folder, Access and Codex sections (add a
+   read-only folder; turn the internet off), and More options.
 5. **Folders and internet, in practice** (about 2 min): read-only vs write
    folders, internet on vs off, what each means (see "What to say" below).
 6. **The browser tool** (about 2 min): turning it on in a setup, the summary
@@ -45,20 +47,20 @@ plain; no product pitch. These are separate from DataLab's users.
    the browser action, and a screenshot saved in the working folder when
    asked.
 
-7. **Opening a setup in the Codex app** (about 3 min, Mac only): for people
-   who prefer Codex's desktop app to a terminal. Show, in order:
+7. **Opening a setup in the Codex app** (about 3 min, Mac only): it's the
+   default when the app is installed. Show, in order:
    - the ChatGPT desktop app installed (from chatgpt.com/download; Codex is
-     part of it), and the launcher's form with "Open in: Codex app" chosen
-     (before it's installed, the choice is greyed out with that link);
-   - Start: the summary, with "In the Codex app:" and its two lines; the
-     one-time question about the ssh line ("Let the Codex app find the
-     sandbox?", with the reason) and Allow;
+     part of it); the installer's one question about the ssh line ("Add that
+     line now? [Y/n]", with the reason), answered with Return (if it was
+     skipped, the setup's card explains it and says "Add the line and
+     start" instead);
+   - Start on the card (or "Choose a folder and start…" the first time);
    - a second ChatGPT icon in the Dock: UM-Codex's own copy, which opens
      with no sign-in (say: your own ChatGPT app isn't touched);
    - the copy opening straight on a project named after the setup, with
      "Remote · umcodex-<setup>" and a green dot under the composer: nothing
      to set up (say: UM-Codex prepared it);
-   - the launcher turning to "Connected ✓";
+   - the card's line turning to "Connected ✓";
    - asking Codex to list the files and make one in the working folder, and
      the file appearing in Finder; the diff and "View changes" in the app;
    - optionally, a local (not Remote) chat answering with the reminder to
@@ -79,17 +81,21 @@ Later, when built: "On this computer" mode (M4).
   the internet on, nothing Codex runs can read or send your key. (This is
   a difference from ITS's setup articles, which put the key in a file.)
 - **The launcher window** (what the app opens): a page in your browser,
-  served by UM-Codex on your own computer, not a website. A setup there has:
-  the working folder (Codex starts there; it can read, change and delete in
-  it); a name; more folders, each "Read only" or "Read & write"; Internet
-  (off or on); with the internet on, the Browser tool and "Approve each
-  browser action" (see below); "Ask me before commands" (off by default:
-  Codex runs commands without asking); the model (default `gpt-5.6-terra`);
-  and "Open in": Terminal or Codex app (Mac; see below). Folders are chosen with the computer's own folder picker;
-  a folder UM-Codex won't share is refused right there in plain words.
-  Before Start it shows a summary in plain words, then opens Codex in a
-  terminal window. Setups are kept as cards, with Start, Edit, Duplicate and
-  Delete; running ones show "Running since …" and Stop.
+  served by UM-Codex on your own computer, not a website. Usually one click:
+  the first time "Choose a folder and start…", after that "Start". A new
+  setup starts with: the folder you chose (Codex starts there; it can read,
+  change and delete in it), named after it; the internet on; commands
+  without asking; the model `gpt-5.6-terra`; and the Codex app (on a Mac
+  that has it) or a terminal. Each setup is a card that always says what
+  Codex can do with it, with Start, Edit, Duplicate, Delete and Rename, and
+  one line that follows a start (Starting… → Opening Codex… → Connected ✓).
+  Edit has three sections: Folder (more folders, each "Read only" or "Read
+  & write"), Access (Internet; with it on, the Browser tool and "Approve
+  each browser action") and Codex (the model, newest first; "Open in";
+  under More options, "Ask before commands" and the name). Folders are
+  chosen with the computer's own folder picker; a folder UM-Codex won't
+  share is refused right there in plain words. Only Stop and Delete ask
+  first.
 - **The terminal way** still works: typing `um-codex` in a terminal asks the
   same things as questions (working folder, name, more folders to write,
   folders to read only, internet, browser tool, model, approvals), then the
@@ -147,21 +153,23 @@ Later, when built: "On this computer" mode (M4).
   PowerShell, from the README; it needs no options. It sets up Docker
   Desktop if needed, UM-Codex, the key, and the app (Mac: Applications and a
   Desktop shortcut; Windows: Start menu and Desktop).
-- **Updates:** `um-codex update` installs the newest version beside the one
-  you have, only if it's signed by the UM-Codex release key, and never
-  while Codex is open; the version before is kept, and
-  `um-codex update --rollback` goes back to it. About once a day UM-Codex
-  checks for a new version, and the launcher window (or a terminal launch)
-  says when one is out. Updates don't touch
-  your folders, setups or Codex history.
+- **Updates:** when a new version is out, the launcher window says so at
+  the top with an **Update** button: it shows Downloading… Installing…
+  Getting the new image…, then "Updated to …" with **Reopen**. It installs
+  the new version beside the one you have, only if it's signed by the
+  UM-Codex release key, and not while a setup is running ("Stop running
+  setups first"); if anything fails, nothing changes. "Check for updates"
+  asks right away; otherwise UM-Codex checks about once a day. In a terminal
+  it's `um-codex update` (and `um-codex update --rollback` goes back).
+  Updates don't touch your folders, setups or Codex history.
 
 - **The Codex app** (Mac only, for now). A setup can open in Codex's
   desktop app instead of a terminal; the work still happens in the sealed
   environment with the same folders, internet setting and key protection.
   UM-Codex opens its own copy of the app, with its own settings, beside the
   person's normal one; it needs no sign-in, and the person's own app isn't
-  changed. The app reaches the environment through ssh, so the first time
-  UM-Codex asks to add one line to the person's ssh settings (with a backup;
+  changed. The app reaches the environment through ssh, so the installer
+  asks once to add one line to the person's ssh settings (with a backup;
   uninstalling takes it out). UM-Codex prepares its copy, so it opens on a
   project named after the setup, already connected; the launcher says
   "Connected" when the app is in. (Only if the copy was already open does the

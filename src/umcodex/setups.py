@@ -17,7 +17,7 @@ import os
 import re
 import secrets
 import tomllib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -88,6 +88,31 @@ class Setup:
             browser_asks=raw.get("browser_asks", True) is not False,
             open_in=str(raw["open_in"]) if raw.get("open_in") in OPEN_IN else "terminal",
         )
+
+
+MAX_NAME = 80
+
+
+def unique_name(name: str, taken: Iterable[str]) -> str:
+    """`name`, or "name 2", "name 3", ... when another setup has it already
+    (letter case aside), at most MAX_NAME characters."""
+    used = {t.casefold() for t in taken}
+    name = name[:MAX_NAME]
+    candidate, number = name, 1
+    numbered = re.fullmatch(r"(.*\S) ([0-9]{1,4})", name)
+    if numbered and name.casefold() in used:  # "thesis 2" taken: "thesis 3" next
+        name, number = numbered.group(1), int(numbered.group(2))
+    while candidate.casefold() in used:
+        number += 1
+        suffix = f" {number}"
+        candidate = name[: MAX_NAME - len(suffix)].rstrip() + suffix
+    return candidate
+
+
+def default_name(working: str, taken: Iterable[str]) -> str:
+    """A new setup's name: its working folder's name (made unique)."""
+    base = " ".join((Path(working).name or str(working)).split()) or "Setup"
+    return unique_name(base, taken)
 
 
 def new_id(name: str) -> str:
@@ -183,10 +208,16 @@ def moved(setup: Setup, *, own_data: Path | None = None) -> list[tuple[str, Path
 
     A folder the agent could write may have had a part of its path swapped for
     a link (by an earlier launch, a sync, or an unpacked archive), which would
-    point the next launch at a different folder."""
+    point the next launch at a different folder.
+
+    Folder by folder: one that's refused now (gone, say) is skipped, so it
+    never hides another that moved; check() reports the refused one."""
     changed = []
     for saved in (setup.working, *setup.writes, *setup.reads):
-        now = folders.check_folder(saved, own_data=own_data).path
+        try:
+            now = folders.check_folder(saved, own_data=own_data).path
+        except FolderRefused:
+            continue
         if not folders.same(Path(saved), now):
             changed.append((saved, now))
     return changed
