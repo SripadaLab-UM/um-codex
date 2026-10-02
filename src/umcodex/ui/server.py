@@ -608,7 +608,7 @@ class Launcher:
         if any(launch.setup_id == setup_id for launch in running_launches(self.data)):
             raise Invalid("Stop this setup's running launch first.", status=409)
         self.store.delete(setup.id)
-        codex_app.forget_setup(setup.id, self.ssh_home)  # its ssh host for the Codex app, if any
+        codex_app.forget_setup(setup.id, self.ssh_home, self.data)  # its ssh host for the Codex app, if any
         with contextlib.suppress(DockerError):  # its Codex history; Docker may be closed
             self.docker("volume", "rm", volume_name(setup.id), check=False, timeout=30)
 
@@ -632,7 +632,7 @@ class Launcher:
             "setup": setup_json(setup, own_data=self.own_data),
             "summary": summary(resolved(setup, layout), layout),
             "moved": [{"saved": saved, "now": str(now)} for saved, now in changed],
-            "app_notes": codex_app.notes(setup.id) if setup.open_in == "codex-app" else [],
+            "app_notes": codex_app.notes(setup.id, data=self.data) if setup.open_in == "codex-app" else [],
         }
 
     def start(self, setup_id: str, body: object) -> dict[str, Any]:

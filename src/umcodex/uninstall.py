@@ -98,11 +98,12 @@ def uninstall(
     say("Removing the Toolkit key from the keychain...")
     credentials.delete_api_key()
 
-    # The Codex app's ssh entries (M6): the Include line in ~/.ssh/config and
-    # ~/.ssh/um-codex. Without UM-Codex they lead nowhere.
+    # The Codex app's ssh entries (M6): this data folder's in ~/.ssh/um-codex,
+    # and the Include line in ~/.ssh/config with the folder itself unless
+    # another data folder on this computer still uses them.
     from umcodex import codex_app
 
-    for line in codex_app.remove_include() + codex_app.remove_ssh_files():
+    for line in codex_app.uninstall_ssh(data=data):
         say(line)
 
     # The local copy of the Codex app (M4): its chats ran on this computer,

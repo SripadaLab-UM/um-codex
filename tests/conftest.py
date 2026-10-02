@@ -88,11 +88,16 @@ def docker_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def ssh_home(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> Path:
+def ssh_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory, data_folder: Path
+) -> Path:
     """No test reads or writes this computer's ~/.ssh: codex_app's home is a
-    folder of the test's own (outside tmp_path, which some tests list)."""
+    folder of the test's own (outside tmp_path, which some tests list). The
+    test's data folder stands for the installed copy's (plain host aliases,
+    `umcodex-<setup>`); tests of other data folders pass theirs."""
     from umcodex import codex_app
 
     home = tmp_path_factory.mktemp("ssh-home")
     monkeypatch.setattr(codex_app, "user_home", lambda: home)
+    monkeypatch.setattr(codex_app, "plain_alias_folder", lambda: data_folder)
     return home
