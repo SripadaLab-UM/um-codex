@@ -156,28 +156,29 @@ def test_the_installers_question_defaults_to_yes(ssh_home):
     """`um-codex ssh-include`: Return adds the line; n, or no answer at all
     (no terminal), adds nothing."""
     app = Path("/Applications/ChatGPT.app")
+    mac = {"find": lambda: app, "platform": "darwin"}  # a Mac with the Codex app
     said: list[str] = []
-    assert codex_app.offer_include(lambda _: "n", said.append, find=lambda: app) == 1
+    assert codex_app.offer_include(lambda _: "n", said.append, **mac) == 1
     assert not (ssh_home / ".ssh" / "config").exists()
     assert any("Include ~/.ssh/um-codex/config" in line for line in said)
 
     def no_terminal(_):
         raise EOFError
 
-    assert codex_app.offer_include(no_terminal, said.append, find=lambda: app) == 1
+    assert codex_app.offer_include(no_terminal, said.append, **mac) == 1
     assert not (ssh_home / ".ssh" / "config").exists()
     asked: list[str] = []
-    assert codex_app.offer_include(lambda q: asked.append(q) or "", said.append, find=lambda: app) == 0
+    assert codex_app.offer_include(lambda q: asked.append(q) or "", said.append, **mac) == 0
     assert asked == ["Add that line now? [Y/n] "]
     assert codex_app.include_present()
     # Asked once: there now, so not asked again.
-    assert codex_app.offer_include(lambda _: pytest.fail("asked again"), said.append, find=lambda: app) == 0
+    assert codex_app.offer_include(lambda _: pytest.fail("asked again"), said.append, **mac) == 0
 
 
 def test_the_installers_question_isnt_asked_without_the_app_or_off_a_mac(ssh_home):
     said: list[str] = []
     never = lambda _: pytest.fail("asked")  # noqa: E731
-    assert codex_app.offer_include(never, said.append, find=lambda: None) == 0
+    assert codex_app.offer_include(never, said.append, find=lambda: None, platform="darwin") == 0
     assert "isn't installed" in said[-1]
     assert codex_app.offer_include(never, said.append, platform="win32", find=lambda: Path("x")) == 0
     assert not (ssh_home / ".ssh" / "config").exists()
