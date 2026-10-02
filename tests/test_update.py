@@ -660,16 +660,74 @@ def test_a_launch_says_when_a_newer_release_is_out(notice, github):
     assert len(github.requests) > 0
 
 
-def test_a_launch_asks_github_at_most_once_a_day(notice, github):
+def counted(github: FakeGitHub) -> int:
+    """The requests GitHub counts against its 60 an hour: its API's, but a 304
+    (release files come from its storage, which isn't the API)."""
+    return sum(path.startswith("/repos/") for path in github.requests) - github.not_modified
+
+
+def listed(github: FakeGitHub) -> int:
+    return sum(path.split("?")[0].endswith("/releases") for path in github.requests)
+
+
+def test_each_launch_asks_github_but_not_twice_in_ten_minutes(notice, github):
     run, clock = notice
     run()
     asked = len(github.requests)
-    clock[0] += 23 * 3600
+    clock[0] += 9 * 60
     assert run() == ["UM-Codex 0.1.0a3 is available: run um-codex update"]  # remembered
     assert len(github.requests) == asked
-    clock[0] += 2 * 3600
+    clock[0] += 2 * 60
+    assert run() == ["UM-Codex 0.1.0a3 is available: run um-codex update"]
+    assert listed(github) == 2
+
+
+def test_a_check_whose_list_hasnt_changed_is_a_304_and_the_same_answer(notice, github, data_folder):
+    run, clock = notice
     run()
-    assert len(github.requests) > asked
+    first = counted(github)
+    assert first == 3  # the list, SHA256SUMS and its signature
+    clock[0] += 11 * 60
+    assert run() == ["UM-Codex 0.1.0a3 is available: run um-codex update"]
+    assert github.not_modified == 1 and counted(github) == first  # nothing more counted
+    record = json.loads((data_folder / "update-check.json").read_text())
+    assert record["for"] == "0.1.0a1" and record["etag"].startswith('W/"')
+
+
+def test_a_new_release_changes_the_list_and_is_found(notice, github, key):
+    run, clock = notice
+    run()
+    github.releases.append(make_release("v0.1.0-alpha.4", "0.1.0a4", key[0]))
+    clock[0] += 11 * 60
+    assert run() == ["UM-Codex 0.1.0a4 is available: run um-codex update"]
+    assert github.not_modified == 0
+
+
+def test_the_etag_is_sent_only_for_the_version_that_got_it(notice, github, data_folder):
+    """An answer for another version (before an update) isn't this one's."""
+    run, clock = notice
+    run()
+    clock[0] += 11 * 60
+    assert run(current="0.1.0a2") == ["UM-Codex 0.1.0a3 is available: run um-codex update"]
+    assert github.not_modified == 0
+    clock[0] += 11 * 60
+    assert run(current="0.1.0a3") == []
+    assert github.not_modified == 0
+    clock[0] += 11 * 60
+    assert run(current="0.1.0a3") == []
+    assert github.not_modified == 1
+
+
+def test_a_busy_hour_stays_far_under_githubs_limit(notice, github):
+    """A launch every minute for an hour, and the launcher window's hourly
+    check: six checks at most, and GitHub counts only the first (the rest
+    are 304s). Its limit is 60 an hour per address."""
+    run, clock = notice
+    for _ in range(61):
+        assert run() == ["UM-Codex 0.1.0a3 is available: run um-codex update"]
+        clock[0] += 60
+    assert listed(github) <= 7
+    assert counted(github) == 3
 
 
 def test_a_launch_never_waits_long_for_github(notice, github, data_folder):
@@ -690,12 +748,28 @@ def test_a_launch_never_waits_long_for_github(notice, github, data_folder):
     assert run() == ["UM-Codex 0.1.0a3 is available: run um-codex update"]
 
 
-def test_offline_a_launch_says_nothing_and_waits_a_day(notice, github):
+def test_offline_a_launch_says_nothing_new_and_asks_again_ten_minutes_on(notice, github, data_folder):
     run, clock = notice
     github.close()
     assert run() == []
-    clock[0] += 3600
-    assert run() == []  # not asked again today
+    asked = len(github.requests)
+    clock[0] += 5 * 60
+    assert run() == []  # not asked again so soon
+    assert len(github.requests) == asked
+    # What an earlier check found still stands while GitHub can't be asked.
+    remember_check(data_folder, "0.1.0a3", clock[0] - 11 * 60, for_version="0.1.0a1")
+    assert run() == ["UM-Codex 0.1.0a3 is available: run um-codex update"]
+    clock[0] += 3 * 60
+    assert run() == ["UM-Codex 0.1.0a3 is available: run um-codex update"]  # remembered
+
+
+def test_a_record_from_an_earlier_version_is_read(notice, data_folder):
+    """alpha.5's update-check.json has no "for" or "etag"."""
+    run, clock = notice
+    data_folder.mkdir(parents=True, exist_ok=True)
+    old = {"checked_at": clock[0], "available": "0.1.0a3"}
+    (data_folder / "update-check.json").write_text(json.dumps(old))
+    assert run() == ["UM-Codex 0.1.0a3 is available: run um-codex update"]
 
 
 def test_a_remembered_offer_is_dropped_once_installed(notice, data_folder):
@@ -783,16 +857,134 @@ def test_on_windows_a_failed_copy_leaves_the_command_and_current_as_they_were(tm
     assert not (root / "bin" / ".um-codex.exe.new").exists()
 
 
-def test_uv_from_the_installer_comes_first(tmp_path, monkeypatch):
+FAKE_UV = "#!/bin/sh\necho 'uv 0.12.19 (Homebrew 2026-09-01)'\n"
+
+
+def fake_uv(path: Path, text: str = FAKE_UV) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    path.chmod(0o755)
+    return path
+
+
+@pytest.fixture
+def uv_places(tmp_path, monkeypatch):
+    """A home folder, Homebrew's two places, and a PATH, all empty."""
     from umcodex import update
 
     home = tmp_path / "home"
-    (home / ".local" / "bin").mkdir(parents=True)
+    home.mkdir()
+    brew = (tmp_path / "opt-homebrew" / "uv", tmp_path / "usr-local" / "uv")
     monkeypatch.setattr(update.Path, "home", lambda: home)
-    monkeypatch.setattr(update.shutil, "which", lambda name: "/elsewhere/uv")
-    assert update.find_uv("darwin") == "/elsewhere/uv"
-    (home / ".local" / "bin" / "uv").write_text("")
-    assert update.find_uv("darwin") == str(home / ".local" / "bin" / "uv")
+    monkeypatch.setattr(update, "HOMEBREW_UV", brew)
+    monkeypatch.setenv("PATH", str(tmp_path / "path"))
+    root = tmp_path / "install-root"
+    root.mkdir()
+    return {"home": home, "brew": brew, "path": tmp_path / "path", "root": root}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the fake uv is a shell script")
+def test_the_uv_the_installer_noted_comes_first(uv_places, tmp_path):
+    from umcodex import update
+
+    noted = fake_uv(tmp_path / "somewhere" / "uv")
+    fake_uv(uv_places["home"] / ".local" / "bin" / "uv")
+    (uv_places["root"] / "uv").write_text(f"{noted}\n")
+    assert update.find_uv("darwin", root=uv_places["root"]) == str(noted)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the fake uv is a shell script")
+def test_without_a_record_or_path_homebrews_uv_is_found(uv_places):
+    """The maintainer's Mac: uv from Homebrew, an alpha.5 install (no record),
+    and the app's PATH without /opt/homebrew/bin."""
+    from umcodex import update
+
+    assert update.find_uv("darwin", root=uv_places["root"]) is None
+    fake_uv(uv_places["brew"][1])
+    assert update.find_uv("darwin", root=uv_places["root"]) == str(uv_places["brew"][1])
+    fake_uv(uv_places["brew"][0])
+    assert update.find_uv("darwin", root=uv_places["root"]) == str(uv_places["brew"][0])
+    local = fake_uv(uv_places["home"] / ".local" / "bin" / "uv")
+    assert update.find_uv("darwin", root=uv_places["root"]) == str(local)  # uv's own installer's first
+
+
+def test_the_places_are_the_installers_then_homebrews():
+    from umcodex import update
+
+    home = Path.home()
+    assert update.uv_candidates("darwin") == [
+        home / ".local" / "bin" / "uv",
+        Path("/opt/homebrew/bin/uv"),
+        Path("/usr/local/bin/uv"),
+    ]
+    assert update.uv_candidates("win32")[0] == update.default_data_dir("win32") / "uv" / "uv.exe"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the fake uv is a shell script")
+def test_a_stale_record_is_passed_over(uv_places, tmp_path):
+    from umcodex import update
+
+    brew = fake_uv(uv_places["brew"][0])
+    record = uv_places["root"] / "uv"
+    record.write_text(f"{tmp_path / 'gone' / 'uv'}\n")  # removed since
+    assert update.find_uv("darwin", root=uv_places["root"]) == str(brew)
+    record.write_text(f"{fake_uv(tmp_path / 'not-uv' / 'uv', '#!/bin/sh\necho hello')}\n")
+    assert update.find_uv("darwin", root=uv_places["root"]) == str(brew)
+    record.write_text(f"{fake_uv(tmp_path / 'broken' / 'uv', '#!/bin/sh\nexit 1')}\n")
+    assert update.find_uv("darwin", root=uv_places["root"]) == str(brew)
+    plain = tmp_path / "plain" / "uv"
+    fake_uv(plain).chmod(0o644)  # not runnable
+    record.write_text(f"{plain}\n")
+    assert update.find_uv("darwin", root=uv_places["root"]) == str(brew)
+    record.write_text("uv\n")  # not a full path
+    assert update.find_uv("darwin", root=uv_places["root"]) == str(brew)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the fake uv is a shell script")
+def test_a_uv_on_path_comes_last(uv_places):
+    from umcodex import update
+
+    on_path = fake_uv(uv_places["path"] / "uv")
+    assert update.find_uv("darwin", root=uv_places["root"]) == str(on_path)
+    brew = fake_uv(uv_places["brew"][1])
+    assert update.find_uv("darwin", root=uv_places["root"]) == str(brew)
+
+
+def test_without_uv_it_says_where_it_looked_and_what_to_do(app, github, key, data_folder, uv_places):
+    said: list[str] = []
+    up = updater(app, github, key[1], FakeTools(), said, data_folder)
+    up._uv = None
+    assert up.update() == 1
+    [message] = said
+    assert message.startswith("uv, which installs UM-Codex, wasn't found (looked in the path in ")
+    assert str(app / "uv") in message and str(uv_places["brew"][0]) in message and "your PATH" in message
+    assert "open Terminal and run: um-codex update" in message
+    from umcodex.ui import server
+
+    assert server._NO_UV in message  # what the launcher's Update looks for
+
+
+def test_an_update_notes_the_uv_it_used(app, github, key, data_folder, tmp_path):
+    """An alpha.1-5 install has no record of its uv: one that worked is noted."""
+    private, public = key
+    github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
+    tools, said = FakeTools(), []
+    up = updater(app, github, public, tools, said, data_folder)
+    uv = str(tmp_path / "homebrew" / "bin" / "uv")
+    up._uv = uv
+    real = tools.__call__
+    tools_run = lambda command, **kw: real(["uv", *command[1:]] if command[0] == uv else command, **kw)  # noqa: E731
+    up._run = tools_run  # type: ignore[assignment]
+    assert up.update() == 0, said
+    assert (app / "uv").read_text() == f"{uv}\n"
+
+
+def test_a_relative_uv_isnt_noted(tmp_path):
+    from umcodex import update
+
+    update.record_uv(tmp_path, "uv")
+    update.record_uv(tmp_path, None)
+    assert not (tmp_path / "uv").exists()
 
 
 def test_the_notice_can_never_stop_a_launch(monkeypatch, capsys):

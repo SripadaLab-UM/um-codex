@@ -31,8 +31,10 @@ If any step fails, what it installed is removed and this version stays the
 one in use. It refuses while a launch is running (each holds a lock), and
 `um-codex update --rollback` switches `current` and `previous` back.
 
-At most once a day a launch checks too (`launch_notice`), for 3 seconds at
-most, and prints one line when a newer release is out.
+Each launch checks too (`launch_notice`), as does the launcher window when
+it starts and every hour while it's open: for 3 seconds at most, GitHub
+asked at most every ten minutes (the last answer is kept, with the list's
+ETag), and it prints one line when a newer release is out.
 """
 
 from __future__ import annotations
@@ -64,6 +66,7 @@ from umcodex.releases import (
     CheckProblem,
     ChecksumMismatch,
     NotConfigured,
+    NotModified,
     NotSigned,
     Offer,
     ReleaseSource,
@@ -84,9 +87,17 @@ _REQUIREMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,._-]+\])?==[
 _HASH = re.compile(r"--hash=sha256:([0-9a-f]{64})")
 _DIGEST = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
 _COMPLETE = ".complete"
-# The launch-time check: at most once a day, and never more than this long.
+# The launch-time check (each launch, the launcher window's start, and each
+# hour while it's open): GitHub is asked at most every ten minutes, and the
+# launch never waits more than NOTICE_WAIT_SECONDS. GitHub allows 60 requests
+# an hour per address without signing in, and a check is up to three (the
+# list, then SHA256SUMS and its signature when a newer release is out): so
+# one computer makes 18 an hour at most, however often it's launched, and
+# relaunching a few times in a row asks once. A check whose list hasn't
+# changed gets a 304 to the ETag it sends, which GitHub doesn't count at all,
+# so many computers behind one address (a campus network) stay under it too.
 NOTICE_FILE = "update-check.json"
-NOTICE_EVERY_SECONDS = 24 * 60 * 60
+NOTICE_EVERY_SECONDS = 10 * 60
 NOTICE_WAIT_SECONDS = 3.0
 NO_CHECK_ENV = "UMCODEX_NO_UPDATE_CHECK"
 
@@ -375,18 +386,91 @@ def check_images(images_json: bytes, wheel: Path) -> dict[str, str]:
 # ------------------------------------------------------------------ updater
 
 
-def find_uv(platform: str = sys.platform) -> str | None:
-    """uv, as the installers left it: on Windows, the pinned one in UM-Codex's
-    own folder (install.ps1); on a Mac, the one uv's installer puts in
-    ~/.local/bin (install.sh), ahead of any other on PATH; else one on PATH."""
+# Where the installers note the uv they used (one line, its full path), in
+# the install root. A launcher window (the Mac app starts it) or the app's
+# own Update doesn't get the PATH a terminal has (no /opt/homebrew/bin), so
+# the uv the installer found on PATH there is found here by this file.
+UV_RECORD = "uv"
+# Homebrew's uv: Apple silicon's, then Intel's.
+HOMEBREW_UV = (Path("/opt/homebrew/bin/uv"), Path("/usr/local/bin/uv"))
+
+
+def uv_candidates(platform: str = sys.platform) -> list[Path]:
+    """Where uv is looked for when no record names one that works: on Windows
+    the pinned one in UM-Codex's own folder (install.ps1); uv's own installer's
+    ~/.local/bin; Homebrew's (Apple silicon, then Intel). PATH comes after."""
     if platform == "win32":
-        pinned = default_data_dir(platform) / "uv" / "uv.exe"
-        if pinned.is_file():
-            return str(pinned)
-    candidate = Path.home() / ".local" / "bin" / ("uv.exe" if platform == "win32" else "uv")
-    if candidate.is_file():
-        return str(candidate)
-    return shutil.which("uv")
+        return [default_data_dir(platform) / "uv" / "uv.exe", Path.home() / ".local" / "bin" / "uv.exe"]
+    return [Path.home() / ".local" / "bin" / "uv", *HOMEBREW_UV]
+
+
+def is_uv(path: str) -> bool:
+    """Whether `path` runs and says it's uv (`uv 0.12.19 (...)`)."""
+    options: dict = {}
+    if sys.platform == "win32":
+        options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    try:
+        said = subprocess.run(
+            [path, "--version"],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            check=False,
+            env=clean_environment(),
+            stdin=subprocess.DEVNULL,
+            **options,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    return said.returncode == 0 and said.stdout.startswith("uv ")
+
+
+def _runnable(path: Path, platform: str) -> bool:
+    with contextlib.suppress(OSError):
+        return path.is_absolute() and path.is_file() and (platform == "win32" or os.access(path, os.X_OK))
+    return False
+
+
+def find_uv(
+    platform: str = sys.platform, *, root: Path | None = None, check: Callable[[str], bool] = is_uv
+) -> str | None:
+    """uv, as the installers left it: the one `<root>/uv` records, if it's
+    still there and still uv; else the first that is in uv_candidates(); else
+    one on PATH."""
+    root = root if root is not None else install_root()
+    recorded = _read_line(root / UV_RECORD)
+    places = [Path(recorded)] if recorded else []
+    places += uv_candidates(platform)
+    for place in places:
+        if _runnable(place, platform) and check(str(place)):
+            return str(place)
+    on_path = shutil.which("uv")
+    if on_path and Path(on_path).is_absolute() and check(on_path):
+        return on_path
+    return None
+
+
+def uv_not_found(platform: str = sys.platform, *, root: Path | None = None) -> str:
+    """What to say when find_uv found none: where it looked, and what to do."""
+    root = root if root is not None else install_root()
+    places = [f"the path in {root / UV_RECORD}", *(str(p) for p in uv_candidates(platform)), "your PATH"]
+    shell = "Windows PowerShell" if platform == "win32" else "Terminal"
+    return (
+        f"uv, which installs UM-Codex, wasn't found (looked in {', '.join(places)}). "
+        f"To update, open {shell} and run: um-codex update. If that says the same, run the "
+        "UM-Codex installer again."
+    )
+
+
+def record_uv(root: Path, uv: str | None) -> None:
+    """Note `uv` (by its full path) as the one to use from now on. Not the
+    file a link leads to: Homebrew's /opt/homebrew/bin/uv stays put when an
+    upgrade replaces the versioned folder it leads to."""
+    if not uv or not os.path.isabs(uv) or _read_line(root / UV_RECORD) == uv:
+        return
+    with contextlib.suppress(OSError):
+        _write_line(root / UV_RECORD, uv)
 
 
 def running_launch(data: Path) -> bool:
@@ -427,7 +511,7 @@ class Updater:
         self._keys = keys
         self.current = current
         self._run = run
-        self._uv = uv if uv is not None else find_uv(platform)
+        self._uv = uv if uv is not None else find_uv(platform, root=self.layout.root)
         self.data = data if data is not None else data_dir()
         self.say = say
 
@@ -466,7 +550,7 @@ class Updater:
                     "so it wasn't installed."
                 )
                 return 1
-            remember_check(self.data, offer.release.version if offer else None)
+            remember_check(self.data, offer.release.version if offer else None, for_version=self.current)
             if offer is None:
                 self.say(f"UM-Codex {self.current} is the newest version.")
                 return 0
@@ -478,6 +562,9 @@ class Updater:
                 self.say(str(failed))
                 return 1
             remember_check(self.data, None)
+            # An install from before alpha.6 has no record of its uv (the
+            # installer now writes one): the uv that worked is noted.
+            record_uv(self.layout.root, self._uv)
             self.refresh_launchers(offer.release.version)
             self.say("")
             self.say(f"Updated to UM-Codex {offer.release.version}. The next launch uses it.")
@@ -535,7 +622,7 @@ class Updater:
                 "copy), so it can't update itself. Install new versions with the installer."
             )
         if need_uv and not self._uv:
-            return "uv, which installs UM-Codex, wasn't found. Run the UM-Codex installer again."
+            return uv_not_found(self.platform, root=self.layout.root)
         if running_launch(self.data):
             return RUNNING
         return None
@@ -788,24 +875,76 @@ def _close_launcher_window(data: Path) -> None:
 # ------------------------------------------------------------------ at launch
 
 
-def remember_check(data: Path, available: str | None, now: float | None = None) -> None:
+@dataclass(frozen=True)
+class Remembered:
+    """The last check (`update-check.json`): when, what it found, for which
+    version, and the ETag of GitHub's list it found it in."""
+
+    checked_at: float
+    available: str | None
+    for_version: str | None = None
+    etag: str | None = None
+
+
+def remember_check(
+    data: Path,
+    available: str | None,
+    now: float | None = None,
+    *,
+    for_version: str | None = None,
+    etag: str | None = None,
+) -> None:
     """When the last check was, and what it found (for the launch-time line)."""
     with contextlib.suppress(OSError):
         data.mkdir(parents=True, exist_ok=True)
         path = data / NOTICE_FILE
         temporary = path.with_name(f".{NOTICE_FILE}.new")
-        record = {"checked_at": time.time() if now is None else now, "available": available}
+        record = {
+            "checked_at": time.time() if now is None else now,
+            "available": available,
+            "for": for_version,
+            "etag": etag,
+        }
         temporary.write_text(json.dumps(record) + "\n", encoding="utf-8")
         os.replace(temporary, path)
 
 
-def _remembered(data: Path) -> tuple[float, str | None] | None:
+def _remembered(data: Path) -> Remembered | None:
     with contextlib.suppress(OSError, ValueError, AttributeError):
         record = json.loads((data / NOTICE_FILE).read_text(encoding="utf-8"))
-        checked, available = record.get("checked_at"), record.get("available")
+
+        def text(name: str) -> str | None:
+            value = record.get(name)
+            return value if isinstance(value, str) and value else None
+
+        checked = record.get("checked_at")
         if isinstance(checked, int | float):
-            return float(checked), available if isinstance(available, str) else None
+            return Remembered(float(checked), text("available"), text("for"), text("etag"))
     return None
+
+
+def _ask(
+    source: ReleaseSource, current: str, keys: Sequence[str], remembered: Remembered | None
+) -> tuple[str | None, str | None]:
+    """GitHub's answer: (the newer version or None, the ETag it came with).
+
+    The last check's ETag is sent if that check was for this same version:
+    a 304 (nothing changed) means the same answer, and costs nothing of
+    GitHub's hourly limit. Raises as find_update does, but NotModified."""
+    if remembered is not None and remembered.for_version == current and remembered.etag:
+        source.etag = remembered.etag
+    else:
+        source.etag = None
+    try:
+        offer = find_update(source, current, keys)
+    except NotModified:
+        assert remembered is not None
+        return remembered.available, remembered.etag
+    return (offer.release.version if offer else None), source.etag
+
+
+def _default_source() -> ReleaseSource:
+    return ReleaseSource(timeout=httpx.Timeout(10))
 
 
 class CheckFailed(RuntimeError):
@@ -819,10 +958,11 @@ def check_now(
     source: Callable[[], ReleaseSource] | None = None,
     current: str = __version__,
     data: Path | None = None,
+    now: Callable[[], float] = time.time,
 ) -> str | None:
     """The launcher's "Check for updates": asks GitHub now (as `um-codex
-    update` does, signature checked) and remembers the answer for the daily
-    check. The newer version, or None. Raises CheckFailed."""
+    update` does, signature checked) and remembers the answer for the
+    launch-time check. The newer version, or None. Raises CheckFailed."""
     data = data if data is not None else data_dir()
     layout = layout or Layout(install_root())
     if layout.running_version() is None:
@@ -835,7 +975,7 @@ def check_now(
     except NotConfigured as error:
         raise CheckFailed(str(error)) from None
     try:
-        offer = find_update(source() if source else ReleaseSource(timeout=httpx.Timeout(10)), current, pinned)
+        version, etag = _ask((source or _default_source)(), current, pinned, _remembered(data))
     except CheckProblem as problem:
         raise CheckFailed(f"Couldn't check for updates: {problem}") from None
     except (NotSigned, ChecksumMismatch):
@@ -843,8 +983,7 @@ def check_now(
             "A newer release was found, but it didn't pass UM-Codex's checks, so it isn't offered. "
             "Tell the UM-Codex maintainer."
         ) from None
-    version = offer.release.version if offer else None
-    remember_check(data, version)
+    remember_check(data, version, now(), for_version=current, etag=etag)
     return version
 
 
@@ -859,12 +998,15 @@ def launch_notice(
     wait: float = NOTICE_WAIT_SECONDS,
     now: Callable[[], float] = time.time,
 ) -> str | None:
-    """At a launch: one line if a newer release is out. GitHub is asked at most
-    once a day, and the launch never waits more than `wait` seconds for it; a
-    check that takes longer finishes in the background and is remembered for
-    the next launch. Never asked for a development copy, or while no release
-    key is pinned. Never raises. Returns the newer version it named, if any
-    (the launcher window offers Update for it)."""
+    """At a launch (and the launcher window's start, and each hour while it's
+    open): one line if a newer release is out. GitHub is asked at most every
+    NOTICE_EVERY_SECONDS (a check sooner gets the last answer), and the caller
+    never waits more than `wait` seconds for it; a check that takes longer
+    finishes in the background and is remembered for the next one. If GitHub
+    can't be asked (offline, slow), the last answer stands. Never asked for a
+    development copy, or while no release key is pinned. Never raises.
+    Returns the newer version it named, if any (the launcher window offers
+    Update for it)."""
     try:
         if os.environ.get(NO_CHECK_ENV):
             return None
@@ -878,25 +1020,27 @@ def launch_notice(
             return None
         remembered = _remembered(data)
         found: list[str | None] = []
-        if remembered is not None and 0 <= now() - remembered[0] < NOTICE_EVERY_SECONDS:
-            found.append(remembered[1])
+        if remembered is not None and 0 <= now() - remembered.checked_at < NOTICE_EVERY_SECONDS:
+            found.append(remembered.available)
         else:
-            remember_check(data, remembered[1] if remembered else None, now())  # once a day, even offline
+            # Noted first, so a launch soon after (or one while offline) doesn't ask again.
+            last = remembered or Remembered(0.0, None)
+            remember_check(data, last.available, now(), for_version=last.for_version, etag=last.etag)
 
             def check() -> None:
                 try:
-                    # The launch waits `wait` at most; this may go on, in the background.
-                    asked = source() if source else ReleaseSource(timeout=httpx.Timeout(10))
-                    offer = find_update(asked, current, pinned)
-                except Exception:  # offline, rate-limited, a bad release: nothing to say
+                    # The caller waits `wait` at most; this may go on, in the background.
+                    version, etag = _ask((source or _default_source)(), current, pinned, remembered)
+                except Exception:  # offline, rate-limited, a bad release: nothing new to say
                     return
-                version = offer.release.version if offer else None
-                remember_check(data, version, now())
+                remember_check(data, version, now(), for_version=current, etag=etag)
                 found.append(version)
 
             worker = threading.Thread(target=check, name="update-check", daemon=True)
             worker.start()
             worker.join(wait)
+            if not found and remembered is not None:
+                found.append(remembered.available)
         version = found[0] if found else None
         if version and is_newer(version, current):
             say(f"UM-Codex {version} is available: run um-codex update")

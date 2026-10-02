@@ -220,7 +220,8 @@ image…), then "Updated to …": press **Reopen** to use it. It doesn't start
 while a setup is running (stop them first), and if anything fails nothing
 changes (the reason is in `um-codex.log`, in UM-Codex's data folder).
 **Check for updates** at the top asks right away; otherwise UM-Codex checks
-once a day.
+each time you open it or start Codex, and every hour while its window is
+open (asking GitHub at most every ten minutes).
 
 In a terminal it's:
 
@@ -231,9 +232,15 @@ um-codex update
 It installs the newest release beside the one you have (only a release
 signed with UM-Codex's release key, and never while Codex is open), pulls
 its containers, and switches to it; the version before is kept.
-`um-codex update --rollback` switches back. Once a day, starting UM-Codex
-says when a new version is out. Running the install command again also
-installs the newest release.
+`um-codex update --rollback` switches back. Starting UM-Codex in a
+terminal says when a new version is out. Running the install command again
+also installs the newest release.
+
+If **Update** in the window says uv (which installs UM-Codex) wasn't found,
+run `um-codex update` in Terminal instead (Windows PowerShell on Windows).
+Installers from 0.1.0-alpha.6 on note which uv they used, so the window
+finds it however uv was installed (Homebrew's too); older installs are
+looked for in `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`.
 
 On a Mac with 0.1.0-alpha.1 or alpha.2, typing `um-codex` in Terminal
 doesn't work (it says "UM-Codex (none) can't be opened"). Update with the
@@ -308,7 +315,7 @@ For development only:
 - `UMCODEX_INSTALL_DIR` and `UMCODEX_RELEASES_API` (tests) point
   `um-codex update` at another program folder and at a stand-in for
   GitHub's API on this computer; `UMCODEX_NO_UPDATE_CHECK=1` turns off the
-  daily check at launch.
+  update check at launch and in the launcher window.
 
 Releases, signing and `um-codex update`: [docs/RELEASING.md](docs/RELEASING.md).
 

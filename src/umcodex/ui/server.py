@@ -7,7 +7,8 @@ opened in the default browser with a one-time sign-in link.
 One server per data folder: it holds `ui.lock`, and writes its port and a
 private control secret to `ui.json`. A second `um-codex ui` asks it, with
 that secret, for a new sign-in link and opens that instead. The server ends
-by itself after IDLE_SECONDS with no request from the page.
+by itself after IDLE_SECONDS with no request from the page. While it runs it
+checks for a newer UM-Codex at its start and every hour (UPDATE_CHECK_EVERY).
 
 Starting a setup opens a new terminal window running `um-codex launch
 --setup <id>` (opener.py), or, for a setup opened in the Codex app, starts
@@ -31,7 +32,7 @@ import sys
 import threading
 import time
 import webbrowser
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from importlib import resources
 from pathlib import Path
@@ -354,6 +355,14 @@ UPDATE_FAILED = (
     "The update didn't finish, so this version is still the one in use. What happened is in "
     "um-codex.log, in UM-Codex's data folder."
 )
+# What update.uv_not_found says first: then the window says what to do.
+_NO_UV = "uv, which installs UM-Codex, wasn't found"
+UPDATE_NO_UV = (
+    "The update couldn't start: uv, which installs UM-Codex, wasn't found. To update, open "
+    "{shell} and run: um-codex update"
+)
+# While the window is open, GitHub is asked again this often (update.launch_notice).
+UPDATE_CHECK_EVERY = 60 * 60.0
 _UPDATED = re.compile(r"Updated to UM-Codex ([0-9][0-9A-Za-z.+-]{0,40})\.")
 
 
@@ -384,7 +393,7 @@ class Status:
     docker_checked: float = 0.0
     key_saved: bool | None = None
     key_checked: float = 0.0
-    update: str | None = None  # a newer version the daily check (or Check for updates) found
+    update: str | None = None  # a newer version the launch-time check (or Check for updates) found
     models: list[str] = field(default_factory=list)
     # One Docker check at a time: a page polling while another check runs
     # gets the last answer instead of starting a second one.
@@ -817,10 +826,16 @@ class Launcher:
         return {"outcome": result.outcome, "words": FIX_WORDS.get(result.outcome, result.outcome)}
 
     def check_update(self) -> None:
-        """The daily check, as a launch does it (update.launch_notice)."""
+        """The check a launch makes (update.launch_notice): at the window's start
+        and each hour while it's open. Not while this window's own Update runs
+        or has run (Reopen is offered then, not the version it installed)."""
         from umcodex.update import launch_notice
 
-        self.status.update = launch_notice(lambda _: None, wait=10)
+        if self.update_job.phase in ("running", "updated"):
+            return
+        found = launch_notice(lambda _: None, wait=10)
+        if self.update_job.phase not in ("running", "updated"):
+            self.status.update = found
 
     def check_for_updates(self) -> dict[str, Any]:
         """Check for updates (by hand): GitHub is asked now."""
@@ -867,7 +882,7 @@ class Launcher:
         (`ui/update.log`), so it goes on whatever happens to this server; the
         file is read for the progress words."""
         job = self.update_job
-        found: dict[str, Any] = {"version": None, "newest": False}
+        found: dict[str, Any] = {"version": None, "newest": False, "no_uv": False}
 
         def read(line: str) -> None:
             line = line.rstrip()
@@ -877,6 +892,7 @@ class Launcher:
                 if marker in line:
                     job.words = words
             found["newest"] = found["newest"] or "is the newest version" in line
+            found["no_uv"] = found["no_uv"] or _NO_UV in line
             updated = _UPDATED.search(line)
             if updated:
                 found["version"] = updated.group(1)
@@ -921,7 +937,9 @@ class Launcher:
             self.status.update = None
         else:
             log.error("launcher window: the update ended with %s", code)
-            job.words, job.phase = UPDATE_FAILED, "failed"
+            shell = "Windows PowerShell" if self.platform == "win32" else "Terminal"
+            words = UPDATE_NO_UV.format(shell=shell) if found["no_uv"] else UPDATE_FAILED
+            job.words, job.phase = words, "failed"
 
 
 # --- HTTP -------------------------------------------------------------------
@@ -1212,6 +1230,22 @@ def sweep_command_files(data: Path, now: float | None = None) -> None:
                 leftover.unlink()
 
 
+async def check_updates(
+    launcher: Launcher,
+    *,
+    every: float = UPDATE_CHECK_EVERY,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
+    """For as long as the window is open: check for updates at once, then
+    every `every` seconds. The page asks for the state every few seconds, so
+    "UM-Codex X is available · Update" shows as soon as one is found."""
+    loop = asyncio.get_running_loop()
+    while True:
+        with contextlib.suppress(Exception):  # never ends the window
+            await loop.run_in_executor(None, launcher.check_update)
+        await sleep(every)
+
+
 async def serve(
     launcher: Launcher,
     *,
@@ -1248,7 +1282,7 @@ async def serve(
     record = {"port": port, "control": control, "pid": os.getpid(), "nonce": os.environ.pop(NONCE_ENV, None)}
     _write_private(info, json.dumps(record) + "\n")
     url = f"http://127.0.0.1:{port}{session.sign_in_path()}"
-    loop.run_in_executor(None, launcher.check_update)
+    checks = asyncio.create_task(check_updates(launcher, every=UPDATE_CHECK_EVERY))
     # While this window is open it also answers the Codex app copy's local
     # chats (codex_app.LocalChatsServer), between and before launches.
     responder = codex_app.LocalChatsServer(data)
@@ -1274,6 +1308,9 @@ async def serve(
                 break
             await loop.run_in_executor(None, answer_local_chats)
     finally:
+        checks.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await checks
         await loop.run_in_executor(None, responder.stop)
         info.unlink(missing_ok=True)
         await runner.cleanup()

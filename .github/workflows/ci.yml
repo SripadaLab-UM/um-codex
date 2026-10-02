@@ -385,6 +385,28 @@ jobs:
         run: |
           uv sync
           uv run pytest -q tests/test_ui.py -k windows_command
+      - name: The uv the installer notes is the one um-codex update finds
+        # Write-UvRecord as it is, for the pinned uv (from the step above)
+        # copied into a folder whose name ASCII can't spell, and update.py's
+        # find_uv reading that record (and running that uv) on Windows.
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $script = Get-Content (Join-Path $Env:GITHUB_WORKSPACE "installer/windows/install.ps1") -Raw
+          $ast = [System.Management.Automation.Language.Parser]::ParseInput($script, [ref]$null, [ref]$null)
+          foreach ($f in $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+            if ($f.Name -eq "Write-UvRecord") { . ([scriptblock]::Create($f.Extent.Text)) }
+          }
+          $folder = New-Item -ItemType Directory -Force (Join-Path $Env:RUNNER_TEMP ("Zo" + [char]0xEB + " uv"))
+          $uv = Join-Path $folder "uv.exe"
+          Copy-Item (Join-Path $Env:RUNNER_TEMP "UM-Codex\uv\uv.exe") $uv
+          $root = New-Item -ItemType Directory -Force (Join-Path $Env:RUNNER_TEMP "record\app")
+          Write-UvRecord $root $uv
+          Write-UvRecord $root $uv  # replaced whole
+          if (Test-Path (Join-Path $root "uv.tmp")) { Write-Host "FAILED: uv.tmp was left"; exit 1 }
+          uv run python -c "import sys; from pathlib import Path; from umcodex.update import find_uv; sys.exit(find_uv('win32', root=Path(sys.argv[1])) != sys.argv[2])" "$root" "$uv"
+          if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: find_uv didn't find the noted uv"; exit 1 }
+          Write-Host "find_uv found the noted $uv."
       - name: Windows OpenSSH accepts the ssh folders UM-Codex makes (no OWNER RIGHTS from mkdir's mode)
         # Python 3.13's mkdir(mode=0o700) gives a folder an OWNER RIGHTS entry,
         # and Windows' ssh.exe then refuses every config Included from it.

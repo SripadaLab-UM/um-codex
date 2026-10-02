@@ -1512,6 +1512,104 @@ def test_update_says_when_this_is_the_newest():
     assert launcher.update_job.phase == "newest" and launcher.status.update is None
 
 
+@pytest.mark.parametrize(("platform", "shell"), [("darwin", "Terminal"), ("win32", "Windows PowerShell")])
+def test_update_without_uv_says_to_run_it_in_a_terminal(platform, shell, tmp_path):
+    """The maintainer's Mac: the app's Update found no uv. The window says
+    what to do (its own words, not the update's line, which names paths)."""
+    from umcodex.update import uv_not_found
+
+    printed = ["Checking for a newer UM-Codex...", uv_not_found(platform, root=tmp_path)]
+    launcher = launcher_for_tests(spawn=FakeUpdate(printed, code=1), platform=platform)
+    launcher.update_job = server.UpdateJob("running")
+    launcher._run_update()
+    assert launcher.update_job.phase == "failed"
+    assert launcher.update_job.words == server.UPDATE_NO_UV.format(shell=shell)
+    assert f"open {shell} and run: um-codex update" in launcher.update_job.words
+    assert str(tmp_path) not in json.dumps(launcher.state()["update"])
+
+
+def test_the_window_checks_for_updates_at_once_then_every_hour():
+    launcher = launcher_for_tests()
+    checked: list[int] = []
+    slept: list[float] = []
+    launcher.check_update = lambda: checked.append(len(slept))  # type: ignore[method-assign]
+
+    async def sleep(seconds: float) -> None:  # a clock that jumps
+        slept.append(seconds)
+        if len(slept) == 3:
+            raise asyncio.CancelledError
+
+    async def run() -> None:
+        with pytest.raises(asyncio.CancelledError):
+            await server.check_updates(launcher, sleep=sleep)
+
+    asyncio.run(run())
+    assert checked == [0, 1, 2]  # at the start, then after each hour
+    assert slept == [3600.0, 3600.0, 3600.0] and server.UPDATE_CHECK_EVERY == 3600.0
+
+
+def test_a_failed_check_doesnt_stop_the_hourly_ones():
+    launcher = launcher_for_tests()
+    calls: list[int] = []
+
+    def broken() -> None:
+        calls.append(1)
+        raise RuntimeError("anything at all")
+
+    launcher.check_update = broken  # type: ignore[method-assign]
+
+    async def sleep(_: float) -> None:
+        if len(calls) == 2:
+            raise asyncio.CancelledError
+
+    async def run() -> None:
+        with pytest.raises(asyncio.CancelledError):
+            await server.check_updates(launcher, sleep=sleep)
+
+    asyncio.run(run())
+    assert len(calls) == 2
+
+
+def test_the_hourly_checks_start_and_stop_with_the_window(monkeypatch):
+    monkeypatch.setattr(server, "UPDATE_CHECK_EVERY", 0.05)  # an "hour"
+    launcher = launcher_for_tests()
+    checked: list[float] = []
+    launcher.check_update = lambda: checked.append(time.monotonic())  # type: ignore[method-assign]
+    data_dir().mkdir(parents=True, exist_ok=True)
+
+    async def run() -> None:
+        stop = asyncio.Event()
+        quiet = {"say": lambda _: None, "ready": lambda *_: None}
+        ended = asyncio.create_task(server.serve(launcher, data=data_dir(), stop=stop, **quiet))
+        await asyncio.sleep(0.6)
+        assert len(checked) >= 3
+        stop.set()
+        await ended
+        after = len(checked)
+        await asyncio.sleep(0.3)
+        assert len(checked) == after  # none once the window has ended
+
+    asyncio.run(run())
+
+
+def test_a_check_shows_in_the_header_and_never_during_or_after_this_windows_update(monkeypatch):
+    from umcodex import update
+
+    found = ["0.1.0a9"]
+    monkeypatch.setattr(update, "launch_notice", lambda say, **kw: found[0])
+    launcher = launcher_for_tests()
+    launcher.check_update()
+    assert launcher.state()["update"]["available"] == "0.1.0a9"  # "UM-Codex 0.1.0a9 is available · Update"
+    found[0] = None
+    launcher.check_update()
+    assert launcher.state()["update"]["available"] is None
+    found[0] = "0.1.0a9"
+    for phase in ("running", "updated"):
+        launcher.update_job = server.UpdateJob(phase, version="0.1.0a9" if phase == "updated" else None)
+        launcher.check_update()
+        assert launcher.status.update is None
+
+
 def test_update_is_refused_while_a_setup_runs(folders_here):
     data = data_dir()
     folder = launches_dir(data) / "0123abcd"

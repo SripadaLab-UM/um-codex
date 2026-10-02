@@ -87,6 +87,7 @@ class FakeGitHub:
         self.requests: list[str] = []
         self.list_status = 200
         self.delay = 0.0
+        self.not_modified = 0  # lists answered 304 (GitHub doesn't count them)
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -103,7 +104,17 @@ class FakeGitHub:
                     if fake.list_status != 200:
                         self._send(fake.list_status, b"{}")
                         return
-                    self._send(200, json.dumps(fake.listing()).encode(), "application/json")
+                    body = json.dumps(fake.listing()).encode()
+                    # As GitHub: a weak ETag on the list, and a 304 with no
+                    # body when If-None-Match still matches it.
+                    etag = f'W/"{sha256(body)}"'
+                    if self.headers.get("if-none-match") == etag:
+                        fake.not_modified += 1
+                        self.send_response(304)
+                        self.send_header("etag", etag)
+                        self.end_headers()
+                        return
+                    self._send(200, body, "application/json", etag=etag)
                 elif path.startswith(prefix + "/assets/"):
                     index, name = fake.asset(int(path.rsplit("/", 1)[1]))
                     self.send_response(302)
@@ -117,9 +128,11 @@ class FakeGitHub:
                 else:
                     self._send(404, b"")
 
-            def _send(self, status: int, body: bytes, kind: str = "text/plain") -> None:
+            def _send(self, status: int, body: bytes, kind: str = "text/plain", etag: str = "") -> None:
                 self.send_response(status)
                 self.send_header("content-type", kind)
+                if etag:
+                    self.send_header("etag", etag)
                 self.send_header("content-length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)

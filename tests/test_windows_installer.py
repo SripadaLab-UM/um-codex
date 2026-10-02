@@ -388,6 +388,24 @@ def test_uv_is_the_pinned_release_checked_and_used_by_full_path():
     assert not re.search(r"(?m)^\s*uv\s", body) and "Get-Command uv" not in body
 
 
+def test_the_pinned_uv_is_noted_for_um_codex_update():
+    """update.py's find_uv reads `<root>\\uv` first: the installer notes the
+    pinned uv there, by its full path, written whole, in UTF-8 without a BOM
+    (ci.yml runs Write-UvRecord and find_uv on Windows)."""
+    four = step(4)
+    assert "Write-UvRecord $Root $Uv" in four
+    assert four.index("Write-Atomically $CurrentFile $Version") < four.index("Write-UvRecord $Root $Uv")
+    record = function(INSTALL, "Write-UvRecord")
+    assert '$record = Join-Path $root "uv"' in record
+    assert "New-Object System.Text.UTF8Encoding($false)" in record and '"$uv`n"' in record
+    assert 'Move-Item -LiteralPath "$record.tmp" -Destination $record -Force' in record
+    from umcodex.update import UV_RECORD
+
+    assert UV_RECORD == "uv"
+    ci = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert 'if ($f.Name -eq "Write-UvRecord")' in ci and "find_uv('win32', root=" in ci
+
+
 def test_uv_gets_the_files_under_plain_names_from_their_own_folder():
     """uv cuts a path at its first space ("OneDrive - Michigan Medicine")."""
     four = step(4)
@@ -604,7 +622,7 @@ def test_the_uninstaller_removes_only_what_the_installer_put_in_the_app_folder()
     body = code(UNINSTALL)
     # downloads: the updater's (DataLab 615cd0f).
     assert 'foreach ($name in "versions", "bin", "icons", "downloads")' in body
-    assert 'foreach ($name in "current", "previous", "launchers")' in body
+    assert 'foreach ($name in "current", "previous", "launchers", "uv")' in body
     assert "if ($inRoot.Count -eq 0) { Remove-Tree $Root }" in body
     installer = 'foreach ($name in "installer", "install", "uv") { Remove-Tree (Join-Path $StateDir $name) }'
     assert installer in body
