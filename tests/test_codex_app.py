@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from umcodex import codex_app, codex_config, launch
+from umcodex import codex_app_windows as win
 from umcodex.containers import Docker, LaunchSpec
 from umcodex.setups import Setup
 
@@ -465,10 +466,128 @@ def test_the_app_is_found_by_its_bundle_id(tmp_path):
     assert codex_app.find_app(home=home, run=nothing, platform="win32") is None
 
 
-def test_where_the_codex_app_can_be_used():
+def test_where_the_codex_app_can_be_used(monkeypatch):
+    monkeypatch.delenv("UMCODEX_WINDOWS_CODEX_APP", raising=False)
     assert codex_app.unavailable_reason("darwin", Path("/Applications/ChatGPT.app")) is None
     assert "chatgpt.com/download" in (codex_app.unavailable_reason("darwin", None) or "")
     assert "Mac only" in (codex_app.unavailable_reason("win32", None) or "")
+    assert "Mac only" in (codex_app.unavailable_reason("win32", Path("C:/x/ChatGPT.exe")) or "")
+    monkeypatch.setenv("UMCODEX_WINDOWS_CODEX_APP", "1")  # the hands-on test's switch
+    assert codex_app.unavailable_reason("win32", Path("C:/x/ChatGPT.exe")) is None
+    assert "Microsoft Store" in (codex_app.unavailable_reason("win32", None) or "")
+
+
+# The Store package as this Windows laptop has it (2026-10-02).
+WINDOWS_PACKAGE = r"C:\Program Files\WindowsApps\OpenAI.Codex_26.928.4866.0_x64__2p2nqsd0c76g0"
+
+
+def _appx(folder: Path, family: str = win.FAMILY, publisher: str = win.PUBLISHER) -> str:
+    """Get-AppxPackage's answer, as ConvertTo-Json -Compress gave it on this laptop (2026-10-02)."""
+    return json.dumps(
+        {"InstallLocation": str(folder), "PackageFamilyName": family, "Publisher": publisher},
+        separators=(",", ":"),
+    )
+
+
+def test_the_windows_app_is_found_by_its_store_package(tmp_path):
+    package = tmp_path / "OpenAI.Codex_26.928.4866.0_x64__2p2nqsd0c76g0"
+    (package / "app").mkdir(parents=True)
+    (package / "app" / "ChatGPT.exe").write_bytes(b"")
+    asked = []
+
+    def answer(text):
+        def powershell(command, **options):
+            asked.append(command)
+            return subprocess.CompletedProcess(command, 0, text + "\r\n", "")
+
+        return powershell
+
+    found = codex_app.find_app(platform="win32", run=answer(_appx(package)))
+    assert found == package / "app" / "ChatGPT.exe"
+    assert asked[0][0].lower().endswith(r"\system32\windowspowershell\v1.0\powershell.exe")
+    assert "Get-AppxPackage -Name OpenAI.Codex" in asked[0][-1]
+    assert codex_app.app_version(found) == "26.928.4866.0"
+    assert codex_app.app_version(Path(WINDOWS_PACKAGE) / "app" / "ChatGPT.exe") == "26.928.4866.0"
+    assert codex_app.find_app(platform="win32", run=answer("")) is None  # not installed
+    assert codex_app.find_app(platform="win32", run=answer(_appx(tmp_path / "gone"))) is None
+    # Someone else's package with that name isn't run.
+    assert codex_app.find_app(platform="win32", run=answer(_appx(package, publisher="CN=Other"))) is None
+    other_family = _appx(package, family="OpenAI.Codex_0000000000000")
+    assert codex_app.find_app(platform="win32", run=answer(other_family)) is None
+    assert codex_app.find_app(platform="win32", run=answer("not json")) is None
+
+
+def test_the_windows_copy_never_uses_the_persons_own_folders(tmp_path):
+    data, person, app_data = tmp_path / "data" / "codex-app", tmp_path / "me", tmp_path / "me" / "Roaming"
+    win.check_paths(data / "codex-home", data / "user-data", data, person, app_data)  # fine
+    for home, user_data in (
+        (person / ".codex", data / "user-data"),  # the person's own Codex home
+        (data / "codex-home", app_data / "Codex"),  # the app's own profile
+        (tmp_path / "elsewhere", data / "user-data"),  # outside UM-Codex's folder
+        (data, data / "user-data"),
+    ):
+        with pytest.raises(win.UnsafePaths):
+            win.check_paths(home, user_data, data, person, app_data)
+    with pytest.raises(win.UnsafePaths):  # a data folder that holds the person's ~/.codex
+        win.check_paths(person / ".codex" / "x", data / "user-data", person, person, app_data)
+
+
+def test_the_windows_copy_is_the_exe_itself_with_its_own_home(data_folder):
+    app = Path(WINDOWS_PACKAGE) / "app" / "ChatGPT.exe"
+    person = {
+        "PATH": r"C:\Windows", "CODEX_HOME": r"C:\Users\x\.codex", "CODEX_APP_SERVER_WS_URL": "ws://x",
+        "OPENAI_API_KEY": "sk-x", "OPENAI_BASE_URL": "https://x",
+        "HTTPS_PROXY": "http://p:1", "no_proxy": "*",
+    }  # fmt: skip
+    command, env = codex_app.windows_open(app, link=codex_app.deep_link("thesis-a1"), environ=person)
+    home, user_data = codex_app.copy_paths()
+    assert command == [
+        str(app),
+        f"--user-data-dir={user_data}",
+        "codex://settings/connections/ssh/add?name=umcodex-thesis-a1",
+    ]
+    assert env["CODEX_HOME"] == str(home) and str(data_folder) in env["CODEX_HOME"]  # never ~/.codex
+    assert env["CODEX_ELECTRON_USER_DATA_PATH"] == str(user_data)
+    assert set(env) == {"PATH", "CODEX_HOME", "CODEX_ELECTRON_USER_DATA_PATH"}  # nothing leads it elsewhere
+    assert codex_app.windows_open(app, environ={})[0] == [str(app), f"--user-data-dir={user_data}"]
+
+
+def test_the_running_windows_copy_is_found_by_its_profile_folder(data_folder):
+    _, user_data = codex_app.copy_paths()
+    exe = f'"{WINDOWS_PACKAGE}\\app\\ChatGPT.exe"'
+    # Win32_Process command lines, as this laptop showed them (2026-10-02).
+    listing = "\r\n".join(
+        [
+            f"7180 {exe} ",  # the person's own copy
+            f'4040 {exe} --type=renderer --user-data-dir="{user_data}" --app-user-model-id=x',
+            f'5050 {exe} --user-data-dir="{user_data}-2"',  # not ours: another folder beside it
+            f'19952 {exe} "--user-data-dir={str(user_data).upper()}"',
+        ]
+    )
+
+    def listed(text):
+        return lambda c, **o: subprocess.CompletedProcess(c, 0, text, "")
+
+    assert codex_app.running_copy(run=listed(listing), platform="win32") == 19952
+    assert codex_app.running_copy(run=listed(listing.split("\r\n")[0]), platform="win32") is None
+    other_spellings = [
+        f'31 {exe} --user-data-dir="{user_data}"',  # the value quoted
+        f'33 {exe} "--user-data-dir={user_data.parent}\\x\\..\\{user_data.name}" codex://x',
+    ]
+    if " " not in str(user_data):  # a bare value can't hold a space
+        other_spellings.append(f"32 {exe} --user-data-dir={str(user_data).replace(chr(92), '/')}")
+    for line in other_spellings:
+        assert codex_app.running_copy(run=listed(line), platform="win32") == int(line.split()[0]), line
+    assert win.profile_of(f"{exe} ") is None  # the person's own copy has none
+    assert win.profile_of(f"{exe} --type=gpu-process --user-data-dir=C:\\x") is None
+
+    def activate(command, **options):
+        assert command[-1].endswith("AppActivate(19952)")
+        return subprocess.CompletedProcess(command, 0, "True\r\n", "")
+
+    assert codex_app.bring_forward(19952, run=activate, platform="win32") is True
+    refused = lambda c, **o: subprocess.CompletedProcess(c, 0, "False\r\n", "")  # noqa: E731
+    assert codex_app.bring_forward(19952, run=refused, platform="win32") is False
 
 
 def test_the_copy_is_opened_separately_with_the_link_in_its_arguments(data_folder):
@@ -692,6 +811,121 @@ def test_a_later_launch_doesnt_pass_the_link_and_a_running_copy_isnt_doubled(tmp
     assert any(c[0] == "/usr/bin/osascript" and c[-1] == "77" for c in calls)
 
 
+def _windows_hold(tmp_path, data_folder, docker, *, clock=lambda: 0.0, starts=True, busy=lambda: False):
+    """An AppHold on Windows whose copy shows up in Win32_Process once started."""
+    calls: list[list[str]] = []
+    started: list[tuple[list[str], dict]] = []
+    said: list[str] = []
+    _, user_data = codex_app.copy_paths(data_folder)
+    plain = _ran(calls)
+
+    def run(command, **options):
+        if command[0].lower().endswith("powershell.exe") and "Win32_Process" in command[-1]:
+            calls.append(command)
+            line = f'4242 "{WINDOWS_PACKAGE}\\app\\ChatGPT.exe" --user-data-dir={user_data}'
+            return subprocess.CompletedProcess(command, 0, line if started and starts else "", "")
+        return plain(command, **options)
+
+    hold = codex_app.AppHold(
+        "thesis-a1", say=said.append, data=data_folder, app=Path(WINDOWS_PACKAGE) / "app" / "ChatGPT.exe",
+        docker=docker, run=run, sleep=lambda _: None, clock=clock, runtime_busy=busy,
+        proxy_for=lambda s: ["C:/x/um-codex.exe", "ssh-proxy", s], platform="win32",
+        popen=lambda command, **options: started.append((command, options)),
+    )  # fmt: skip
+    return hold, calls, started, said
+
+
+def test_on_windows_the_copy_is_started_with_its_own_home(tmp_path, data_folder):
+    running = _running(tmp_path, data_folder)
+    docker = FakeDocker(running_for=3, connects_after=0)
+    hold, calls, started, said = _windows_hold(tmp_path, data_folder, docker)
+    assert hold(running) == 0  # connected, then the sandbox was stopped
+    assert not any(c[0] == "/usr/bin/open" for c in calls)
+    ((command, options),) = started
+    home, user_data = codex_app.copy_paths(data_folder)
+    assert command[0].endswith(r"\app\ChatGPT.exe") and command[1] == f"--user-data-dir={user_data}"
+    assert options["env"]["CODEX_HOME"] == str(home)  # never the person's ~/.codex
+    assert options["env"]["CODEX_ELECTRON_USER_DATA_PATH"] == str(user_data)
+    assert options["stdin"] == subprocess.DEVNULL and options["creationflags"]
+    assert (home / ".codex-global-state.json").exists()  # seeded, as on a Mac
+    assert not any("Dock" in line for line in said)
+    assert all(note in said for note in codex_app.WINDOWS_NOTES)
+    assert any(line.startswith("Connected:") for line in said)
+    assert not any("taskkill" in c[0] for c in calls)
+
+
+def test_on_windows_a_copy_that_doesnt_connect_is_stopped(tmp_path, data_folder):
+    running = _running(tmp_path, data_folder)
+    times = iter([0.0, 10.0, codex_app.WINDOWS_CONNECT_SECONDS + 1])
+    docker = FakeDocker(running_for=99, connects_after=None)
+    hold, calls, _, said = _windows_hold(tmp_path, data_folder, docker, clock=lambda: next(times))
+    assert hold(running) == 1
+    assert [c[1:] for c in calls if c[0].lower().endswith("taskkill.exe")] == [["/PID", "4242", "/T", "/F"]]
+    assert said[-1] == codex_app.WINDOWS_FALLBACK
+    info = json.loads((running.folder / "launch.json").read_text())
+    assert info["app"]["fallback"] == "terminal" and info["app"]["connected"] is False
+
+
+def test_on_windows_a_runtime_download_puts_the_fallback_off(tmp_path, data_folder):
+    running = _running(tmp_path, data_folder)
+    late = codex_app.WINDOWS_CONNECT_SECONDS + 1
+    times = iter([0.0, late, late + 10, late + 20])
+    busy = iter([True, True, False])
+    docker = FakeDocker(running_for=99, connects_after=None)
+    hold, calls, _, said = _windows_hold(
+        tmp_path, data_folder, docker, clock=lambda: next(times), busy=lambda: next(busy)
+    )
+    assert hold(running) == 1  # stopped only once the download had ended
+    assert said[-1] == codex_app.WINDOWS_FALLBACK
+    assert next(busy, "all asked") == "all asked"
+    times = iter([0.0, late + codex_app.WINDOWS_UPDATE_GRACE_SECONDS + 1])  # not for ever
+    hold, _, _, _ = _windows_hold(
+        tmp_path, data_folder / "b", docker, clock=lambda: next(times), busy=lambda: True
+    )
+    assert hold(_running(tmp_path / "b", data_folder / "b")) == 1
+
+
+def test_a_runtime_download_is_seen_by_its_staging_folder(tmp_path):
+    staging = tmp_path / ".cache" / "codex-runtimes" / "codex-runtime-install-SsKNSv"
+    (staging / "payload").mkdir(parents=True)
+    part = staging / "node-runtime.tar.gz"
+    part.write_bytes(b"x")
+    os.utime(part, (1000.0, 1000.0))
+    os.utime(staging, (1000.0, 1000.0))
+    assert win.runtime_update_running(tmp_path, now=1030.0) is True
+    assert win.runtime_update_running(tmp_path, now=1100.0) is False  # left over, not being written
+    assert win.runtime_update_running(tmp_path / "nobody", now=1030.0) is False
+
+
+def test_on_windows_only_our_copy_is_ever_stopped(data_folder):
+    _, user_data = codex_app.copy_paths(data_folder)
+    exe = f'"{WINDOWS_PACKAGE}\\app\\ChatGPT.exe"'
+    calls: list[list[str]] = []
+
+    def now_running(listing):
+        def run(command, **options):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, listing, "")
+
+        return run
+
+    # The number now belongs to another process (the person's own copy): nothing is stopped.
+    assert win.stop(4242, user_data, now_running(f"4242 {exe} ")) is False
+    assert win.stop(4242, user_data, now_running(f"999 {exe} --user-data-dir={user_data}")) is False
+    assert not any(c[0].lower().endswith("taskkill.exe") for c in calls)
+    assert win.stop(4242, user_data, now_running(f'4242 {exe} --user-data-dir="{user_data}"')) is True
+    assert calls[-1][1:] == ["/PID", "4242", "/T", "/F"]
+
+
+def test_on_windows_a_copy_that_doesnt_start_ends_the_launch(tmp_path, data_folder):
+    running = _running(tmp_path, data_folder)
+    docker = FakeDocker(running_for=99, connects_after=None)
+    hold, calls, started, said = _windows_hold(tmp_path, data_folder, docker, starts=False)
+    assert hold(running) == 1 and len(started) == 1
+    assert not any(c[0].lower().endswith("taskkill.exe") for c in calls)  # nothing of ours to stop
+    assert said[-1] == codex_app.WINDOWS_FALLBACK
+
+
 def test_a_launch_without_the_app_still_prepares_everything(tmp_path, data_folder):
     running = _running(tmp_path, data_folder)
     calls: list[list[str]] = []
@@ -876,6 +1110,11 @@ def test_the_copys_catalog_has_no_announcements(tmp_path):
     assert all(m["availability_nux"] is None and m["upgrade"] is None for m in json.loads(catalog)["models"])
     failed = lambda c, **o: subprocess.CompletedProcess(c, 1, "", "")  # noqa: E731
     assert codex_app.bundled_catalog(Path("/A.app"), tmp_path, "m", run=failed) == (None, [])
+    calls.clear()
+    windows = Path(WINDOWS_PACKAGE) / "app" / "ChatGPT.exe"
+    assert codex_app.bundled_catalog(windows, tmp_path, "gpt-5.6-terra", run=run)[1] == announced
+    assert calls[0][0][0] == str(Path(WINDOWS_PACKAGE) / "app" / "resources" / "codex.exe")
+    assert calls[0][1]["env"]["CODEX_HOME"] == str(tmp_path) == calls[0][1]["env"]["USERPROFILE"]
 
 
 # --- The local-chats responder ------------------------------------------------------

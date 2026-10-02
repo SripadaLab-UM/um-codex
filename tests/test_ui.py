@@ -836,13 +836,19 @@ def test_the_codex_app_opener_starts_the_launch_in_the_background(tmp_path):
         app.open("../odd")
 
 
-def test_the_codex_app_opener_says_why_it_cant(tmp_path):
+def test_the_codex_app_opener_says_why_it_cant(tmp_path, monkeypatch):
+    monkeypatch.delenv("UMCODEX_WINDOWS_CODEX_APP", raising=False)
     missing = opening.CodexAppOpener(platform="darwin", find=lambda: None, folder=tmp_path)
     assert not missing.available() and "chatgpt.com/download" in (missing.reason() or "")
     with pytest.raises(opening.OpenFailed):
         missing.open("thesis")
     windows = opening.CodexAppOpener(platform="win32", find=lambda: Path("C:/x"), folder=tmp_path)
     assert "Mac only" in (windows.reason() or "")
+    monkeypatch.setenv("UMCODEX_WINDOWS_CODEX_APP", "1")  # the hands-on test's switch
+    assert windows.reason() is None
+    assert "Microsoft Store" in (
+        opening.CodexAppOpener(platform="win32", find=lambda: None, folder=tmp_path).reason() or ""
+    )
 
 
 def test_the_codex_app_is_looked_for_at_most_once_a_minute():

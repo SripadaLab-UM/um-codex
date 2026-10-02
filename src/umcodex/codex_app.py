@@ -34,9 +34,11 @@ its SSH "Connections":
   app-server inside the container and marks it "Connected". The app keeps
   the host switched on, so later launches of the setup need no steps.
 
-Windows: the ssh side is written for Windows OpenSSH, but opening a second
-copy of the Store app with its own settings isn't verified, so "Codex app"
-is Mac only for now (`unavailable_reason`).
+Windows: the ssh side is written for Windows OpenSSH, and the copy is
+started by running the Store package's ChatGPT.exe with its own CODEX_HOME
+and profile (`windows_open`, checked by hand on 2026-10-02). It stays off
+until the maintainer agrees and a hands-on test passes (`WINDOWS_COPY`), so
+"Codex app" is Mac only for now (`unavailable_reason`).
 """
 
 from __future__ import annotations
@@ -60,6 +62,7 @@ from pathlib import Path
 
 import tomli_w
 
+from umcodex import codex_app_windows as win
 from umcodex.containers import APP, APP_LABEL, INSTANCE_LABEL, Docker, DockerError, instance_of
 from umcodex.paths import data_dir
 from umcodex.setups import Setup
@@ -78,6 +81,37 @@ BACKUP_NAME = "config.um-codex-backup"
 APP_BUNDLE_ID = "com.openai.codex"
 APP_FOLDER = "codex-app"  # in the data folder: the app copy's CODEX_HOME and profile
 APP_DOWNLOAD = "https://chatgpt.com/download"
+
+# Windows (codex_app_windows): the copy is the package's ChatGPT.exe run
+# directly, with its own CODEX_HOME and profile; experimental. The maintainer
+# agreed to that way of starting it (2026-10-02); it stays off until the
+# hands-on test on Windows passes. UMCODEX_WINDOWS_CODEX_APP=1 turns it on
+# for that test.
+WINDOWS_COPY = False
+# How long the launch waits for the Windows copy to connect to the sandbox
+# before it stops the copy and says to use Terminal: when the copy was set up
+# (seeded) or has connected before, and when the person has the first steps
+# to do by hand.
+WINDOWS_CONNECT_SECONDS = 180.0
+WINDOWS_STEPS_SECONDS = 900.0
+WINDOWS_START_CHECKS = 15  # looks for the started copy, poll_seconds apart
+WINDOWS_FALLBACK = (
+    "The Codex app didn't connect to the sandbox, so UM-Codex closed its Codex window and stopped "
+    "the sandbox. The Codex app on Windows is experimental: use Open in: Terminal for this setup."
+)
+WINDOWS_NOTES = (
+    "On Windows the Codex app is experimental. UM-Codex's Codex window runs without the app's "
+    "Windows sandbox and Computer Use; work in Remote chats runs in UM-Codex's sandbox instead.",
+    "UM-Codex's Codex window may download an app component update in the background (about 1 GB) "
+    "the first time.",
+)
+# A runtime download under way (codex_app_windows.runtime_update_running) puts
+# the fallback off, by up to this much, so it isn't left half done.
+WINDOWS_UPDATE_GRACE_SECONDS = 1200.0
+
+
+def windows_enabled() -> bool:
+    return WINDOWS_COPY or os.environ.get("UMCODEX_WINDOWS_CODEX_APP") == "1"
 
 # What the launcher (and the terminal) says before adding the Include line.
 INCLUDE_EXPLAINED = (
@@ -119,18 +153,25 @@ OTHER_CHATS = {
 }
 
 
-def notes(setup_id: str, *, local_chats: bool | None = None) -> list[str]:
+def notes(setup_id: str, *, local_chats: bool | None = None, platform: str = sys.platform) -> list[str]:
     other = OTHER_CHATS[LOCAL_CHATS if local_chats is None else local_chats]
-    return [note.format(alias=alias(setup_id), other=other) for note in APP_NOTES]
+    lines = [note.format(alias=alias(setup_id), other=other) for note in APP_NOTES]
+    return [*lines, *WINDOWS_NOTES] if platform == "win32" else lines
 
 
-def first_steps(setup_id: str, project: str) -> list[str]:
+def second_icon(platform: str = sys.platform) -> str:
+    """Where the person finds UM-Codex's copy of the app."""
+    place = "taskbar" if platform == "win32" else "Dock"
+    return f"a second ChatGPT icon in the {place}"
+
+
+def first_steps(setup_id: str, project: str, platform: str = sys.platform) -> list[str]:
     """What the person does once per setup when UM-Codex couldn't set the
     copy up itself (it was already open, or the app's format changed), in
     UM-Codex's Codex window: the flow the GUI test found (app 26.928)."""
     name = alias(setup_id)
     return [
-        "Switch to UM-Codex's Codex window (a second ChatGPT icon in the Dock).",
+        f"Switch to UM-Codex's Codex window ({second_icon(platform)}).",
         f"Open Settings → Connections and press Add; choose {name} from the list, then Add. "
         "It's switched on and connects.",
         f"Go Home → Choose project → Create project. Name it “{project}”; under the source folders, "
@@ -570,7 +611,10 @@ def find_app(
     *, platform: str = sys.platform, home: Path | None = None, run: Runner = subprocess.run
 ) -> Path | None:
     """The Codex app (the ChatGPT desktop app, bundle id com.openai.codex):
-    in /Applications or ~/Applications, else wherever Spotlight knows it."""
+    in /Applications or ~/Applications, else wherever Spotlight knows it. On
+    Windows, the Store package's ChatGPT.exe."""
+    if platform == "win32":
+        return win.find_app(run)
     if platform != "darwin":
         return None
     home = home or user_home()
@@ -595,8 +639,15 @@ def find_app(
 
 def unavailable_reason(platform: str = sys.platform, app: Path | None = None) -> str | None:
     """Why "Open in: Codex app" can't be used here, in plain words (None: it can)."""
-    if platform == "win32":
+    if platform == "win32" and not windows_enabled():
         return "The Codex app works with UM-Codex on a Mac only, for now. Use Terminal."
+    if platform == "win32":
+        if app is None:
+            return (
+                "The Codex app isn't installed. It's part of OpenAI's ChatGPT desktop app: get it from "
+                f"the Microsoft Store ({APP_DOWNLOAD}), then come back. Terminal works in the meantime."
+            )
+        return None
     if platform != "darwin":
         return "The Codex app works with UM-Codex on a Mac only."
     if app is None:
@@ -634,10 +685,29 @@ def open_command(app: Path, data: Path | None = None, link: str | None = None) -
     ]  # fmt: skip
 
 
-def running_copy(data: Path | None = None, run: Runner = subprocess.run) -> int | None:
+def windows_open(
+    app: Path, data: Path | None = None, link: str | None = None, environ: dict[str, str] | None = None
+) -> tuple[list[str], dict[str, str]]:
+    """Windows: the copy's command and environment (codex_app_windows), its
+    folders checked first: never the person's own. Raises win.UnsafePaths."""
+    home, user_data = copy_paths(data)
+    win.check_paths(home, user_data, app_folder(data), user_home(), _app_data())
+    return win.open_command(app, home, user_data, link, dict(os.environ if environ is None else environ))
+
+
+def _app_data() -> Path | None:
+    value = os.environ.get("APPDATA")
+    return Path(value) if value else None
+
+
+def running_copy(
+    data: Path | None = None, run: Runner = subprocess.run, platform: str = sys.platform
+) -> int | None:
     """The PID of UM-Codex's copy of the app, if it's running: the main
     process whose arguments carry the copy's profile folder."""
     _, user_data = copy_paths(data)
+    if platform == "win32":
+        return win.find_copy(user_data, run)
     marker = f"--user-data-dir={user_data}"
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         done = run(["/bin/ps", "-axww", "-o", "pid=,args="], capture_output=True, text=True, timeout=10)
@@ -659,9 +729,12 @@ _ACTIVATE = (
 )
 
 
-def bring_forward(pid: int, run: Runner = subprocess.run) -> bool:
-    """Ask macOS to bring that copy to the front. macOS may decline (an app
-    in the background can't always take focus); the launcher then says where it is."""
+def bring_forward(pid: int, run: Runner = subprocess.run, platform: str = sys.platform) -> bool:
+    """Ask macOS (or Windows) to bring that copy to the front. It may
+    decline (an app in the background can't always take focus); the
+    launcher then says where it is."""
+    if platform == "win32":
+        return win.bring_forward(pid, run)
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         done = run(
             ["/usr/bin/osascript", "-l", "JavaScript", "-e", _ACTIVATE, str(pid)],
@@ -922,6 +995,8 @@ def project_id(setup_id: str) -> str:
 def app_version(app: Path | None) -> str | None:
     if app is None:
         return None
+    if win.is_windows_app(app):  # the package's folder name has it
+        return win.version(app)
     try:
         with (app / "Contents" / "Info.plist").open("rb") as file:
             value = plistlib.load(file).get("CFBundleShortVersionString")
@@ -1043,13 +1118,16 @@ def bundled_catalog(
     models it would announce, to mark as seen. (None, []) if it can't be read."""
     from umcodex.codex_config import model_catalog
 
-    codex = app / "Contents" / "Resources" / "codex-cli" / "bin" / "codex"
+    if win.is_windows_app(app):  # the package's app\resources\codex.exe
+        codex, env = win.bundled_codex(app, home)
+    else:
+        codex = app / "Contents" / "Resources" / "codex-cli" / "bin" / "codex"
+        env = {"CODEX_HOME": str(home), "HOME": str(home), "PATH": "/usr/bin:/bin"}
     try:
         done = run(
             [str(codex), "debug", "models", "--bundled"],
             capture_output=True, text=True, timeout=60, check=False,
-            env={"CODEX_HOME": str(home), "HOME": str(home), "PATH": "/usr/bin:/bin"},
-            stdin=subprocess.DEVNULL,
+            env=env, stdin=subprocess.DEVNULL, creationflags=win.hidden(),
         )  # fmt: skip
     except (OSError, subprocess.SubprocessError):
         return None, []
@@ -1114,7 +1192,12 @@ class AppHold:
     sleep: Callable[[float], None] = time.sleep
     proxy_for: Callable[[str], Sequence[str]] = proxy_command
     local_chats: bool = LOCAL_CHATS
+    platform: str = sys.platform
+    popen: Callable[..., object] = subprocess.Popen  # Windows: the copy is started, not waited for
+    clock: Callable[[], float] = time.monotonic
     labels: tuple[tuple[str, str], ...] = ()
+    runtime_busy: Callable[[], bool] = lambda: win.runtime_update_running(user_home(), time.time())
+    _started_pid: int | None = field(default=None, init=False)  # Windows: the copy this launch started
 
     def __post_init__(self) -> None:
         self.labels = ((SSH_LABEL, self.setup_id),)
@@ -1131,7 +1214,7 @@ class AppHold:
         responder = LocalChatsServer(self.data)
         if not self.local_chats:
             responder.ensure()
-        copy_open = self.app is not None and running_copy(self.data, self.run) is not None
+        copy_open = self.app is not None and running_copy(self.data, self.run, self.platform) is not None
         seen = self._write_copy_files(running.relay_port, running.token, setup, responder)
         seeded = False
         if self.app is not None and not copy_open:
@@ -1144,8 +1227,8 @@ class AppHold:
             # up itself and the host hasn't connected before.
             "first_time": not connected_once and not seeded,
             "seeded": seeded,
-            "steps": first_steps(setup.id, setup.name),
-            "notes": notes(setup.id, local_chats=self.local_chats),
+            "steps": first_steps(setup.id, setup.name, self.platform),
+            "notes": notes(setup.id, local_chats=self.local_chats, platform=self.platform),
             "copy": "not-opened",
         }
         token_file = app_folder(self.data) / "launch-token"
@@ -1226,14 +1309,17 @@ class AppHold:
     def _open_copy(self, setup_id: str, *, link: bool) -> str:
         if self.app is None:
             return "not-opened"
-        pid = running_copy(self.data, self.run)
+        pid = running_copy(self.data, self.run, self.platform)
         if pid is not None:
-            return "brought-forward" if bring_forward(pid, self.run) else "already-open"
+            return "brought-forward" if bring_forward(pid, self.run, self.platform) else "already-open"
         # The add link only when UM-Codex couldn't set the copy up and the
         # host never connected: it adds the host switched off, so later it
         # would switch off a host that's on.
+        link_arg = deep_link(setup_id) if link else None
+        if self.platform == "win32":
+            return self._open_windows(link_arg)
         done = self.run(
-            open_command(self.app, self.data, deep_link(setup_id) if link else None),
+            open_command(self.app, self.data, link_arg),
             capture_output=True,
             timeout=60,
             check=False,
@@ -1243,13 +1329,53 @@ class AppHold:
             return "failed"
         return "opened"
 
+    def _open_windows(self, link: str | None) -> str:
+        """Windows: ChatGPT.exe itself, started and left running (never by
+        its package, which would drop CODEX_HOME: codex_app_windows), then
+        found again by its profile folder, so it's known to be ours."""
+        assert self.app is not None
+        try:
+            command, env = windows_open(self.app, self.data, link)
+        except win.UnsafePaths as error:
+            log.error("the Codex app copy wasn't started: %s", error)
+            return "refused"
+        try:
+            win.start(command, env, self.popen)
+        except OSError as error:
+            log.warning("the Codex app copy didn't open (%s)", error)
+            return "failed"
+        for _ in range(WINDOWS_START_CHECKS):
+            pid = running_copy(self.data, self.run, self.platform)
+            if pid is not None:
+                self._started_pid = pid
+                return "opened"
+            self.sleep(self.poll_seconds)
+        log.warning("the Codex app copy was started but isn't running with UM-Codex's profile")
+        return "failed"
+
+    def _fall_back(self, running, state: dict, why: str) -> int:
+        """Windows: the copy didn't connect in time (or didn't start). Stop
+        the copy this launch started (by its PID), end the launch, and say to
+        use Terminal."""
+        from umcodex.launch import update_launch_app
+
+        _, user_data = copy_paths(self.data)
+        if self._started_pid is not None and win.stop(self._started_pid, user_data, self.run):
+            log.info("stopped the Codex app copy (pid %d)", self._started_pid)
+        update_launch_app(running.folder, {**state, "fallback": "terminal"})
+        log.warning("launch %s: %s; ending it", running.spec.launch_id, why)
+        self.say(WINDOWS_FALLBACK)
+        return 1
+
     def _say_ready(self, name: str, state: dict) -> None:
         copy = state["copy"]
         if copy == "failed":
             self.say("UM-Codex's Codex window couldn't be opened. Open the launcher and try again.")
+        elif copy == "refused":
+            self.say("UM-Codex didn't open its Codex window: its folders would have been your own app's.")
         elif copy == "already-open":
             self.say(
-                "UM-Codex's Codex window is already open: switch to it (the second ChatGPT icon in the Dock)."
+                f"UM-Codex's Codex window is already open: switch to it ({second_icon(self.platform)})."
             )
         if state["first_time"]:
             self.say("")
@@ -1274,6 +1400,12 @@ class AppHold:
 
         agent = running.spec.agent
         missing = 0
+        windows = self.platform == "win32" and self.app is not None
+        if windows and state["copy"] in ("failed", "refused"):
+            return self._fall_back(running, state, "the Codex app copy didn't start")
+        limit = WINDOWS_STEPS_SECONDS if state["first_time"] else WINDOWS_CONNECT_SECONDS
+        deadline = self.clock() + limit
+        waited = False
         while True:
             # Twice in a row: a Docker that's slow to answer once isn't a stop.
             missing = 0 if self.docker.running(agent) else missing + 1
@@ -1289,6 +1421,15 @@ class AppHold:
                 update_launch_app(running.folder, state)
                 log.info("launch %s: the Codex app connected", running.spec.launch_id)
                 self.say(f"Connected: the Codex app is working in the sandbox ({state['alias']}).")
+            if windows and not state["connected"] and (now := self.clock()) > deadline:
+                # A runtime download under way is left to finish first (up to the grace).
+                if now < deadline + WINDOWS_UPDATE_GRACE_SECONDS and self.runtime_busy():
+                    if not waited:
+                        log.info("the Codex app is downloading its runtime; waiting before stopping it")
+                    waited = True
+                else:
+                    why = f"the Codex app didn't connect within {limit:.0f}s"
+                    return self._fall_back(running, state, why)
             self.sleep(self.poll_seconds)
 
 

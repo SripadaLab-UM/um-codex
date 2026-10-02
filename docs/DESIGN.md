@@ -1022,7 +1022,12 @@ modes, rigor, and the frontend.
      CODEX_HOME=<data>/codex-app/codex-home --env
      CODEX_ELECTRON_USER_DATA_PATH=<data>/codex-app/user-data <app> --args
      --user-data-dir=<data>/codex-app/user-data [<link>]`. The person's own
-     copy and `~/.codex` are never touched. The app is found in
+     copy and `~/.codex` are never touched. It does share the app's
+     runtime cache with the person's copy: our copy may update the shared
+     runtime in `~/.cache/codex-runtimes` (about 1 GB), as any second copy
+     of the app would; the app downloads to a staging folder, swaps it in
+     by renaming and rolls back a failed swap (the maintainer accepted this,
+     2026-10-02). The app is found in
      `/Applications` or `~/Applications` (`ChatGPT.app`, or `Codex.app`), by
      its bundle id, else through Spotlight (`mdfind
      kMDItemCFBundleIdentifier`). If the copy is already running (a main
@@ -1151,14 +1156,119 @@ modes, rigor, and the frontend.
      in a terminal). If `um-codex` is killed, the watchdog ends the container
      as for any launch. The app's remote app-server lives in the container
      and goes with it.
-   - **Windows:** the ssh side is written to work there (Windows OpenSSH
-     reads `%USERPROFILE%\.ssh\config` and runs a double-quoted ProxyCommand
-     itself; `ssh-proxy` runs `docker exec` as a child, since Windows has no
-     exec), but it isn't verified, and opening a second copy of the Store
-     app with its own `CODEX_HOME` and profile isn't known to work (the
-     spike's open question; packaged apps don't take a plain `open -n
-     --env`). So "Codex app" is disabled on Windows ("works with UM-Codex on
-     a Mac only, for now"), and `--open app` refuses there.
+   - **Windows** (branch `m6-windows-codex-app`; checked on a Windows 11
+     laptop, 2026-10-02, app 26.928.4866.0). **Experimental.** Written, and
+     still off (`codex_app.WINDOWS_COPY = False`: "works with UM-Codex on a
+     Mac only, for now"; `--open app` refuses) until a hands-on test passes;
+     `UMCODEX_WINDOWS_CODEX_APP=1` turns it on for that test.
+     - **The app:** the Microsoft Store (MSIX) package `OpenAI.Codex`
+       (family `OpenAI.Codex_2p2nqsd0c76g0`, AUMID
+       `OpenAI.Codex_2p2nqsd0c76g0!App`), in `C:\Program
+       Files\WindowsApps\OpenAI.Codex_<version>_x64__2p2nqsd0c76g0\app\ChatGPT.exe`.
+       It has no execution alias for ChatGPT.exe (only for its Chrome native
+       host and command runner), a `codex:` protocol in its manifest (it
+       doesn't register one itself on Windows), a packaged sandbox service,
+       and file/registry write virtualization off. It's found with
+       `Get-AppxPackage -Name OpenAI.Codex` each time (an update changes the
+       folder), and its version is read from the folder's name.
+     - **The app's code** (its `app.asar`, read-only): the profile is
+       `CODEX_ELECTRON_USER_DATA_PATH` if set, on every platform. On Windows
+       the single-instance lock is always taken, and it's per profile (taken
+       after the profile is set), so a copy with its own profile runs beside
+       the person's. Codex's home is `CODEX_HOME`, else `~/.codex`, kept after
+       the app loads the shell's environment only when
+       `CODEX_ELECTRON_USER_DATA_PATH` is set; `.codex-global-state.json` is
+       in that home, as on a Mac, and the seeding is the same code. The
+       "Codex Demo" launcher is Mac only (`/usr/bin/open`, a fixed
+       `/Applications/ChatGPT.app`): there's nothing to copy on Windows.
+     - **How the copy is started** (tried by hand, with the person's own
+       app open throughout):
+       - **ChatGPT.exe run directly** (CreateProcess, with `CODEX_HOME` and
+         `CODEX_ELECTRON_USER_DATA_PATH` in its environment and
+         `--user-data-dir=<profile>`): works. A second, separate instance
+         opened. Its app-server (`codex.exe ... app-server`) used the given
+         `CODEX_HOME` (its `config.toml`, state file and databases went
+         there), and the person's copy carried on. It runs **without the
+         package's identity** (not in `tasklist /apps`), which Microsoft
+         doesn't support for Store apps: what's tied to the package (its
+         sandbox service, for local agent work) may not work in it. Local
+         chats are blocked anyway.
+       - **The shared runtime cache** (accepted by the maintainer,
+         2026-10-02, as on a Mac): the copy shares the app's copied
+         binaries (`%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>`, named by
+         content, unchanged by the tests) and its primary runtime in
+         `~/.cache/codex-runtimes` (`os.homedir()`, not `CODEX_HOME`) with
+         the person's copy. Either copy updates that runtime when it's
+         behind: a download (about 1 GB) into
+         `codex-runtime-install-<random>`, then the current one renamed to
+         `.previous-<uuid>`, the new one renamed in, and a rollback if that
+         fails (Windows refuses to rename a folder whose programs are
+         running). There's no switch for it outside the app's dev builds
+         (`CODEX_ELECTRON_PRIMARY_RUNTIME_UPDATE_MODE`). The first test copy
+         began that download, and being stopped half way left its 1 GB
+         staging folder behind (removed by hand). So the fallback doesn't
+         stop the copy while a staging folder is being written (within the
+         last minute), for up to 20 more minutes
+         (`WINDOWS_UPDATE_GRACE_SECONDS`), and the launcher's note says the
+         window may download an update (about 1 GB) the first time. A
+         separate `USERPROFILE` for the copy would isolate the cache but
+         also move the ssh config it reads; not done.
+       - **In the package** (`Invoke-CommandInDesktopPackage -PackageFamilyName
+         OpenAI.Codex_2p2nqsd0c76g0 -AppId App`, with the variables set in
+         the calling shell): it runs with the identity and takes
+         `--user-data-dir`, but **got none of the caller's environment**, so
+         its app-server used the person's `~/.codex`. In the hands-on test
+         that copy changed the person's `~/.codex` (config.toml, the state
+         file, the databases) in the half minute before it was stopped.
+         UM-Codex never starts the copy this way. AUMID activation
+         (`IApplicationActivationManager::ActivateApplication`) wasn't tried
+         after that: it takes arguments only, and in its code the app reads
+         Codex's home from `CODEX_HOME` alone (or WSL's, when set to run
+         Codex in WSL): no argument, file or registry key.
+     - **So, experimental, with safeguards** (the maintainer agreed to the
+       direct start on 2026-10-02; `codex_app_windows.py`):
+       - The package is looked up afresh at every launch (`Get-AppxPackage
+         -Name OpenAI.Codex`, its InstallLocation + `app\ChatGPT.exe`, never
+         a saved path) and used only if its family is
+         `OpenAI.Codex_2p2nqsd0c76g0` and its publisher OpenAI's Store
+         certificate name.
+       - The copy is the exe itself (CreateProcess, detached, never waited
+         for; never an activation), with `CODEX_HOME` and
+         `CODEX_ELECTRON_USER_DATA_PATH` set, `--user-data-dir`, and the
+         person's other `CODEX_`, `OPENAI_` and proxy variables left out
+         (the copy talks only to 127.0.0.1, and runs ssh). `check_paths`
+         refuses to start it unless both folders are inside UM-Codex's
+         `codex-app` folder and neither is (nor holds) `~/.codex` or the
+         app's own profile (`%APPDATA%\Codex*`).
+       - It must then show up as ours, within 15 checks: a `Win32_Process`
+         `ChatGPT.exe` without `--type=` whose `--user-data-dir` (the whole
+         argument quoted, the value quoted, or bare) is the copy's profile,
+         compared exactly after Windows' normalising (case, separators,
+         `..`), and in its long and 8.3 forms. The person's own copy has no
+         `--user-data-dir`, and a folder beside ours doesn't match. Then the
+         launch must see the app-server in the container ("Connected")
+         within 3 minutes (15 when the person has the first steps to do by
+         hand), or longer while a runtime download is under way (below).
+         Otherwise UM-Codex stops the copy it started: right before, it
+         checks that the PID is still that copy's main process (a number can
+         be reused), then `taskkill /PID <pid> /T /F`. It ends the launch,
+         says to use Open in: Terminal (`WINDOWS_FALLBACK`), and marks the
+         launch `"fallback": "terminal"` for the launcher.
+       - The copy's state is seeded as on a Mac (same file, same shapes),
+         only while it isn't running. A `codex://` link goes only in the
+         copy's own arguments (the app reads links from its command line on
+         Windows too); one opened through Windows would reach the person's
+         own app, which the package registers.
+       - The launcher's notes add `WINDOWS_NOTES`: experimental, no Windows
+         sandbox or Computer Use in UM-Codex's window, and an app component
+         update (about 1 GB) may download the first time.
+       - An already-open copy is brought forward with
+         `WScript.Shell.AppActivate(<pid>)`. The catalog comes from
+         `app\resources\codex.exe debug models --bundled` (0.159.2, with a
+         throwaway `CODEX_HOME`, `USERPROFILE`, and no console window).
+     - **The ssh side:** Windows OpenSSH reads `%USERPROFILE%\.ssh\config`
+       and runs a double-quoted ProxyCommand itself; `ssh-proxy` runs `docker
+       exec` as a child, since Windows has no exec.
    - **Live check** (this Mac, 2026-10-01; `um-codex-agent:m6` built from
      this branch, the launcher's API with a scratch data folder, the real
      key through the relay and the Include line already present, so the
