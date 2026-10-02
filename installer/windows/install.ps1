@@ -1929,8 +1929,17 @@ if ($Desktop) {
         $Links += $DesktopLink
     }
 }
-& $UmCodex launchers --write @Links
-if ($LASTEXITCODE -ne 0) {
+# With PYTHONUTF8, as the shortcuts run it (put back afterwards: with
+# `irm | iex` this is the person's own window).
+$SavedUtf8 = $Env:PYTHONUTF8
+$Env:PYTHONUTF8 = "1"
+try {
+    & $UmCodex launchers --write @Links
+    $Wrote = $LASTEXITCODE
+} finally {
+    if ($null -eq $SavedUtf8) { Remove-Item Env:PYTHONUTF8 -ErrorAction SilentlyContinue } else { $Env:PYTHONUTF8 = $SavedUtf8 }
+}
+if ($Wrote -ne 0) {
     Stop-Install ("The Start menu shortcut couldn't be made (the messages above say why). Run the " +
         "installer again; UM-Codex itself is installed (type um-codex in a new terminal).")
 }

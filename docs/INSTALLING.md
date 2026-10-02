@@ -225,45 +225,75 @@ and both the installers and the updater use it, so they can't drift apart:
 
 - The installers decide where the launchers go (as above) and then run the
   new version's `um-codex launchers --write <paths>`: on a Mac the app's
-  `Info.plist`, its script and its icon; on Windows the `.lnk` files
-  (through WScript.Shell, in a Windows PowerShell it starts) and the icon in
-  `<app>\icons`.
+  `Info.plist`, its script and its icon, then `lsregister -f` so macOS reads
+  it again (skipped if lsregister isn't there); on Windows the `.lnk` files
+  (through WScript.Shell, in a Windows PowerShell it starts, with
+  `PYTHONUTF8`) and the icon in `<app>\icons`. If the Mac app can't be
+  written, the installer removes the half-made one it had just prepared, so
+  the next run isn't blocked.
 - `um-codex update` and `--rollback`, once `current` names the version
   switched to, run that version's `um-codex launchers --refresh`. It rewrites
-  only UM-Codex's own launchers (the app's bundle id; a shortcut whose
-  command line names `'<app folder>\`, single-quoted), only where they
-  already are (`/Applications` or `~/Applications`; the Start menu, and the
-  Desktop as Windows says where it is), and only if they differ from what
-  that version writes; anything else of that name, or a launcher the person
-  removed, is left alone. On a Mac the Desktop shortcut is a link to the app,
-  so it never needs rewriting. If one can't be rewritten, the update still
-  stands, and it says to run the installer again (or `um-codex launchers
-  --refresh` later, or `um-codex` in a terminal). Rolling back to a version
-  from before this (0.1.0-alpha.1, which has no `launchers` command) says
-  the app may not open it and to use `um-codex` in a terminal.
+  only this install's own launchers, only where they already are
+  (`/Applications` or `~/Applications`; the Start menu, and the Desktop as
+  Windows says where it is, OneDrive included), and only if they differ from
+  what that version writes. Anything else of that name, or a launcher the
+  person removed, is left alone.
+  - Mac: the app's bundle id, *and* a script naming this install's command
+    (`'<app folder>/bin/um-codex'`, single-quoted; alpha.1's names it too), so
+    another account's UM-Codex in a shared `/Applications` is never taken for
+    ours. The installer's `ours()` and the uninstaller check the same.
+  - Windows: a shortcut whose command line names `'<app folder>\`,
+    single-quoted.
+  - Never through a link: the app, `Contents` and `Contents/MacOS` must be
+    folders themselves, and each file is written under a name of its own
+    (`mkstemp`, so `O_CREAT|O_EXCL`) and renamed into place (which replaces a
+    link there rather than writing through it); the same for
+    `<app>/launchers` and the Windows icon.
+  - On a Mac the Desktop shortcut is a link to the app, so it never needs
+    rewriting. An older copy that can't be changed while another copy is up
+    to date is skipped, with a note that it can go to the Trash.
+  - If one can't be rewritten, the update still stands, and it says to run
+    the installer again (or `um-codex launchers --refresh` later, or
+    `um-codex` in a terminal).
+- Rolling back to a version from before this (0.1.0-alpha.1, which has no
+  `launchers` command): the newer code doing the rollback writes alpha.1's
+  launchers itself (format 1: the app runs `launch --from-app` in Terminal;
+  the shortcut runs it in Windows Terminal or Windows PowerShell), so
+  alpha.1 still opens. If even that fails, it says the app won't open it and
+  gives the command to run in a terminal.
 - `<app>/launchers` records the launcher format they were last written in
   (`launchers.FORMAT`; the Mac app's `Info.plist` has it too, as
-  `UMCodexLauncherFormat`). An update made by alpha.1's own updater doesn't
-  refresh them, so the first `um-codex` or `um-codex ui` of a newer version
-  that finds the record missing or older refreshes them once. That's how
-  alpha.1's app (Terminal, `launch --from-app`) becomes the launcher window's:
-  opened once more, it runs the new version's `um-codex launch --from-app`,
-  which rewrites it and carries on in Terminal; from then on it opens in the
-  browser.
+  `UMCodexLauncherFormat`), whether that worked, and when. An update made by
+  alpha.1's own updater doesn't refresh them, so the first `um-codex` or
+  `um-codex ui` of a newer version whose format differs from the record (or
+  finds none) refreshes them. That's how alpha.1's app becomes the launcher
+  window's: opened once more, it runs the new version's `um-codex launch
+  --from-app`, which rewrites it and carries on in Terminal; from then on it
+  opens in the browser. If that refresh fails, it says so once; after that
+  it tries again at most once a day, and says so only in the log.
 - Both launchers run the command in `<app>/bin` (the Mac shim, the Windows
   `um-codex.exe` copy), never a version's folder, so an ordinary update
   changes nothing in them. A change to what they contain bumps `FORMAT`.
+- A shortcut pinned to the Windows taskbar is Windows' own copy (in
+  `%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar`),
+  which UM-Codex doesn't touch: after an update that changes the launchers,
+  an alpha.1 pin still opens a terminal. Unpin it and pin UM-Codex again from
+  the Start menu. (The same for a Mac Dock item: it follows the app, so it
+  needs nothing.)
 - `um-codex launchers --refresh --dry-run` says what would change (for the
   Mac app, the lines of each file) and changes nothing.
 
-Tests: `tests/test_launchers.py` (the Mac app in temporary folders; the
-Windows shortcuts through a stand-in for WScript.Shell, and, on CI's
-`windows-installer` job, real ones in a temporary Start menu and Desktop),
-`tests/test_update.py` (the update and rollback run it, and carry on when it
-fails), and `tests/test_macos_installer.py` (its fake `um-codex` runs the
-real `launchers` command). The tests point `/Applications`, the Start menu
-and the Desktop at temporary folders (`UMCODEX_SYSTEM_APPLICATIONS`,
-`UMCODEX_START_MENU`, `UMCODEX_DESKTOP`).
+Tests: `tests/test_launchers.py` (the Mac app in temporary folders, links
+and another account's app included; the Windows shortcuts through a
+stand-in for WScript.Shell, and, on CI's `windows-installer` job, real ones
+in a temporary Start menu and Desktop, and a Desktop redirected as OneDrive
+does it), `tests/test_update.py` (the update and rollback run it, carry on
+when it fails, and a rollback to alpha.1 writes its launchers), and
+`tests/test_macos_installer.py` (its fake `um-codex` runs the real
+`launchers` command). The tests point `/Applications`, the Start menu, the
+Desktop and the home folder at temporary folders
+(`UMCODEX_SYSTEM_APPLICATIONS`, `UMCODEX_START_MENU`, `UMCODEX_DESKTOP`,
+`HOME`), and turn lsregister off (`UMCODEX_LSREGISTER=`).
 
 ## Windows
 

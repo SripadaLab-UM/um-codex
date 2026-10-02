@@ -105,8 +105,11 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      the Mac app (a `.app` folder) or the Windows shortcuts (`.lnk` files)
      at the places they chose; `um-codex launchers --refresh [--dry-run]`:
      what `um-codex update` and `--rollback` run with the version switched
-     to, rewriting UM-Codex's own launchers where they are if they're out of
-     date. Exit 0, or 1 when one couldn't be written (it says what to do).
+     to, rewriting this install's own launchers where they are if they're out
+     of date (never through a link, never another account's app). Exit 0, or
+     1 when one couldn't be written (it says what to do). A rollback to a
+     version without the command (0.1.0-alpha.1) has the newer code write
+     that version's launchers (format 1).
      `launchers.py` is the one place that says what they contain
      (docs/INSTALLING.md, "Keeping the app and shortcuts up to date").
    - `um-codex key [--from-stdin]`: exit 0 saved, 1 refused or invalid,
@@ -416,7 +419,7 @@ um-codex/
     releases.py             which GitHub release is offered, and its checks (from DataLab)
     update.py               `um-codex update`, rollback, the daily notice (from DataLab's updater, simpler)
     launchers.py            what the Mac app and Windows shortcuts contain; written by the installers,
-                            brought up to date by update, rollback and (once, after an older installer) a launch
+                            brought up to date by update, rollback and a launch (when the recorded format differs)
     gateway.conf            (from DataLab, /mcp removed)
     images.json             pinned image digests (stamped by the release)
   images/agent/             Dockerfile, AGENTS.md (from DataLab's image: Codex, Node, Python, R; DataLab skills removed; build tools added),

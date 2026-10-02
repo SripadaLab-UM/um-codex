@@ -258,9 +258,9 @@ def _refresh_launchers() -> None:
     wrote them (an update by alpha.1's own updater didn't). Nothing about it
     may stop a launch."""
     try:
-        from umcodex.launchers import refresh_if_older
+        from umcodex.launchers import refresh_if_differs
 
-        refresh_if_older()
+        refresh_if_differs()
     except Exception:
         logging.getLogger(__name__).warning("refreshing the launchers failed", exc_info=True)
 

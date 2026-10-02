@@ -700,11 +700,21 @@ class Updater:
             return True
         app = "app" if self.platform == "darwin" else "Start menu and Desktop shortcuts"
         if "launchers" in (done.stderr or "") and "invalid choice" in (done.stderr or ""):
-            # A version from before launchers.py (0.1.0-alpha.1).
+            # A version from before launchers.py (0.1.0-alpha.1): this code,
+            # newer, writes the launchers as that version's installer did
+            # (launcher format 1: Terminal, `launch --from-app`).
+            from umcodex.launchers import Launchers
+
+            self.say(f"UM-Codex {version} opens in a terminal window: the UM-Codex {app} goes back to that.")
+            older = Launchers(self.layout.root, platform=self.platform, say=self.say, fmt=1)
+            report = older.refresh(quiet=True)
+            if report.ok:
+                return True
+            how = self.layout.command
             self.say(
-                f"UM-Codex {version} can't rewrite the UM-Codex {app}, which may not open it. Open "
-                f"UM-Codex by running um-codex in a terminal instead, or install {version} again with "
-                "its installer."
+                f"The UM-Codex {app} won't open UM-Codex {version}. To start it, open "
+                f"{'Terminal' if self.platform == 'darwin' else 'Windows PowerShell'} and run: {how} "
+                "(or run um-codex update to go back to the newer version)."
             )
         else:
             for line in (done.stderr or "").strip().splitlines()[-5:]:

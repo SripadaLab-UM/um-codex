@@ -520,7 +520,8 @@ def test_the_start_menu_and_desktop_shortcuts_are_written_by_um_codex_itself():
     # rewrites them), never from the installer's own copy of it.
     assert "& $UmCodex launchers --write @Links" in seven
     after = seven[seven.index("& $UmCodex launchers --write @Links") :]
-    failed = after.index("if ($LASTEXITCODE -ne 0) {")
+    failed = after.index("if ($Wrote -ne 0) {")
+    assert '$Env:PYTHONUTF8 = "1"' in seven and "$Env:PYTHONUTF8 = $SavedUtf8" in seven
     assert failed < after.index("Stop-Install") < after.index('Good "Added')
     assert ".Save()" not in code(seven) and "$Shortcut." not in code(seven)
     assert "Scripts\\um-codex.exe" not in code(seven) and "-NoExit" not in code(seven)

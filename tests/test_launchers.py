@@ -35,21 +35,46 @@ ALPHA_1_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleIconFile</key><string>UM-Codex</string>
 </dict></plist>
 """
+# alpha.1's app script, as installer/macos/install.sh at v0.1.0-alpha.1 wrote
+# it (@COMMAND@: the command, single-quoted).
 ALPHA_1_SCRIPT = """#!/bin/sh
-exec osascript - '/x/bin/um-codex' <<'OSA'
+exec osascript - @COMMAND@ <<'OSA'
 on run argv
   set command to (quoted form of item 1 of argv) & " launch --from-app"
-  tell application "Terminal" to do script command
+  set wasRunning to application "Terminal" is running
+  tell application "Terminal"
+    if wasRunning then
+      do script command
+    else
+      -- Starting Terminal opens its own first window: use that one, so
+      -- there's one window, not that one plus another for UM-Codex.
+      activate
+      repeat 50 times
+        if (count of windows) > 0 then exit repeat
+        delay 0.1
+      end repeat
+      if (count of windows) > 0 then
+        do script command in window 1
+      else
+        do script command
+      end if
+    end if
+    activate
+  end tell
 end run
 OSA
 """
 
 
+def alpha_1_script(root: Path) -> str:
+    return ALPHA_1_SCRIPT.replace("@COMMAND@", launchers.sh_quote(str(root / "bin" / "um-codex")))
+
+
 @pytest.fixture
-def home(tmp_path, monkeypatch) -> Path:
-    folder = tmp_path / "home"
-    (folder / "Applications").mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(folder))
+def home() -> Path:
+    """conftest.py's stand-in home folder, with an Applications folder."""
+    folder = Path.home()
+    (folder / "Applications").mkdir(exist_ok=True)
     return folder
 
 
@@ -58,13 +83,14 @@ def system_apps() -> Path:
     return Path(os.environ[launchers.SYSTEM_APPS_ENV])
 
 
-def alpha_1_app(folder: Path, bundle: str = "edu.umich.umcodex") -> Path:
+def alpha_1_app(folder: Path, root: Path, bundle: str = "edu.umich.umcodex") -> Path:
+    """alpha.1's app for the install at `root`."""
     app = folder / "UM-Codex.app"
     (app / "Contents" / "MacOS").mkdir(parents=True)
     (app / "Contents" / "Resources").mkdir()
     (app / "Contents" / "Info.plist").write_text(ALPHA_1_PLIST.replace("edu.umich.umcodex", bundle))
     script = app / "Contents" / "MacOS" / "UM-Codex"
-    script.write_text(ALPHA_1_SCRIPT)
+    script.write_text(alpha_1_script(root))
     script.chmod(0o755)
     (app / "Contents" / "Resources" / "UM-Codex.icns").write_bytes(b"an older icon")
     return app
@@ -72,6 +98,11 @@ def alpha_1_app(folder: Path, bundle: str = "edu.umich.umcodex") -> Path:
 
 def mac(root: Path, home: Path, said: list[str]) -> Launchers:
     return Launchers(root, platform="darwin", say=said.append, home=home)
+
+
+def record(root: Path) -> tuple[int, bool] | None:
+    found = Launchers(root, platform="darwin").record()
+    return (found.format, found.ok) if found else None
 
 
 def assert_written(app: Path, root: Path) -> None:
@@ -103,43 +134,94 @@ def test_the_app_runs_bin_um_codex_ui_detach_with_no_dock_icon(tmp_path):
     assert "<string></string>" in launchers.mac_app_files(tmp_path, None)["Contents/Info.plist"].decode()
 
 
+def test_format_1_is_alpha_1s_app_exactly(tmp_path):
+    root = tmp_path / "o'brien" / "app"
+    files = launchers.mac_app_files(root, b"icon", 1)
+    assert files["Contents/Info.plist"].decode() == ALPHA_1_PLIST
+    assert files["Contents/MacOS/UM-Codex"].decode() == alpha_1_script(root)
+
+
 def test_refresh_rewrites_an_alpha_1_app_where_it_is(tmp_path, home, system_apps):
     root = tmp_path / "app"
-    app = alpha_1_app(system_apps)
+    app = alpha_1_app(system_apps, root)
     said: list[str] = []
     report = mac(root, home, said).refresh()
     assert report.ok and report.changed == [app]
     assert_written(app, root)
     assert f"Brought {app} up to date" in "\n".join(said)
-    assert (root / "launchers").read_text() == f"{FORMAT}\n"
-    # Nothing added in ~/Applications, where there was none.
+    assert record(root) == (FORMAT, True)
+    # Nothing added in ~/Applications, where there was none; no temporary files left.
     assert not (home / "Applications" / "UM-Codex.app").exists()
+    assert not [p for p in app.rglob(".*")] and not [p for p in root.glob(".*")]
 
 
 def test_refresh_finds_the_app_in_your_own_applications(tmp_path, home):
     root = tmp_path / "app"
-    app = alpha_1_app(home / "Applications")
+    app = alpha_1_app(home / "Applications", root)
     assert mac(root, home, []).refresh().changed == [app]
     assert_written(app, root)
 
 
 def test_refresh_leaves_someone_elses_app_and_links_alone(tmp_path, home, system_apps):
     root = tmp_path / "app"
-    theirs = alpha_1_app(system_apps, bundle="org.example.umcodex")
-    elsewhere = alpha_1_app(tmp_path / "elsewhere")
+    theirs = alpha_1_app(system_apps, root, bundle="org.example.umcodex")
+    elsewhere = alpha_1_app(tmp_path / "elsewhere", root)
     (home / "Applications" / "UM-Codex.app").symlink_to(elsewhere)
     said: list[str] = []
     report = mac(root, home, said).refresh()
     assert report.ok and report.changed == []
     assert report.foreign == [theirs, home / "Applications" / "UM-Codex.app"]
-    assert (theirs / "Contents" / "MacOS" / "UM-Codex").read_text() == ALPHA_1_SCRIPT
-    assert (elsewhere / "Contents" / "MacOS" / "UM-Codex").read_text() == ALPHA_1_SCRIPT
-    assert "isn't UM-Codex's own app, so it was left alone" in "\n".join(said)
+    assert (theirs / "Contents" / "MacOS" / "UM-Codex").read_text() == alpha_1_script(root)
+    assert (elsewhere / "Contents" / "MacOS" / "UM-Codex").read_text() == alpha_1_script(root)
+    assert "isn't this UM-Codex's own app" in "\n".join(said)
+
+
+def test_another_accounts_app_in_a_shared_applications_is_left_alone(tmp_path, home, system_apps):
+    root = tmp_path / "me" / "app"
+    other = tmp_path / "someone-else" / "app"
+    theirs = alpha_1_app(system_apps, other)  # UM-Codex's bundle id, their command
+    assert not launchers.is_our_app(theirs, root) and launchers.is_our_app(theirs, other)
+    report = mac(root, home, []).refresh()
+    assert report.foreign == [theirs] and report.ok
+    assert (theirs / "Contents" / "MacOS" / "UM-Codex").read_text() == alpha_1_script(other)
+
+
+@pytest.mark.parametrize("folder", ["Contents", "Contents/MacOS"])
+def test_a_link_inside_the_app_is_never_followed(tmp_path, home, system_apps, folder):
+    root = tmp_path / "app"
+    app = alpha_1_app(system_apps, root)
+    # The folder moved elsewhere and a link put in its place.
+    outside = tmp_path / "outside"
+    (app / folder).rename(outside)
+    (app / folder).symlink_to(outside)
+    before = {p: p.read_bytes() for p in outside.rglob("*") if p.is_file()}
+    said: list[str] = []
+    report = mac(root, home, said).refresh()
+    assert {p: p.read_bytes() for p in outside.rglob("*") if p.is_file()} == before
+    assert sorted(outside.rglob("*")) == sorted(set(before) | {p for p in outside.rglob("*") if p.is_dir()})
+    # Through a link it isn't even taken for ours; the installer's way refuses too.
+    assert report.foreign == [app] and report.changed == []
+    written = mac(root, home, said).write([app])
+    assert not written.ok and "is a link" in "\n".join(said)
+    assert {p: p.read_bytes() for p in outside.rglob("*") if p.is_file()} == before
+
+
+def test_a_file_thats_a_link_is_replaced_not_written_through(tmp_path, home, system_apps):
+    root = tmp_path / "app"
+    app = alpha_1_app(system_apps, root)
+    target = tmp_path / "someone's file"
+    target.write_text("keep")
+    (app / "Contents" / "Resources" / "UM-Codex.icns").unlink()
+    (app / "Contents" / "Resources" / "UM-Codex.icns").symlink_to(target)
+    assert mac(root, home, []).refresh().ok
+    assert target.read_text() == "keep"
+    assert not (app / "Contents" / "Resources" / "UM-Codex.icns").is_symlink()
+    assert_written(app, root)
 
 
 def test_refresh_is_idempotent(tmp_path, home, system_apps):
     root = tmp_path / "app"
-    app = alpha_1_app(system_apps)
+    app = alpha_1_app(system_apps, root)
     mac(root, home, []).refresh()
     before = {p: p.stat().st_mtime_ns for p in app.rglob("*")}
     os.utime(app, (1, 1))
@@ -154,7 +236,7 @@ def test_refresh_is_idempotent(tmp_path, home, system_apps):
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
 def test_a_script_that_lost_its_execute_bit_is_rewritten(tmp_path, home, system_apps):
     root = tmp_path / "app"
-    app = alpha_1_app(system_apps)
+    app = alpha_1_app(system_apps, root)
     mac(root, home, []).refresh()
     (app / "Contents" / "MacOS" / "UM-Codex").chmod(0o644)
     assert mac(root, home, []).refresh().changed == [app]
@@ -163,7 +245,7 @@ def test_a_script_that_lost_its_execute_bit_is_rewritten(tmp_path, home, system_
 
 def test_a_dry_run_says_what_would_change_and_changes_nothing(tmp_path, home, system_apps):
     root = tmp_path / "app"
-    app = alpha_1_app(system_apps)
+    app = alpha_1_app(system_apps, root)
     said: list[str] = []
     report = mac(root, home, said).refresh(dry_run=True)
     assert report.changed == [app]
@@ -171,9 +253,9 @@ def test_a_dry_run_says_what_would_change_and_changes_nothing(tmp_path, home, sy
     assert f"Would bring {app} up to date" in text
     assert "+  <key>LSUIElement</key><true/>" in text
     assert f"+exec '{root / 'bin' / 'um-codex'}' ui --detach" in text
-    assert "-exec osascript - '/x/bin/um-codex' <<'OSA'" in text
+    assert f"-exec osascript - '{root / 'bin' / 'um-codex'}' <<'OSA'" in text
     assert "UM-Codex.icns (replaced:" in text
-    assert (app / "Contents" / "MacOS" / "UM-Codex").read_text() == ALPHA_1_SCRIPT
+    assert (app / "Contents" / "MacOS" / "UM-Codex").read_text() == alpha_1_script(root)
     assert (app / "Contents" / "Info.plist").read_text() == ALPHA_1_PLIST
     assert not (root / "launchers").exists()
 
@@ -184,13 +266,13 @@ def test_with_no_app_nothing_is_added(tmp_path, home, system_apps):
     assert mac(root, home, said).refresh().ok
     assert list(system_apps.iterdir()) == [] and list((home / "Applications").iterdir()) == []
     assert "There's no UM-Codex app" in "\n".join(said)
-    assert (root / "launchers").read_text() == f"{FORMAT}\n"
+    assert record(root) == (FORMAT, True)
 
 
 @pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="POSIX permissions")
 def test_an_app_that_cant_be_rewritten_says_what_to_do(tmp_path, home, system_apps):
     root = tmp_path / "app"
-    app = alpha_1_app(system_apps)
+    app = alpha_1_app(system_apps, root)
     (app / "Contents" / "MacOS").chmod(0o555)
     said: list[str] = []
     try:
@@ -201,7 +283,28 @@ def test_an_app_that_cant_be_rewritten_says_what_to_do(tmp_path, home, system_ap
     text = "\n".join(said)
     assert f"{app} couldn't be brought up to date (PermissionError" in text
     assert "Run the UM-Codex installer again" in text and "um-codex launchers --refresh" in text
-    assert not (root / "launchers").exists()  # tried again next time
+    assert record(root) == (FORMAT, False)  # tried again later
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="POSIX permissions")
+def test_an_older_copy_that_cant_be_changed_is_skipped_when_another_is_current(tmp_path, home, system_apps):
+    root = tmp_path / "app"
+    stuck = alpha_1_app(system_apps, root)
+    mine = home / "Applications" / "UM-Codex.app"
+    assert mac(root, home, []).write([mine]).ok
+    (stuck / "Contents" / "MacOS").chmod(0o555)
+    said: list[str] = []
+    try:
+        report = mac(root, home, said).refresh()
+    finally:
+        (stuck / "Contents" / "MacOS").chmod(0o755)
+    assert report.ok and report.current == [mine] and report.skipped == [stuck]
+    text = "\n".join(said)
+    assert (
+        f"An older copy, {stuck}, couldn't be changed" in text and "drag the older one to the Trash" in text
+    )
+    assert "Run the UM-Codex installer again" not in text
+    assert record(root) == (FORMAT, True)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the Mac app's sh script")
@@ -214,6 +317,7 @@ def test_the_app_runs_from_a_folder_with_an_apostrophe(tmp_path, home, system_ap
     command.chmod(0o755)
     app = system_apps / "UM-Codex.app"
     assert Launchers(root, platform="darwin", say=lambda _: None, home=home).write([app]).ok
+    assert launchers.is_our_app(app, root)
     subprocess.run([str(app / "Contents" / "MacOS" / "UM-Codex")], check=True, timeout=30)
     assert ran.read_text() == f"{command} ui --detach\n"
 
@@ -224,8 +328,26 @@ def test_write_makes_the_app_where_the_installer_says(tmp_path, home, system_app
     said: list[str] = []
     assert Launchers(root, platform="darwin", say=said.append, home=home).write([app]).ok
     assert_written(app, root)
-    assert launchers.is_our_app(app)
-    assert (root / "launchers").read_text() == f"{FORMAT}\n"
+    assert launchers.is_our_app(app, root)
+    assert record(root) == (FORMAT, True)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the Mac app")
+def test_macos_is_told_to_read_the_app_again(tmp_path, home, system_apps, monkeypatch):
+    log = tmp_path / "lsregister.log"
+    fake = tmp_path / "lsregister"
+    fake.write_text(f'#!/bin/sh\necho "$*" >> {launchers.sh_quote(str(log))}\n')
+    fake.chmod(0o755)
+    monkeypatch.setenv(launchers.LSREGISTER_ENV, str(fake))
+    monkeypatch.setattr(launchers.sys, "platform", "darwin")
+    root = tmp_path / "app"
+    app = alpha_1_app(system_apps, root)
+    mac(root, home, []).refresh()
+    assert log.read_text() == f"-f {app}\n"
+    mac(root, home, []).refresh()  # nothing written, nothing registered
+    assert log.read_text() == f"-f {app}\n"
+    monkeypatch.setenv(launchers.LSREGISTER_ENV, str(tmp_path / "missing"))
+    assert mac(root, home, []).write([app]).ok  # no lsregister: still fine
 
 
 # --- At a launch -----------------------------------------------------------------
@@ -233,20 +355,68 @@ def test_write_makes_the_app_where_the_installer_says(tmp_path, home, system_app
 
 def test_a_launch_refreshes_launchers_an_older_installer_wrote_once(tmp_path, home, system_apps):
     root = tmp_path / "app"
-    app = alpha_1_app(system_apps)
+    app = alpha_1_app(system_apps, root)
     said: list[str] = []
-    launchers.refresh_if_older(said.append, launchers=mac(root, home, said))
+    launchers.refresh_if_differs(said.append, launchers=mac(root, home, said))
     assert_written(app, root)
     assert said == [f"Brought {app} up to date (it opens UM-Codex's window in your browser)."]
     # Recorded: the next launch doesn't look again.
-    (app / "Contents" / "MacOS" / "UM-Codex").write_text(ALPHA_1_SCRIPT)
-    launchers.refresh_if_older(said.append, launchers=mac(root, home, said))
-    assert (app / "Contents" / "MacOS" / "UM-Codex").read_text() == ALPHA_1_SCRIPT
+    (app / "Contents" / "MacOS" / "UM-Codex").write_text(alpha_1_script(root))
+    launchers.refresh_if_differs(said.append, launchers=mac(root, home, said))
+    assert (app / "Contents" / "MacOS" / "UM-Codex").read_text() == alpha_1_script(root)
+
+
+def test_a_launch_refreshes_launchers_of_another_format(tmp_path, home, system_apps):
+    root = tmp_path / "app"
+    app = alpha_1_app(system_apps, root)
+    Launchers(root, platform="darwin", home=home, fmt=1, say=lambda _: None).refresh()
+    assert record(root) == (1, True)  # as a rollback to alpha.1 leaves it
+    launchers.refresh_if_differs(lambda _: None, launchers=mac(root, home, []))
+    assert_written(app, root)
+    assert record(root) == (FORMAT, True)
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="POSIX permissions")
+def test_a_failed_launch_refresh_says_so_once_then_retries_daily_in_the_log(
+    tmp_path, home, system_apps, caplog
+):
+    root = tmp_path / "app"
+    app = alpha_1_app(system_apps, root)
+    (app / "Contents" / "MacOS").chmod(0o555)
+    clock = [1_000_000.0]
+    said: list[str] = []
+
+    def launch() -> None:
+        at = Launchers(root, platform="darwin", say=said.append, home=home, now=lambda: clock[0])
+        launchers.refresh_if_differs(said.append, launchers=at)
+
+    try:
+        launch()
+        assert "couldn't be brought up to date" in "\n".join(said)
+        assert record(root) == (FORMAT, False)
+        said.clear()
+        clock[0] += 60 * 60  # an hour later: not tried
+        launch()
+        assert said == []
+        assert (app / "Contents" / "MacOS" / "UM-Codex").read_text() == alpha_1_script(root)
+        clock[0] += launchers.RETRY_SECONDS  # a day later: tried, quietly
+        with caplog.at_level("INFO", logger="umcodex.launchers"):
+            launch()
+        assert said == []
+        assert "couldn't be brought up to date" in caplog.text
+        # Once it can be written, it is, and that's the end of it.
+        (app / "Contents" / "MacOS").chmod(0o755)
+        clock[0] += launchers.RETRY_SECONDS
+        launch()
+        assert_written(app, root)
+        assert record(root) == (FORMAT, True)
+    finally:
+        (app / "Contents" / "MacOS").chmod(0o755)
 
 
 def test_a_launch_says_nothing_when_theres_nothing_to_do(tmp_path, home):
     said: list[str] = []
-    launchers.refresh_if_older(said.append, launchers=mac(tmp_path / "app", home, said))
+    launchers.refresh_if_differs(said.append, launchers=mac(tmp_path / "app", home, said))
     assert said == []
 
 
@@ -255,7 +425,7 @@ def test_a_launch_never_fails_because_of_the_launchers(tmp_path, home, monkeypat
         raise RuntimeError("boom")
 
     monkeypatch.setattr(Launchers, "refresh", broken)
-    launchers.refresh_if_older(lambda _: None, launchers=mac(tmp_path / "app", home, []))
+    launchers.refresh_if_differs(lambda _: None, launchers=mac(tmp_path / "app", home, []))
 
 
 def test_a_development_copy_never_touches_the_launchers(monkeypatch):
@@ -263,17 +433,22 @@ def test_a_development_copy_never_touches_the_launchers(monkeypatch):
         raise AssertionError("refreshed from a development copy")
 
     monkeypatch.setattr(Launchers, "refresh", refuse)
-    launchers.refresh_if_older(refuse)  # this test run's Python isn't an installed version
+    launchers.refresh_if_differs(refuse)  # this test run's Python isn't an installed version
 
 
 def test_um_codex_and_um_codex_ui_check_the_launchers_first(monkeypatch):
     called: list[str] = []
-    monkeypatch.setattr(launchers, "refresh_if_older", lambda *a, **k: called.append("refresh"))
+    monkeypatch.setattr(launchers, "refresh_if_differs", lambda *a, **k: called.append("refresh"))
     from umcodex.ui import server
 
     monkeypatch.setattr(server, "detach", lambda open_browser: called.append("detach") or 0)
     assert cli.main(["ui", "--detach"]) == 0
     assert called == ["refresh", "detach"]
+
+
+def test_the_tests_home_is_a_stand_in():
+    # conftest.py: no test reaches the real ~/Applications or Desktop.
+    assert "pytest" in str(Path.home()) or "tmp" in str(Path.home()).lower()
 
 
 # --- The command -----------------------------------------------------------------
@@ -283,10 +458,10 @@ def test_the_command_dry_run(tmp_path, home, system_apps, monkeypatch, capsys):
     root = tmp_path / "app"
     monkeypatch.setenv("UMCODEX_INSTALL_DIR", str(root))
     monkeypatch.setattr(launchers, "Launchers", functools.partial(Launchers, platform="darwin", home=home))
-    app = alpha_1_app(system_apps)
+    app = alpha_1_app(system_apps, root)
     assert cli.main(["launchers", "--refresh", "--dry-run"]) == 0
     assert f"Would bring {app} up to date" in capsys.readouterr().out
-    assert (app / "Contents" / "MacOS" / "UM-Codex").read_text() == ALPHA_1_SCRIPT
+    assert (app / "Contents" / "MacOS" / "UM-Codex").read_text() == alpha_1_script(root)
     with pytest.raises(SystemExit):
         cli.main(["launchers", "--dry-run"])
     with pytest.raises(SystemExit):
@@ -396,8 +571,34 @@ def test_refresh_rewrites_alpha_1_shortcuts_on_the_start_menu_and_desktop(tmp_pa
     for place in (start_menu, desktop):
         assert shell.links[str(place)] == wanted(root)
     assert (root / "icons" / "UM-Codex.ico").read_bytes() == launchers.windows_icon()
-    assert (root / "launchers").read_text() == f"{FORMAT}\n"
+    assert record(root) == (FORMAT, True)
     assert f"Brought {desktop} up to date" in "\n".join(said)
+
+
+@pytest.mark.parametrize("terminal", [True, False])
+def test_format_1_is_alpha_1s_shortcut_exactly(terminal):
+    old = alpha_1_shortcut(ROOT, terminal)
+    written = launchers.windows_shortcut(
+        ROOT,
+        home=r"C:\Users\me",
+        powershell=r"C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe",
+        icon=False,
+        fmt=1,
+        terminal=old.target if terminal else "",
+    )
+    assert written == old
+
+
+def test_a_rollback_to_alpha_1_writes_its_shortcuts(tmp_path, start_menu):
+    root = tmp_path / "app"
+    shell = FakeShell()
+    shell.links = {str(start_menu): wanted(root)}
+    report = Launchers(root, platform="win32", say=lambda _: None, shortcut_host=shell, fmt=1).refresh()
+    assert report.changed == [start_menu]
+    now = shell.links[str(start_menu)]
+    assert "launch --from-app" in now.arguments and "-NoExit" in now.arguments
+    assert launchers.is_our_shortcut(now, root)
+    assert record(root) == (1, True)
 
 
 def test_refresh_leaves_someone_elses_desktop_shortcut_alone(tmp_path, start_menu):
@@ -456,7 +657,7 @@ def test_windows_shortcuts_that_cant_be_written_say_what_to_do(tmp_path, start_m
     text = "\n".join(said)
     assert f"{start_menu} couldn't be brought up to date (Access is denied.)" in text
     assert "Run the UM-Codex installer again" in text
-    assert not (root / "launchers").exists()
+    assert record(root) == (FORMAT, False)
     shell.refuse, shell.broken = "", True
     said.clear()
     assert not windows(root, shell, said).refresh().ok
@@ -469,7 +670,7 @@ def test_write_makes_the_shortcuts_the_installer_names(tmp_path, start_menu):
     desktop = tmp_path / "Desktop" / "UM-Codex.lnk"
     assert windows(root, shell, []).write([start_menu, desktop]).ok
     assert shell.links == {str(start_menu): wanted(root), str(desktop): wanted(root)}
-    assert (root / "launchers").read_text() == f"{FORMAT}\n"
+    assert record(root) == (FORMAT, True)
 
 
 # --- Windows, for real (CI's windows-installer job) ---------------------------------
@@ -501,3 +702,37 @@ def test_real_alpha_1_shortcuts_are_rewritten_and_others_left_alone(tmp_path):
     assert Launchers(root, platform="win32", say=said.append).refresh().current == [start_menu]
     assert (root / "icons" / "UM-Codex.ico").is_file()
     assert stat.S_ISREG((root / "launchers").stat().st_mode)
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or not os.environ.get("GITHUB_ACTIONS"),
+    reason="changes where Windows says the Desktop is: only on a throwaway CI runner",
+)
+def test_a_redirected_desktop_is_found_where_windows_says(tmp_path, monkeypatch):
+    """The Desktop as Windows reports it (a OneDrive Desktop, say), not a
+    path UM-Codex guesses: the runner's Desktop is pointed at a temporary
+    folder for this test, then put back."""
+    import winreg  # type: ignore[import-not-found]
+
+    key_path = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+    desktop = tmp_path / "OneDrive - Michigan Medicine" / "Desktop"
+    desktop.mkdir(parents=True)
+    root = tmp_path / "app"
+    root.mkdir()
+    link = desktop / "UM-Codex.lnk"
+    old = alpha_1_shortcut(PureWindowsPath(root), terminal=False)
+    launchers.run_shortcut_host({"write": [{"path": str(link), **old.to_json()}]})
+    monkeypatch.delenv(launchers.DESKTOP_ENV)
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
+        saved = winreg.QueryValueEx(key, "Desktop")
+        winreg.SetValueEx(key, "Desktop", 0, winreg.REG_EXPAND_SZ, str(desktop))
+        try:
+            assert launchers.run_shortcut_host({"read": []})["desktop"].lower() == str(desktop).lower()
+            said: list[str] = []
+            report = Launchers(root, platform="win32", say=said.append).refresh()
+        finally:
+            winreg.SetValueEx(key, "Desktop", 0, saved[1], saved[0])
+    assert report.ok and link in report.changed, said
+    read = launchers.run_shortcut_host({"read": [str(link)]})
+    [now] = [Shortcut.from_json(item) for item in launchers._listed(read["read"])]
+    assert now.arguments.endswith("\\bin\\um-codex.exe' ui --detach\"")

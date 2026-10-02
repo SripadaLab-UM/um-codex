@@ -275,14 +275,17 @@ at a time, and undoes what it installed if a step fails, so the running
 version stays the one in use. It works only in a copy the installer made
 (not a development checkout). `um-codex update --rollback` switches
 `current` and `previous`, refreshes the launchers with that version's
-`um-codex launchers --refresh` (0.1.0-alpha.1 has none: it says to open
-UM-Codex with `um-codex` in a terminal), then pulls that version's images
+`um-codex launchers --refresh` (0.1.0-alpha.1 has none: the newer code doing
+the rollback writes alpha.1's own launchers, format 1, so it still opens; if
+it can't, it says the app won't open it and how to start it), then pulls
+that version's images
 (usually still there; if that fails it says to run `um-codex pull`).
 
 An update made by an older updater (0.1.0-alpha.1's never refreshed the
 launchers) is caught at the new version's first `um-codex` or `um-codex ui`:
 `<app>/launchers` records the launcher format, and when it's missing or
-older the launchers are refreshed once.
+differs the launchers are refreshed (a failure is said once, then retried at
+most once a day, in the log only).
 
 **A release that changes what the launchers contain** (the app's script or
 `Info.plist`, the shortcut's command line) bumps `FORMAT` in

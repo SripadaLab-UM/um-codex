@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -218,20 +220,52 @@ def test_launchers_that_cant_be_refreshed_dont_fail_the_update(app, github, key,
     assert "Updated to UM-Codex 0.1.0a3" in text
 
 
-def test_rolling_back_to_a_version_without_launchers_says_what_to_do(app, github, key, data_folder):
+OLD_VERSION = "um-codex: error: argument command: invalid choice: 'launchers' (choose from ...)\n"
+
+
+def test_rolling_back_to_a_version_without_launchers_writes_its_launchers(app, github, key, data_folder):
+    from umcodex import launchers
+
     private, public = key
     github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
     tools, said = FakeTools(), []
     up = updater(app, github, public, tools, said, data_folder)
     assert up.update() == 0
-    tools.launchers = subprocess.CompletedProcess(
-        [], 2, "", "um-codex: error: argument command: invalid choice: 'launchers' (choose from ...)\n"
-    )
+    # The app as the newer version wrote it (a stand-in /Applications).
+    bundle = Path(os.environ[launchers.SYSTEM_APPS_ENV]) / "UM-Codex.app"
+    assert launchers.Launchers(app, platform="darwin", say=said.append).write([bundle]).ok
+    tools.launchers = subprocess.CompletedProcess([], 2, "", OLD_VERSION)
     assert up.rollback() == 0
-    text = "\n".join(said)
-    assert "UM-Codex 0.1.0a1 can't rewrite the UM-Codex app, which may not open it." in text
-    assert "running um-codex in a terminal" in text
+    # 0.1.0-alpha.1 has no `launchers`: the newer code writes alpha.1's app
+    # (Terminal, `launch --from-app`), so it still opens.
+    for name, content in launchers.mac_app_files(app, launchers.mac_icon(), 1).items():
+        assert (bundle / name).read_bytes() == content, name
+    assert "launch --from-app" in (bundle / "Contents" / "MacOS" / "UM-Codex").read_text()
+    assert launchers.Launchers(app, platform="darwin").record().format == 1
+    assert "UM-Codex 0.1.0a1 opens in a terminal window" in "\n".join(said)
     assert pointer(app) == ("0.1.0a1", "0.1.0a3")
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="POSIX permissions")
+def test_a_rollback_whose_launchers_cant_be_set_back_says_how_to_start_it(app, github, key, data_folder):
+    from umcodex import launchers
+
+    private, public = key
+    github.releases = [make_release("v0.1.0-alpha.3", "0.1.0a3", private)]
+    tools, said = FakeTools(), []
+    up = updater(app, github, public, tools, said, data_folder)
+    assert up.update() == 0
+    bundle = Path(os.environ[launchers.SYSTEM_APPS_ENV]) / "UM-Codex.app"
+    assert launchers.Launchers(app, platform="darwin", say=said.append).write([bundle]).ok
+    (bundle / "Contents" / "MacOS").chmod(0o555)
+    tools.launchers = subprocess.CompletedProcess([], 2, "", OLD_VERSION)
+    try:
+        assert up.rollback() == 0
+    finally:
+        (bundle / "Contents" / "MacOS").chmod(0o755)
+    text = "\n".join(said)
+    assert "The UM-Codex app won't open UM-Codex 0.1.0a1. To start it, open Terminal and run: " in text
+    assert str(app / "bin" / "um-codex") in text
 
 
 def test_rollback_switches_back_and_forth(app, github, key, data_folder):

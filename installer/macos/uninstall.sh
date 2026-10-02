@@ -51,14 +51,17 @@ link="$HOME/.local/bin/um-codex"
 if [ -L "$link" ] && [ "$(readlink "$link")" = "$UMCODEX" ]; then
   rm -f "$link"
 fi
-# The app, in ~/Applications or /Applications (only UM-Codex's own: its bundle
-# id), and the Desktop shortcut to it (only a link to one of those apps).
+# The app, in ~/Applications or /Applications (only this UM-Codex's own: its
+# bundle id, and a script that runs this install's command, as install.sh's
+# ours()), and the Desktop shortcut to it (only a link to one of those apps).
 SYSTEM_APPS="${UMCODEX_SYSTEM_APPLICATIONS:-/Applications}"
 name="UM-Codex"
 bundle="edu.umich.umcodex"
+command_quoted="'$(printf '%s' "$UMCODEX" | sed "s/'/'\\\\''/g")'"
 for app in "$HOME/Applications/$name.app" "$SYSTEM_APPS/$name.app"; do
-  if [ ! -L "$app" ] && [ -f "$app/Contents/Info.plist" ] \
-    && grep -qF "<string>$bundle</string>" "$app/Contents/Info.plist"; then
+  if [ ! -L "$app" ] && [ ! -L "$app/Contents" ] && [ ! -L "$app/Contents/MacOS" ] \
+    && [ -f "$app/Contents/Info.plist" ] && grep -qF "<string>$bundle</string>" "$app/Contents/Info.plist" \
+    && [ -f "$app/Contents/MacOS/$name" ] && grep -qF "$command_quoted" "$app/Contents/MacOS/$name"; then
     rm -rf "$app" 2>/dev/null || echo "$app couldn't be removed; drag it to the Trash."
   fi
 done
