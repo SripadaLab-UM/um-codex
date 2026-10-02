@@ -188,8 +188,9 @@ Codex app's own browser. Use it only for that.
   and file edits), with its own **Internet for Codex's commands** switch.
   That second choice doesn't limit computer and browser control: those act
   through your apps, which can change anything you can.
-- **Ask before commands** is on by default here: Codex asks before each
-  command and file change it doesn't know to be read-only. It stays on with
+- **Ask before commands** is on by default here: Codex asks before commands
+  (and file changes) in this setup's chats. That holds for new chats; the
+  Codex app's own permission choice in a chat can change it. It stays on with
   full access or with computer and browser control (without it, the apps'
   own permission questions are turned down). There's no "Approve for me"
   (the Toolkit has no reviewer model for it).

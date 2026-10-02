@@ -800,8 +800,16 @@ modes, rigor, and the frontend.
      GUI round's hi.txt was made unasked), and `approval_policy =
      "untrusted"` in config.toml is refused since 0.157.1 ("no longer
      supported"), so it comes from the projects' `trust_level = "untrusted"`
-     with no `approval_policy` set; "never" sets `approval_policy = "never"`
-     and the projects trusted. "Computer and browser control"
+     with no `approval_policy` set, for every `projects.*` entry the copy's
+     config.toml has (a chat's trust is its exact folder or git root, so a
+     project the person added would otherwise fall back to on-request);
+     "never" sets `approval_policy = "never"` and the setup's folders
+     trusted. It isn't a lock (a review confirmed it in the 0.157.1 and
+     0.159.2 source): the app's own `approvalPolicy` in `thread/start` or
+     `turn/start` (its permission picker) wins, and a resumed chat keeps its
+     saved policy, so the form says "Codex asks before commands in this
+     setup's chats (new chats; the Codex app's own permission choice in a
+     chat can change this)". "Computer and browser control"
      (`computer_use`, default on) means Computer Use and the app's own
      browser; control of the person's own Chrome isn't supported yet (the
      form says so). No sandbox browser tool; "Open in" is the local window.
@@ -889,15 +897,25 @@ modes, rigor, and the frontend.
      the registry entry is the copy's. So, in both copies:
      - `chrome@openai-bundled` is off in config.toml ("not supported yet"
        in the local form);
+     - "ours" always means the whole data folder, so neither copy takes
+       the other's manifest for the person's;
      - before a copy opens, the manifests are remembered in its folder
-       (`chrome-manifests.json`, kept until the final restore, never
-       overwritten by a later start);
+       (`chrome-manifests.json`); a backup left from before keeps its
+       entries for manifests that still lead into the data folder, and
+       takes the others as they are now (the person's own app may have
+       rewritten them, a newer version's path, say);
      - at each poll of the launch, and when it ends, a manifest that leads
-       into the copy is put back (or removed if there was none), and one
-       that leads elsewhere (the person's own app rewrote it) is left;
-     - when the copy is gone, its entries leave the shared registry and the
-       backup goes (the sandbox copy often stays open after its launch: its
-       backup then stays for the next launch);
+       into the data folder is put back (or removed if there was none), one
+       that leads elsewhere is left and refreshed in the backup, and the
+       data folder's entries leave the shared registry (rewritten with its
+       mode kept, read again once if the app wrote it meanwhile);
+     - when the launch is done and the copy gone, the backup goes, but only
+       if every manifest that led into the data folder was put back or
+       removed (otherwise it's kept, and logged); before it goes, another
+       copy's backup that has nothing for a place gets the person's
+       manifest from it (that copy started while this one's was there);
+       the sandbox copy often stays open after its launch: its backup then
+       stays for the next launch;
      - uninstall restores from either copy's backup (one copy may have
        backed up the other's), removes any other manifest leading into the
        data folder, and takes the data folder's entries out of the
@@ -1411,8 +1429,11 @@ modes, rigor, and the frontend.
      (one made after the copy opened, `copy_knows`) is quit (asked as its
      Quit menu does, then SIGTERM, then SIGKILL), set up and opened again,
      with the card saying "Reopening the Codex window… so it knows this
-     setup", when no other setup's launch in the app uses it (Mac only);
-     otherwise it's left as it is and the guided steps show, as before.
+     setup", when no other setup's launch in the app uses it (Mac only).
+     The quit is asked for, then SIGTERM, never SIGKILL; if the copy hasn't
+     quit within about 10 s, or its state file can't be read (whether it
+     knows the setup can't be told), it's left as it is and the guided
+     steps show, as before.
 
      The rest of the file is kept; it's written whole (temporary file and
      rename), with its backup. If a key UM-Codex touches has a shape it

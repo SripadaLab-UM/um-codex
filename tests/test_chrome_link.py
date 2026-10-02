@@ -69,9 +69,9 @@ def test_uninstall_puts_back_what_either_copy_took(tmp_path: Path) -> None:
     manifest = chrome_link.manifests(home)[0]
     manifest.parent.mkdir(parents=True)
     manifest.write_text(PERSONS)
-    chrome_link.remember(sandbox, home)
+    chrome_link.remember(sandbox, data, home)
     manifest.write_text(ours(sandbox))  # the sandbox copy took it
-    chrome_link.remember(local, home)  # then a local launch saw the sandbox copy's as "before"
+    chrome_link.remember(local, data, home)  # then a local launch saw the sandbox copy's as "before"
     manifest.write_text(ours(local))
     chrome_link.restore_all([local, sandbox], data, home)
     assert manifest.read_text() == PERSONS  # the sandbox copy's backup put the person's back
@@ -84,35 +84,37 @@ def test_a_backup_of_ours_alone_means_remove(tmp_path: Path) -> None:
     manifest = chrome_link.manifests(home)[0]
     manifest.parent.mkdir(parents=True)
     manifest.write_text(ours(sandbox))  # no backup of the person's survived
-    chrome_link.remember(local, home)
+    chrome_link.remember(local, data, home)
     manifest.write_text(ours(local))
     lines = chrome_link.restore_all([local, sandbox], data, home)
     assert not manifest.exists() and lines
 
 
 def test_while_the_copy_runs_the_backup_stays(tmp_path: Path) -> None:
-    copy, home = tmp_path / "copy", tmp_path / "home"
+    data, home = tmp_path / "data", tmp_path / "home"
+    copy = data / "codex-app"
     manifest = chrome_link.manifests(home)[0]
     manifest.parent.mkdir(parents=True)
     manifest.write_text(PERSONS)
-    chrome_link.remember(copy, home)
+    chrome_link.remember(copy, data, home)
     for _ in range(2):  # it rewrites it again later: still put back
         manifest.write_text(ours(copy))
-        chrome_link.restore(copy, home, final=False)
+        chrome_link.restore(copy, data, home, final=False)
         assert manifest.read_text() == PERSONS and (copy / chrome_link.BACKUP).exists()
-    chrome_link.restore(copy, home)
+    chrome_link.restore(copy, data, home)
     assert not (copy / chrome_link.BACKUP).exists()
 
 
 def test_windows_registry_entries_of_the_copy_go(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
-    copy = tmp_path / "data" / "codex-app"
+    data = tmp_path / "data"
+    copy = data / "codex-app"
     registry = chrome_link.registry(tmp_path, "win32")
     registry.parent.mkdir(parents=True)
     theirs = {"paths": {"codexHome": "C:\\Users\\me\\.codex"}}
     mine = {"paths": {"codexHome": str(copy / "codex-home").upper()}}
     registry.write_text(json.dumps({"entries": [theirs, mine]}))
-    chrome_link.restore(copy, tmp_path, platform="win32")
+    chrome_link.restore(copy, data, tmp_path, platform="win32")
     assert json.loads(registry.read_text())["entries"] == [theirs]
 
 
@@ -180,3 +182,116 @@ def test_a_local_launch_puts_it_back_while_the_copy_runs(tmp_path: Path) -> None
     code, *_ = run_held(tmp_path, watch, copy=copy)
     assert code == 0 and PERSONS in seen[1:]  # put back while the copy still ran
     assert manifest.read_text() == PERSONS
+
+
+# --- Review of 392238a: the data folder is "ours", stale and failed backups ----------------
+
+
+def _manifest(home: Path) -> Path:
+    manifest = chrome_link.manifests(home)[0]
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    return manifest
+
+
+def test_one_copy_never_takes_the_others_manifest_for_the_persons(tmp_path: Path) -> None:
+    """The reviewer's interleaving: A remembers the person's; A's copy writes;
+    B starts and remembers; A's launch ends and restores; B's copy writes;
+    B's launch ends. The person's link must survive."""
+    data, home = tmp_path / "data", tmp_path / "home"
+    a, b = codex_app.app_folder(data), tc.local_folder(data)
+    manifest = _manifest(home)
+    manifest.write_text(PERSONS)
+    chrome_link.remember(a, data, home)
+    manifest.write_text(ours(a))
+    chrome_link.remember(b, data, home)  # sees A's manifest: not the person's
+    assert json.loads((b / chrome_link.BACKUP).read_text()).get(str(manifest)) is None
+    chrome_link.restore(a, data, home)  # A ends: the person's is back
+    assert manifest.read_text() == PERSONS
+    manifest.write_text(ours(b))
+    chrome_link.restore(
+        b, data, home, final=False
+    )  # B's poll: B's backup was refreshed? no: it led into data
+    chrome_link.restore(b, data, home)
+    assert manifest.exists() is False or manifest.read_text() == PERSONS
+
+
+def test_b_learns_the_persons_manifest_once_its_back(tmp_path: Path) -> None:
+    data, home = tmp_path / "data", tmp_path / "home"
+    a, b = codex_app.app_folder(data), tc.local_folder(data)
+    manifest = _manifest(home)
+    manifest.write_text(PERSONS)
+    chrome_link.remember(a, data, home)
+    manifest.write_text(ours(a))
+    chrome_link.remember(b, data, home)
+    chrome_link.restore(a, data, home)  # the person's is back
+    chrome_link.restore(b, data, home, final=False)  # B's poll refreshes its backup from it
+    manifest.write_text(ours(b))
+    chrome_link.restore(b, data, home)
+    assert manifest.read_text() == PERSONS
+
+
+def test_a_stale_backup_is_refreshed_from_the_persons_app(tmp_path: Path) -> None:
+    data, home = tmp_path / "data", tmp_path / "home"
+    copy = codex_app.app_folder(data)
+    manifest = _manifest(home)
+    manifest.write_text(PERSONS)
+    chrome_link.remember(copy, data, home)
+    newer = PERSONS.replace("/chrome/host", "/chrome/26.930/host")
+    manifest.write_text(newer)  # the person's own app updated its path
+    chrome_link.restore(copy, data, home, final=False)  # a poll
+    manifest.write_text(ours(copy))
+    chrome_link.restore(copy, data, home)
+    assert manifest.read_text() == newer
+    # remember with a backup left: refreshed too
+    manifest.write_text(PERSONS)
+    chrome_link.remember(copy, data, home)
+    manifest.write_text(ours(copy))
+    chrome_link.remember(copy, data, home)  # leads into data: the saved entry stays
+    chrome_link.restore(copy, data, home)
+    assert manifest.read_text() == PERSONS
+
+
+def test_a_failed_restore_keeps_the_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data, home = tmp_path / "data", tmp_path / "home"
+    copy = codex_app.app_folder(data)
+    manifest = _manifest(home)
+    manifest.write_text(PERSONS)
+    chrome_link.remember(copy, data, home)
+    manifest.write_text(ours(copy))
+    real = chrome_link._replace
+
+    def failing(path: Path, data_: bytes, mode=None) -> None:
+        if path == manifest:
+            raise OSError("read-only")
+        real(path, data_, mode)
+
+    monkeypatch.setattr(chrome_link, "_replace", failing)
+    assert chrome_link.restore(copy, data, home) == []
+    assert (copy / chrome_link.BACKUP).exists()  # kept for the next try
+    monkeypatch.setattr(chrome_link, "_replace", real)
+    chrome_link.restore(copy, data, home)
+    assert manifest.read_text() == PERSONS and not (copy / chrome_link.BACKUP).exists()
+
+
+def test_the_registry_keeps_its_mode_and_retries_a_changed_file(tmp_path: Path, monkeypatch) -> None:
+    data, home = tmp_path / "data", tmp_path / "home"
+    registry = chrome_link.registry(home, "darwin")
+    registry.parent.mkdir(parents=True)
+    theirs = {"paths": {"codexHome": "/Users/me/.codex"}}
+    mine = {"paths": {"codexHome": str(data / "codex-app" / "codex-home")}}
+    registry.write_text(json.dumps({"entries": [theirs, mine]}))
+    os.chmod(registry, 0o640)
+    stats = iter([1, 2])  # the first check sees the file change once
+    real_stat = Path.stat
+
+    def stat(self, *a, **k):
+        st = real_stat(self, *a, **k)
+        if self == registry and next(stats, None) == 2:
+            os.utime(registry, ns=(st.st_atime_ns, st.st_mtime_ns + 1000))
+        return real_stat(self, *a, **k)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    assert chrome_link.forget_registry(data, home, "darwin") is True
+    monkeypatch.setattr(Path, "stat", real_stat)
+    assert json.loads(registry.read_text())["entries"] == [theirs]
+    assert (registry.stat().st_mode & 0o777) == 0o640

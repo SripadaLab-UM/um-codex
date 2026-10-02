@@ -456,6 +456,6 @@ def openssh_installed() -> bool:
 
 OPENSSH_MISSING = (
     "The Codex app needs Windows' own ssh (OpenSSH Client), which isn't on this computer. In Settings, "
-    "search for \"Optional features\", add a feature, choose OpenSSH Client and install it (on a managed "
+    'search for "Optional features", add a feature, choose OpenSSH Client and install it (on a managed '
     "computer, your IT may need to), then come back. Terminal works in the meantime."
 )

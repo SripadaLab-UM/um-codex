@@ -172,6 +172,12 @@ def local_config(
     asks = approval_policy != "never"
     projects = config.get("projects")
     projects = projects if isinstance(projects, dict) else {}
+    if asks:
+        # Every project the copy knows, not only this setup's: Codex's trust
+        # applies to a chat's exact folder (or its git root), so a project the
+        # person added in the app would fall back to on-request.
+        for key, entry in list(projects.items()):
+            projects[key] = {**(entry if isinstance(entry, dict) else {}), "trust_level": "untrusted"}
     for folder in folders:
         projects[str(folder)] = {"trust_level": "untrusted" if asks else "trusted"}
     config.update(
@@ -829,6 +835,7 @@ def quit_found(
     run: Runner = subprocess.run,
     sleep: Callable[[float], None] = time.sleep,
     patience: float = 10.0,
+    force: bool = True,
 ) -> bool:
     """End the app process `find` finds (it's looked for again before each
     step, by its profile folder): asked to quit, then SIGTERM, then SIGKILL,
@@ -844,6 +851,8 @@ def quit_found(
         lambda p: os.kill(p, signal.SIGTERM),
         lambda p: os.kill(p, signal.SIGKILL),
     ]
+    if not force:
+        steps = steps[:2]  # asked, then SIGTERM; never SIGKILL
     for step in steps:
         with contextlib.suppress(ProcessLookupError, PermissionError):
             step(pid)
@@ -882,19 +891,19 @@ chrome_registry = chrome_link.registry
 
 
 def remember_chrome_manifests(data: Path, home: Path | None = None) -> None:
-    chrome_link.remember(local_folder(data), home)
+    chrome_link.remember(local_folder(data), data, home)
 
 
 def restore_chrome_manifests(data: Path, home: Path | None = None, *, final: bool = True) -> list[str]:
-    return chrome_link.restore(local_folder(data), home, final=final)
+    return chrome_link.restore(local_folder(data), data, home, final=final)
 
 
 def forget_chrome_registry(data: Path, home: Path | None = None) -> bool:
-    return chrome_link.forget_registry(local_folder(data), home)
+    return chrome_link.forget_registry(data, home)
 
 
 def forget_chrome_manifests(data: Path, home: Path | None = None) -> list[str]:
-    return chrome_link.forget(local_folder(data), home)
+    return chrome_link.forget(data, home)
 
 
 # What uninstall always removes from the local copy, even when the data is

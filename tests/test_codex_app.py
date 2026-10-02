@@ -1989,3 +1989,51 @@ def test_a_copy_another_launch_uses_isnt_reopened(tmp_path, data_folder, monkeyp
     assert not any(c[0] == "/usr/bin/open" for c in run.calls)
     info = json.loads((running.folder / "launch.json").read_text())["app"]
     assert info["reopened"] is False and info["first_time"] is True  # the guided steps
+
+
+def test_a_copy_that_wont_quit_isnt_killed_and_gets_the_steps(tmp_path, data_folder, monkeypatch):
+    from umcodex import this_computer
+
+    _open_copy_knowing_only_other(tmp_path, data_folder)
+    monkeypatch.setattr(launch, "running_launches", lambda data: [])
+    signals: list[int] = []
+    monkeypatch.setattr(
+        this_computer.os, "kill", lambda pid, sig: signals.append(sig)
+    )  # never a real process
+
+    class Stubborn(OpenCopy):
+        def __call__(self, command, **options):
+            done = super().__call__(command, **options)
+            self.open = True  # it doesn't quit when asked
+            return done
+
+    run = Stubborn(data_folder)
+    running = _running(tmp_path, data_folder)
+    hold = codex_app.AppHold(
+        "thesis-a1", say=lambda _: None, data=data_folder, app=Path("/Applications/ChatGPT.app"),
+        docker=FakeDocker(running_for=3, connects_after=None), run=run, sleep=lambda _: None,
+        proxy_for=lambda s: ["/x/um-codex", "ssh-proxy", s], platform="darwin",
+    )  # fmt: skip
+    hold(running)
+    import signal
+
+    assert signals == [signal.SIGTERM]  # asked, then SIGTERM; no SIGKILL
+    info = json.loads((running.folder / "launch.json").read_text())["app"]
+    assert info["reopened"] is False and info["first_time"] is True
+
+
+def test_an_unreadable_copy_state_isnt_reopened(tmp_path, data_folder, monkeypatch):
+    _save_app_setups(tmp_path)
+    home, _ = codex_app.copy_paths(data_folder)
+    home.mkdir(parents=True)
+    (home / ".codex-global-state.json").write_text("[1, 2]")  # another shape
+    assert codex_app.copy_knows("thesis-a1", data_folder) is None
+    monkeypatch.setattr(launch, "running_launches", lambda data: [])
+    run = OpenCopy(data_folder)
+    hold = codex_app.AppHold(
+        "thesis-a1", say=lambda _: None, data=data_folder, app=Path("/Applications/ChatGPT.app"),
+        docker=FakeDocker(running_for=3, connects_after=None), run=run, sleep=lambda _: None,
+        proxy_for=lambda s: ["/x/um-codex", "ssh-proxy", s], platform="darwin",
+    )  # fmt: skip
+    hold(_running(tmp_path, data_folder))
+    assert not any("terminate()" in " ".join(c) for c in run.calls)

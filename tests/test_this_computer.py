@@ -957,3 +957,17 @@ def test_stop_on_this_computer_has_its_own_words_and_quick_start_runs_once() -> 
     quick = script[script.index("async function quickStart()") :]
     assert quick.index("if (quickStarting) return;") < quick.index("quickStartOnce()")
     assert "Control of your own Chrome isn't supported yet." in script
+
+
+def test_asking_marks_every_project_of_the_copy_untrusted(tmp_path: Path) -> None:
+    existing = '[projects."/Users/me/added"]\ntrust_level = "trusted"\n'
+    config = tomllib.loads(
+        tc.local_config(existing, port=1, token_command=["x"], model="m", folders=[tmp_path])
+    )
+    assert config["projects"]["/Users/me/added"] == {"trust_level": "untrusted"}
+    assert config["projects"][str(tmp_path)] == {"trust_level": "untrusted"}
+    never = tomllib.loads(
+        tc.local_config(existing, port=1, token_command=["x"], model="m", folders=[tmp_path],
+                        approval_policy="never")
+    )  # fmt: skip
+    assert never["projects"]["/Users/me/added"] == {"trust_level": "trusted"}  # left as it was

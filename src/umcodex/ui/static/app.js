@@ -1213,8 +1213,8 @@ function renderForm() {
       "Ask before commands",
       local
         ? mustAsk
-          ? "On: Codex asks before each command and file change it doesn't know to be read-only. It stays on with full access or with computer and browser control (without it, the apps' own permission questions are turned down)."
-          : "On (recommended here): Codex asks before each command and file change it doesn't know to be read-only. There's no sandbox around it on this computer."
+          ? "On: Codex asks before commands in this setup's chats (new chats; the Codex app's own permission choice in a chat can change this). It stays on with full access or with computer and browser control (without it, the apps' own permission questions are turned down)."
+          : "On (recommended here): Codex asks before commands in this setup's chats (new chats; the Codex app's own permission choice in a chat can change this). There's no sandbox around it on this computer."
         : "Off (recommended): Codex runs commands without asking; the sandbox is what keeps it in.",
       draft.approvals === "on-request",
       (e) => ((draft.approvals = e.target.checked ? "on-request" : "never"), renderSummary()),

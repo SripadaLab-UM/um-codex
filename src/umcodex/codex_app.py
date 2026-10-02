@@ -618,13 +618,18 @@ def app_setups(data: Path | None = None) -> list[Setup]:
     return [s for s in store.all() if s.open_in == "codex-app" and not s.on_this_computer]
 
 
-def copy_knows(setup_id: str, data: Path | None = None) -> bool:
-    """Whether UM-Codex's copy has the setup's host and project in its state."""
+def copy_knows(setup_id: str, data: Path | None = None) -> bool | None:
+    """Whether UM-Codex's copy has the setup's host and project in its state;
+    None when that can't be told (the file can't be read or has another shape)."""
     home, _ = copy_paths(data)
+    if not any((home / name).exists() for name in (GLOBAL_STATE, f"{GLOBAL_STATE}.bak")):
+        return False
     try:
         state = read_state(home)
-    except StateUnknown:
-        return False
+    except (StateUnknown, OSError):
+        return None
+    if not state:
+        return None  # there, but neither the file nor its backup could be read
     host = host_id(setup_id, data)
     connections = state.get("codex-managed-remote-connections")
     projects = state.get("remote-projects")
@@ -1983,7 +1988,7 @@ class AppHold:
         """Put the person's Chrome manifest back if the copy took it
         (chrome_link.py): at each poll, and when the launch ends."""
         with contextlib.suppress(OSError):
-            chrome_link.restore(app_folder(self.data), final=final, platform=self.platform)
+            chrome_link.restore(app_folder(self.data), self.data, final=final, platform=self.platform)
 
     def _reopen_for(self, running, setup: Setup) -> bool:
         """The copy is open but doesn't know this setup (made after it opened):
@@ -1994,18 +1999,22 @@ class AppHold:
         from umcodex.launch import update_launch_app
         from umcodex.this_computer import quit_found
 
-        if self.platform != "darwin" or copy_knows(setup.id, self.data) or self._copy_shared(running):
-            return False
+        known = copy_knows(setup.id, self.data)
+        if self.platform != "darwin" or known is not False or self._copy_shared(running):
+            return False  # it knows the setup, or that can't be told, or another launch uses it
         update_launch_app(
             running.folder, {"alias": alias(setup.id, self.data), "connected": False, "copy": "reopening"}
         )
         self.say("Reopening UM-Codex's Codex window, set up for this setup...")
         log.info("launch %s: reopening the Codex app copy to set it up", running.spec.launch_id)
+        # Asked to quit, then SIGTERM; never SIGKILL here (the person may have a
+        # chat open): if it hasn't quit in about 10 s, it's left and the steps show.
         ended = quit_found(
             lambda: running_copy(self.data, self.run, self.platform),
             run=self.run,
             sleep=self.sleep,
-            patience=10.0,
+            patience=5.0,
+            force=False,
         )
         if not ended:
             log.warning("the Codex app copy didn't quit; showing the steps")
@@ -2079,7 +2088,9 @@ class AppHold:
         # host never connected: it adds the host switched off, so later it
         # would switch off a host that's on.
         link_arg = deep_link(setup_id, self.data) if link else None
-        chrome_link.remember(app_folder(self.data), platform=self.platform)  # restored by _keep_chrome
+        chrome_link.remember(
+            app_folder(self.data), self.data, platform=self.platform
+        )  # restored by _keep_chrome
         if self.platform == "win32":
             return self._open_windows(link_arg)
         done = self.run(
