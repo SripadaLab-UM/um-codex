@@ -984,6 +984,16 @@ modes, rigor, and the frontend.
      the launch token file. `smoke.sh` checks `sshd -t`, the login shell's
      `CODEX_HOME` and `codex`, and the helper.
    - **This computer's ssh files:**
+     - **Windows permissions:** the folders UM-Codex makes under `~/.ssh`
+       (and `~/.ssh` itself) are made without a mode there, so they inherit
+       the profile's permissions (the person, SYSTEM, Administrators), which
+       Windows OpenSSH accepts. Python 3.13's `mkdir(mode=0o700)` instead
+       gives a Windows folder SYSTEM, Administrators and OWNER RIGHTS, and
+       ssh.exe refuses a config file with OWNER RIGHTS ("Bad permissions");
+       through the Include line that broke every host in the person's
+       `~/.ssh/config` (found on a Windows laptop, 2026-10-02). Files made in
+       those folders (`os.open` with 0600) inherit, and are accepted. CI's
+       Windows job checks it with the real ssh.exe.
      - `~/.ssh/um-codex/` (0700) is shared by every UM-Codex data folder on
        the computer (the installed copy's, a development copy's
        `UMCODEX_DATA_DIR`). Each one keeps its own files in

@@ -385,6 +385,10 @@ jobs:
         run: |
           uv sync
           uv run pytest -q tests/test_ui.py -k windows_command
+      - name: Windows OpenSSH accepts the ssh folders UM-Codex makes (no OWNER RIGHTS from mkdir's mode)
+        # Python 3.13's mkdir(mode=0o700) gives a folder an OWNER RIGHTS entry,
+        # and Windows' ssh.exe then refuses every config Included from it.
+        run: uv run pytest -q tests/test_codex_app.py -k "ssh_folders or openssh_accepts" -rs
       - name: The app's shortcuts are brought up to date (real shortcuts, through WScript.Shell)
         # An alpha.1-style shortcut (Windows Terminal, `launch --from-app`) in a
         # temporary Start menu folder is rewritten by `um-codex launchers

@@ -321,7 +321,7 @@ def add_include(home: Path | None = None) -> str:
     folder = ssh_dir(home)
     config = folder / "config"
     if not config.exists():
-        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _ssh_mkdir(folder, parents=True)
         _private_write(config, INCLUDE_LINE + "\n")
         return "created"
     data = _read(config)
@@ -499,9 +499,22 @@ def _saved_setup_ids(data: Path | None = None) -> set[str]:
     return {setup.id for setup in store.all()}
 
 
+def _ssh_mkdir(folder: Path, *, parents: bool = False, platform: str = sys.platform) -> None:
+    """Make a folder for ssh's files. On Windows it keeps the permissions it
+    inherits from ~/.ssh (the person, SYSTEM, Administrators): Python 3.13's
+    mkdir(mode=0o700) gives it an OWNER RIGHTS entry instead, and Windows
+    OpenSSH then refuses the config file in it, and with the Include line
+    every host in ~/.ssh/config ("Bad permissions", seen 2026-10-02). Files
+    made in it (os.open with 0o600) inherit, which OpenSSH accepts."""
+    if platform == "win32":
+        folder.mkdir(parents=parents, exist_ok=True)
+    else:
+        folder.mkdir(mode=0o700, parents=parents, exist_ok=True)
+
+
 def _private_dir(folder: Path) -> None:
     """A folder only the person can open (its parent must be there)."""
-    folder.mkdir(mode=0o700, exist_ok=True)
+    _ssh_mkdir(folder)
     with contextlib.suppress(OSError):
         os.chmod(folder, 0o700)
 
