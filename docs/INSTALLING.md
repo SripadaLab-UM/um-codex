@@ -90,7 +90,9 @@ Steps:
    An answer of no is remembered (`ssh-include-declined` in the data
    folder), so installing again doesn't ask again (`um-codex ssh-include
    --ask-again` asks). `um-codex ssh-include` itself refuses to ask without a
-   terminal (exit 1, nothing added).
+   terminal (exit 1, nothing added). On Windows a terminal is a console
+   (`GetConsoleMode` on the input handle, `cli.stdin_is_terminal`):
+   `isatty()` is also true there for NUL, so `< NUL` would have passed.
    **No terminal adds nothing:** consent must be the person's, so it says
    the line wasn't asked about, and the launcher window explains it on the
    setup's card ("Add the line and start") when a setup in the Codex app is

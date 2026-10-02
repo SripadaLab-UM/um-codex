@@ -563,6 +563,8 @@ class Launcher:
             default_open_in=current.open_in,
         )
         self.store.save(setup)
+        if setup.open_in != "codex-app":  # e.g. the card's "Open in Terminal instead": the note's done
+            codex_app.record_fallback(setup.id, None, self.data)
         return setup_json(setup, own_data=self.own_data)
 
     def rename(self, setup_id: str, body: object) -> dict[str, Any]:
