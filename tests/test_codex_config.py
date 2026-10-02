@@ -79,6 +79,7 @@ def test_requirements_use_only_keys_codex_0_157_1_knows():
     known = {
         "model_provider", "model_providers", "model_catalog_json", "check_for_update_on_startup",
         "feedback", "allowed_sandbox_modes", "allowed_web_search_modes",
+        "default_permissions", "allowed_permission_profiles",
     }  # fmt: skip
     assert set(requirements()) <= known and set(requirements(internet=True)) <= known
 

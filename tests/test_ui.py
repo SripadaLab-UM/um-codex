@@ -43,8 +43,16 @@ class FakeOpener:
     def available(self) -> bool:
         return True
 
+    def reason(self) -> str | None:
+        return None
+
     def open(self, setup_id: str) -> None:
         self.opened.append(setup_id)
+
+
+class FakeAppOpener(FakeOpener):
+    key = "codex-app"
+    label = "Codex app"
 
 
 class FakeDocker:
@@ -113,7 +121,10 @@ def launcher_for_tests(**changes) -> server.Launcher:
     options = {
         "store": SetupStore(),
         "data": data_dir(),
-        "openers": {"terminal": FakeOpener(), "codex-app": opening.CodexAppOpener()},
+        "openers": {
+            "terminal": FakeOpener(),
+            "codex-app": opening.CodexAppOpener(find=lambda: None, platform="darwin"),
+        },
         "docker": Docker(fake_docker),
         "run": fake_docker,
         "check_key": lambda key: "ok",
@@ -383,7 +394,8 @@ def test_start_shows_the_summary_then_opens_the_setup(folders_here, memory_keych
         assert no_key.status == 409 and "key" in (await no_key.json())["error"]
         credentials.save_api_key(FAKE_KEY)
         started = await h.post(f"/api/setups/{made['id']}/start", {})
-        assert started.status == 200 and (await started.json()) == {"opened": "Terminal"}
+        assert started.status == 200
+        assert (await started.json()) == {"opened": "Terminal", "in_background": False}
         assert h.launcher.openers["terminal"].opened == [made["id"]]  # type: ignore[attr-defined]
         assert SetupStore().last_used().id == made["id"]  # type: ignore[union-attr]
 
@@ -414,22 +426,67 @@ def test_a_folder_that_moved_needs_confirming_before_a_start(folders_here, tmp_p
     with_server(test)
 
 
-def test_codex_app_is_shown_but_not_available_yet(folders_here):
+def test_codex_app_says_how_to_get_it_when_it_isnt_installed(folders_here):
     credentials.save_api_key(FAKE_KEY)
 
     async def test(h: Harness) -> None:
         await h.sign_in()
         state = await (await h.client.get("/api/state")).json()
-        assert state["openers"] == [
-            {"key": "terminal", "label": "Terminal", "available": True},
-            {"key": "codex-app", "label": "Codex app", "available": False},
-        ]
+        terminal, app = state["openers"]
+        assert terminal == {"key": "terminal", "label": "Terminal", "available": True, "reason": None}
+        assert app["key"] == "codex-app" and app["available"] is False
+        assert "chatgpt.com/download" in app["reason"] and "Terminal" in app["reason"]
         body = setup_body(folders_here["thesis"], open_in="codex-app")
         made = await (await h.post("/api/setups", body)).json()
         answer = await h.post(f"/api/setups/{made['id']}/start", {})
-        assert answer.status == 409 and "Terminal" in (await answer.json())["error"]
+        assert answer.status == 409 and "isn't installed" in (await answer.json())["error"]
 
     with_server(test)
+
+
+def test_codex_app_start_asks_for_the_ssh_line_first(folders_here, ssh_home):
+    credentials.save_api_key(FAKE_KEY)
+    app = FakeAppOpener()
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        state = await (await h.client.get("/api/state")).json()
+        assert state["ssh_include"] is False
+        assert "Include ~/.ssh/um-codex/config" in state["include_explained"]
+        body = setup_body(folders_here["thesis"], open_in="codex-app")
+        made = await (await h.post("/api/setups", body)).json()
+        prepared = await (await h.post(f"/api/setups/{made['id']}/prepare")).json()
+        assert any(f"Remote · umcodex-{made['id']}" in line for line in prepared["app_notes"])
+        assert any("Browser tool" in line for line in prepared["app_notes"])
+        refused = await h.post(f"/api/setups/{made['id']}/start", {})
+        assert refused.status == 409 and (await refused.json())["field"] == "ssh_include"
+        assert app.opened == [] and not (ssh_home / ".ssh" / "config").exists()
+        allowed = await h.post("/api/codex-app/allow")
+        assert (await allowed.json()) == {"result": "created"}
+        assert (ssh_home / ".ssh" / "config").read_text() == "Include ~/.ssh/um-codex/config\n"
+        started = await h.post(f"/api/setups/{made['id']}/start", {})
+        assert (await started.json()) == {"opened": "Codex app", "in_background": True}
+        assert app.opened == [made["id"]]
+        state = await (await h.client.get("/api/state")).json()
+        assert state["ssh_include"] is True
+
+    with_server(test, openers={"terminal": FakeOpener(), "codex-app": app})
+
+
+def test_a_running_launch_in_the_app_shows_its_state(folders_here):
+    data = data_dir()
+    folder = launches_dir(data) / "0123abcd"
+    folder.mkdir(parents=True)
+    setup = Setup(id="thesis-a1", name="Thesis", working=str(folders_here["thesis"]), open_in="codex-app")
+    app = {"alias": "umcodex-thesis-a1", "connected": False, "first_time": True, "steps": ["x"]}
+    write_launch_info(folder, setup, app=app)
+    lock = LaunchLock(folder / "lock")
+    assert lock.acquire()
+    try:
+        (running,) = launcher_for_tests().running()
+    finally:
+        lock.release()
+    assert running["app"] == app
 
 
 # --- Running launches -------------------------------------------------------------
@@ -459,6 +516,7 @@ def test_running_launches_are_found_by_their_lock_and_stopped_by_label(folders_h
                 "setup_name": "thesis",
                 "started_at": state["running"][0]["started_at"],
                 "since": "14:05",
+                "app": None,
             }
         ]
         assert (await h.post("/api/launches/deadbeef/stop")).status == 404
@@ -751,11 +809,41 @@ def test_an_odd_setup_id_isnt_opened(tmp_path):
     assert ran == [] and list(tmp_path.iterdir()) == []
 
 
-def test_the_codex_app_opener_is_a_placeholder():
-    app = opening.CodexAppOpener()
-    assert not app.available()
+def test_the_codex_app_opener_starts_the_launch_in_the_background(tmp_path):
+    started = []
+
+    def popen(command, **options):
+        started.append((command, options))
+
+    app = opening.CodexAppOpener(
+        program=["/py", "-m", "umcodex"], platform="darwin", popen=popen,
+        find=lambda: Path("/Applications/ChatGPT.app"), folder=tmp_path,
+    )  # fmt: skip
+    assert app.available() and app.reason() is None
+    app.open("thesis-a1b2c3")
+    command, options = started[0]
+    assert command == ["/py", "-m", "umcodex", "launch", "--setup", "thesis-a1b2c3", "--open", "app"]
+    assert options["start_new_session"] is True and options["stdin"] == subprocess.DEVNULL
+    assert (tmp_path / "app-launch.log").exists()
     with pytest.raises(opening.OpenFailed):
-        app.open("x")
+        app.open("../odd")
+
+
+def test_the_codex_app_opener_says_why_it_cant(tmp_path):
+    missing = opening.CodexAppOpener(platform="darwin", find=lambda: None, folder=tmp_path)
+    assert not missing.available() and "chatgpt.com/download" in (missing.reason() or "")
+    with pytest.raises(opening.OpenFailed):
+        missing.open("thesis")
+    windows = opening.CodexAppOpener(platform="win32", find=lambda: Path("C:/x"), folder=tmp_path)
+    assert "Mac only" in (windows.reason() or "")
+
+
+def test_the_codex_app_is_looked_for_at_most_once_a_minute():
+    looks = []
+    app = opening.CodexAppOpener(platform="darwin", find=lambda: looks.append(1) or None)
+    for _ in range(5):
+        app.reason()
+    assert len(looks) == 1
 
 
 # --- launch --setup ---------------------------------------------------------------
@@ -795,7 +883,9 @@ def test_the_cli_takes_launch_setup_and_ui(monkeypatch):
     seen = {}
     monkeypatch.setattr(cli, "_launch", lambda args, **kw: seen.update(kw, args=args) or 0)
     assert cli.main(["launch", "--setup", "x y"]) == 0
-    assert seen == {"from_app": False, "setup_name": "x y", "args": []}
+    assert seen == {"from_app": False, "setup_name": "x y", "args": [], "in_app": False}
+    assert cli.main(["launch", "--setup", "x y", "--open", "app"]) == 0
+    assert seen["in_app"] is True
     monkeypatch.setattr(server, "detach", lambda open_browser: 7)
     monkeypatch.setattr(server, "main", lambda open_browser: 8 if open_browser else 9)
     assert cli.main(["ui", "--detach"]) == 7

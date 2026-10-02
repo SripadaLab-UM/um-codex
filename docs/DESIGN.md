@@ -8,9 +8,10 @@ Status: v0 design, 2026-10-01. Source of most of the machinery:
 
 Full-power OpenAI Codex, on U-M GPT Toolkit, running inside a Docker
 container on a Mac or Windows computer. There's no web app and no knowledge
-base: **Codex's own terminal interface is the front end**. At each launch the
+base: **Codex's own terminal interface is the front end**, or, on a Mac,
+Codex's desktop app working in the container (M6). At each launch the
 person decides what the container can see and do, then Codex opens in their
-terminal.
+terminal (or the app).
 
 It follows ITS's "Codex Setup" articles for the model settings (the
 `toolkit` provider, `https://api.toolkit.umgpt.umich.edu/v1`,
@@ -46,7 +47,8 @@ It follows ITS's "Codex Setup" articles for the model settings (the
 2. **Launch:** the app (or its Desktop or Start menu shortcut) opens the
    launcher window in the browser (`um-codex ui`, M5 below): saved setups
    as cards, a form for a new one, the summary, then Start opens a terminal
-   with Codex in it. Or the person types `um-codex` in any terminal, which
+   with Codex in it (or, for a setup that opens in the Codex app, UM-Codex's
+   copy of the app: M6). Or the person types `um-codex` in any terminal, which
    asks the questions below in the terminal.
    1. Docker check. If Docker Desktop is closed, it's opened and waited for.
       If Windows refuses its VM (the logon right), it offers DataLab's fix:
@@ -98,6 +100,15 @@ It follows ITS's "Codex Setup" articles for the model settings (the
    - `um-codex launch --setup <id or name>`: what the launcher window runs
      in the terminal it opens: no questions; 1 when the setup isn't there,
      or a folder is refused or now leads somewhere else.
+   - `um-codex launch [--setup <id or name>] --open app|terminal`: where
+     Codex opens (default: this terminal). `--open app` (M6, Mac only) runs
+     the launch here, holding the relay, while the Codex desktop app works
+     in the sandbox; the launcher window runs it in the background with no
+     window. 1 when the app isn't installed, the ssh line isn't allowed (it
+     asks in a terminal), or the setup already runs in the app.
+   - `um-codex ssh-proxy <setup> [--docker <path>] [--data-dir <path>]`:
+     hidden, for ssh's ProxyCommand only (M6). Nothing on stdout but ssh's
+     own bytes; 1 with a plain line on stderr when the setup isn't running.
    - `um-codex launch --from-app`: what the app and the shortcuts ran before
      M5 (kept working for them), so the folder the terminal opened in isn't
      offered as the working folder (see the Setup step above).
@@ -131,7 +142,11 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      label only, UM-Codex's containers and networks (and, with
      `--delete-data`, each setup's Codex home volume), the key, the images
      (asked first; the gateway's nginx only if no container uses it) and,
-     with `--delete-data`, the data folder's contents. It never removes the
+     with `--delete-data`, the data folder's contents. It also takes the
+     Codex app's ssh entries out (M6): the `Include ~/.ssh/um-codex/config`
+     line at the top of `~/.ssh/config` (and its backup, if the file is now
+     the same as it; a file UM-Codex made for that one line goes whole) and
+     `~/.ssh/um-codex`. It never removes the
      program files (`<data folder>/app`, which the installers own and their
      uninstall scripts remove afterwards). From DataLab's `setup.uninstall`,
      with the #36 fixes. `--yes` asks nothing: images go, and data stays
@@ -407,6 +422,8 @@ um-codex/
     relay.py                (from DataLab relay/__init__ + recovery, policy trimmed)
     containers.py           docker commands, labels, cleanup (from DataLab containers.py)
     codex_config.py         Codex's enforced settings and model catalog (from DataLab's config.toml)
+    codex_app.py            "Open in: Codex app" (M6): ssh files, ssh-proxy, the container's ssh side,
+                            the app copy, the launch held while the app uses it
     credentials.py          (from DataLab)
     secret_prompt.py        (from DataLab)
     docker_path.py          (from DataLab)
@@ -423,7 +440,8 @@ um-codex/
     gateway.conf            (from DataLab, /mcp removed)
     images.json             pinned image digests (stamped by the release)
   images/agent/             Dockerfile, AGENTS.md (from DataLab's image: Codex, Node, Python, R; DataLab skills removed; build tools added),
-                            smoke.sh, browser-check.js (the browser tool's MCP check)
+                            smoke.sh, browser-check.js (the browser tool's MCP check),
+                            sshd_config, profile.sh, umcodex-token (the Codex app's ssh entry, M6)
   installer/macos/          install.sh, uninstall.sh (from DataLab, trimmed)
   installer/windows/        install.ps1, uninstall.ps1 (from DataLab, trimmed)
   branding/                 build.py and the mark (from DataLab's "1b": Block M, spark, "codex" under it)
@@ -753,8 +771,7 @@ modes, rigor, and the frontend.
        (`folders.py`'s own reasons); Internet; Browser tool (only with the
        internet on) and "Approve each browser action"; "Ask me before
        commands"; the model (the Toolkit's list, default `gpt-5.6-terra`);
-       "Open in": Terminal, or Codex app (shown, disabled, "coming soon":
-       branch `spike-codex-app` is testing it);
+       "Open in": Terminal, or Codex app (M6);
      - before a start, the terminal's own summary (`setups.summary`) with
        Start and Back. If a saved folder now resolves somewhere else, the
        page shows both places and Start needs a tick in "Use them where they
@@ -784,7 +801,7 @@ modes, rigor, and the frontend.
        same version, and carries the development variables (`UMCODEX_*`) the
        server was started with, and keyring's `PYTHON_KEYRING_BACKEND` (the
        launch must read the key from the store the page checked).
-     - Codex app: a stub until that branch lands.
+     - Codex app: see M6.
    - **Running launches** are the launch folders whose lock is held. Each
      launch writes `launch.json` there (setup id and name, start time).
      Stop removes that launch's containers and networks by label (instance
@@ -871,7 +888,309 @@ modes, rigor, and the frontend.
    - Not checked: Windows (the shortcut, the hidden console, Windows
      Terminal and PowerShell windows, the picker), and the picker itself on
      a Mac (it needs a person); the real Mac installer's app.
-7. **Acceptance, on a fresh Mac and a fresh Windows machine:**
+7. **M6, "Open in: Codex app" (asked for on 2026-10-01, after the spike;
+   built on branch `m6-codex-app`).** Codex's desktop app (OpenAI's
+   ChatGPT desktop app, `ChatGPT.app`, bundle id `com.openai.codex`) as the
+   front end of a launch, with every file, command and model call inside
+   the container. From the spike (`docs/spikes/2026-10-01-codex-desktop-app.md`)
+   and its hands-on results (`-test-results.md`); the test build on branch
+   `spike-codex-app` (21db539) was ported, not merged. **Mac only for now**
+   (see Windows below). `codex_app.py`.
+   - **The route:** the app's SSH "Connections". Each setup is one stable
+     ssh host, `umcodex-<setup id>` (the app keeps its switch, projects and
+     chats by that name), reached through `docker exec`, so nothing listens
+     on a port and it works with the internet off.
+   - **The image** (`images/agent`): `openssh-server` (with `sftp-server`;
+     the app uses sftp for files), `/run/sshd`, no host keys (each container
+     makes its own), `agent`'s password field `*` (sshd without PAM refuses
+     a locked account even for a key) and its login shell bash (the app runs
+     `$SHELL -l -i -c`). `/etc/um-codex/sshd_config`: key-only, `AllowUsers
+     agent`, no root, no passwords or keyboard-interactive, no agent or X11
+     forwarding, `AllowTcpForwarding local` with `PermitOpen` only to the
+     container's own localhost (the app's previews of the container's
+     ports), no tunnels or remote forwards, `internal-sftp`, and `SetEnv`
+     with the image's variables. `/etc/profile.d/um-codex.sh` exports
+     `CODEX_HOME=/codex-home` and the PATH for login shells (without it the
+     app-server would use `~/.codex`). `/usr/local/bin/umcodex-token` prints
+     the launch token file. `smoke.sh` checks `sshd -t`, the login shell's
+     `CODEX_HOME` and `codex`, and the helper.
+   - **This computer's ssh files:**
+     - `~/.ssh/um-codex/` (0700): a key pair per setup
+       (`<setup>_ed25519`, 0600, kept between launches) and `config` (0600),
+       rewritten whole (through a temporary file and a rename) at each
+       launch in the app: one `Host` per **saved** setup that has a key here
+       (a key that belongs to no saved setup, such as the spike's
+       `app-test`, is removed then), with `User agent`, its `IdentityFile`,
+       `IdentitiesOnly`, `IdentityAgent none`, `ForwardAgent no`,
+       `ForwardX11 no`, `ForwardX11Trusted no`, `Tunnel no`, `ControlMaster
+       no`, `ControlPath none`, `GSSAPIAuthentication no`, `UpdateHostKeys
+       no`, no password or keyboard-interactive, `StrictHostKeyChecking no`
+       and `UserKnownHostsFile /dev/null` (the transport is `docker exec` on
+       this computer, and every container has a new host key), and
+       `ProxyCommand <um-codex> ssh-proxy <setup> --docker <docker>`, with
+       absolute paths (the app checks the command in its own short PATH): an
+       installed copy's launcher (`<app>/bin/um-codex`, which follows
+       updates), else this Python (`-m umcodex`); `--data-dir` only when
+       `UMCODEX_DATA_DIR` is set. `%` is doubled (ssh's tokens); on a Mac
+       each word is then `shlex.quote`d, since ssh runs the command with the
+       person's shell (checked with real ssh under sh, bash and zsh: paths
+       with spaces, `$`, backticks, quotes, `;`, `&`, `|`, `%` and globs
+       arrive unchanged); on Windows, where OpenSSH splits it as a Windows
+       command line, a word with a space is double-quoted. The app adds only
+       `BatchMode`, timeouts and keep-alives itself.
+     - Because the Include is the first line of `~/.ssh/config`, these
+       values win (ssh keeps the first value it reads). Options set only in
+       the person's own `Host *` (a `LocalForward`, `DynamicForward` and the
+       like) still apply to these hosts; the container's sshd allows only
+       local forwards to its own localhost, so they reach nothing on the
+       person's side.
+     - The person's own ChatGPT app reads the same `~/.ssh/config`, so it
+       lists the `umcodex-*` hosts too (switched off). The README says so;
+       they work there only while the setup runs, and the work is still in
+       the sandbox.
+     - **The one line in the person's own file:** `Include
+       ~/.ssh/um-codex/config` at the very top of `~/.ssh/config` (the app
+       follows only top-level Includes; an Include after a `Host` belongs to
+       it). Added **only with consent**: the launcher shows the explanation
+       (`codex_app.INCLUDE_EXPLAINED`) with Allow the first time an app setup
+       is started; the terminal asks the same with "[y/N]"; a launch with
+       no terminal and no line stops with a plain message. The file is read
+       as bytes (its line endings, CRLF too, are kept) and backed up first
+       (`~/.ssh/config.um-codex-backup`; a backup that no longer matches the
+       file is refreshed), then replaced atomically (a temporary file renamed
+       onto the real path, so a `~/.ssh/config` that's a link stays one), with
+       its permissions kept, or created 0600 if there was none. A file that
+       isn't UTF-8 text is left alone, with a plain message.
+       `um-codex uninstall` removes the line, the backup when the file is
+       then the same as it, and `~/.ssh/um-codex`. Deleting a setup removes
+       its key and Host.
+   - **The container:** a launch as any other (relay, gateway, token,
+     folders, internet on or off), labelled `umcodex.ssh=<setup>`. Then, as
+     root through `docker exec`: a host key, the setup's public key in
+     `agent`'s `authorized_keys`, and the launch token in
+     `/run/um-codex/token` (0640 root:agent, written from the container's
+     own environment, never a command line). One app launch per setup at a
+     time (the proxy must find exactly one sandbox).
+   - **`um-codex ssh-proxy <setup>`** (hidden): finds the running agent by
+     label (setup, data folder, `umcodex.app`) and becomes `docker exec -i
+     -u root <agent> /usr/sbin/sshd -i -f /etc/um-codex/sshd_config`: one
+     sshd per connection, on ssh's stdin and stdout. With nothing running it
+     says so on stderr and exits 1.
+   - **Codex's settings in the container** go in the same `/etc/codex`
+     layers as every launch (#12):
+     - every launch, terminal too: `requirements.toml` has
+       `default_permissions = ":danger-full-access"` with
+       `[allowed_permission_profiles]` allowing only `:danger-full-access`
+       (below). Checked in the terminal: Codex starts ("permissions: YOLO
+       mode") and `/permissions` offers only "Full Access"; the two other
+       choices are shown disabled.
+     - an app launch only: the provider's credential is
+       `[model_providers.toolkit.auth] command =
+       "/usr/local/bin/umcodex-token"` instead of `env_key` (ssh sessions
+       don't get `docker run -e`; Codex 0.157.1 refuses both together).
+       The app starts each chat with a permission profile of its choosing
+       (`thread/start` `permissions`); a disallowed one falls back to the
+       requirements' default (core config's `resolve_default_permissions`),
+       where a disallowed legacy `sandbox` falls back to read-only. In the
+       container both read-only and `:workspace` need a Linux sandbox it
+       can't make: checked live, `permissions = ":workspace"` without these
+       lines gave `readOnly` and every command failed with bwrap's "No
+       permissions to create a new namespace"; with them, no profile,
+       `:workspace` and `:read-only` all ran with `dangerFullAccess`.
+       `configRequirements/read` returns both, which the app reads to decide
+       what it offers.
+     - `managed_config.toml`: `forced_login_method = "api"`, so no ChatGPT
+       sign-in is offered inside the container (it would put ChatGPT tokens
+       in the setup's volume).
+   - **UM-Codex's copy of the app:** a second, separate copy, as the app's
+     own "Codex Demo" launcher opens one: `open -n --env
+     CODEX_HOME=<data>/codex-app/codex-home --env
+     CODEX_ELECTRON_USER_DATA_PATH=<data>/codex-app/user-data <app> --args
+     --user-data-dir=<data>/codex-app/user-data [<link>]`. The person's own
+     copy and `~/.codex` are never touched. The app is found in
+     `/Applications` or `~/Applications` (`ChatGPT.app`, or `Codex.app`), by
+     its bundle id, else through Spotlight (`mdfind
+     kMDItemCFBundleIdentifier`). If the copy is already running (a main
+     process with its `--user-data-dir` in its arguments), no second one is
+     started: it's brought forward (AppKit's `activateWithOptions` through
+     `osascript -l JavaScript`, which needs no permission to control other
+     apps); if macOS declines, the launcher says to switch to it.
+     - **Local chats are blocked** (the maintainer's decision, 2026-10-01).
+       A chat that isn't Remote · `umcodex-…` would run on the Mac, outside
+       the sandbox. The copy's `config.toml` gets UM-Codex's provider at
+       each launch: a custom one without `requires_openai_auth` (so the copy
+       opens with no sign-in, as in the test), `forced_login_method = "api"`,
+       analytics, feedback and update checks off, with no credential, whose
+       base URL is `http://127.0.0.1:<port>/um-codex-local/<alias>/v1` on a
+       small **local-chats responder** (`relay.local_chats_app`, run by
+       `codex_app.LocalChatsServer`), never the relay: it has no key and
+       calls nothing. It answers `POST …/responses` with a normal streamed
+       assistant message: "This UM-Codex window only works in Remote chats.
+       Start a chat on Remote · `<alias>` (its project in the sidebar). Local
+       chats would run on your Mac, outside the sandbox." (naming the setups
+       running in the app now), or, with none running, that no setup is
+       running and to start one. Anything else there gets 404.
+       - **The port is fixed per data folder** (`codex-app/local-chats-port`,
+         chosen once): the copy keeps the config it started with while it
+         runs, so a launch's own port (the first version used the relay's)
+         was gone after Stop and Start, and an old local chat showed
+         "Reconnecting… waiting for network" (the GUI test's step 12). Every
+         app launch and the launcher window serve it: whichever binds it
+         first; the others see it's there (`/um-codex-local/_whoami`, by
+         data folder) and take it over when that process ends (a launch
+         checks every 2 s, the window every 10 s). If another program holds
+         the port, a new one is chosen and kept (the copy follows after its
+         next restart). With no launch and no launcher window running,
+         nothing answers, and local chats wait for the network.
+       - A failing `auth.command` was tried instead (a helper printing the
+         reminder and exiting 1): Codex 0.159.2 retries it for ever,
+         showing only "Reconnecting... waiting for network".
+       - Checked: the app's bundled Codex (0.159.2) with the copy's config
+         showed the message during a launch, after Stop (the launcher window
+         answering), and after Start again, all on the same port; the
+         responder never reaches the Toolkit (it has no client or key).
+         `codex_app.LOCAL_CHATS = True` switches back to the test's behaviour
+         (the Toolkit through the relay with the launch token).
+     - The app's other settings in that `config.toml` are kept. If it
+       doesn't parse, it's moved aside as `config.toml.bad-<time>` (and
+       logged) before UM-Codex's settings are written.
+     - Not installed: "Codex app" in the form is disabled with "The Codex
+       app isn't installed. It's part of OpenAI's ChatGPT desktop app: get
+       it from https://chatgpt.com/download, then come back. Terminal works
+       in the meantime."
+   - **The copy is set up before it opens** (asked for after the GUI test:
+     adding the connection and the project by hand was too hard). The app
+     (26.928) keeps its state in `$CODEX_HOME/.codex-global-state.json`
+     (and `.bak`, read when the first doesn't parse): a plain JSON object,
+     loaded once at start and rewritten by the app as things change, each
+     key checked against a schema (a value that fails is dropped). So, only
+     while UM-Codex's copy isn't running, a launch merges in (`seeded_state`,
+     with the shapes the app itself wrote in the GUI test):
+     - the host: `codex-managed-remote-connections` (`hostId`
+       `remote-ssh-discovered:<alias>`, `source` `discovered`),
+       `remote-connection-auto-connect-by-host-id` true, its analytics id;
+     - its project: `remote-projects` (`/work`, named after the setup, a
+       stable id from the alias), first in `project-order` and the sidebar,
+       and `selected-project`, so the copy opens on it;
+     - pop-ups: `electron:onboarding-projectless-completed` (the welcome
+       flow's route goes to the app when it's true; the person's role isn't
+       answered for them), `electron:onboarding-hide-first-new-thread-promos`,
+       and `seen-model-upgrade-list` with the models the app's bundled Codex
+       would announce. The copy's own side also gets a model catalog
+       (`model_catalog_json`: the bundled Codex's list, `debug models
+       --bundled`, with no `availability_nux` or `upgrade`), so no model
+       qualifies for an announcement; the remote side already has
+       UM-Codex's catalog. Nothing switches the model.
+
+     The rest of the file is kept; it's written whole (temporary file and
+     rename), with its backup. If a key UM-Codex touches has a shape it
+     doesn't know (an app update), nothing is changed and the launcher shows
+     the steps; a version other than the tested ones (`TESTED_APP_VERSIONS`,
+     26.928.x) is tried and logged. **A known fragility:** these are the
+     app's internals, not an interface.
+
+     Checked live with a fresh data folder (app 26.928.40906): Start, and
+     the copy opened on the setup's project with Remote · `<alias>`
+     connected, "Full access" and the setup's model, with no onboarding and
+     no model announcement, and the launch saw the app-server start (about
+     19 s, no clicks). After Stop and Start (the copy still open) it
+     reconnected by itself in about 9 s, and the app had kept the seeded
+     host and project.
+   - **When it can't be set up** (the copy was already open, or the file's
+     shape is unknown), the copy opens on the documented
+     `codex://settings/connections/ssh/add?name=<alias>` link (if the host
+     never connected) and the launcher shows the steps the GUI test found:
+     switch to UM-Codex's Codex window; Settings → Connections → Add, choose
+     `<alias>`, Add (it's switched on and connects); Home → Choose project →
+     Create project, named after the setup, "Add a folder on this computer"
+     → `<alias>` → Add, `/work`, Return, Create project; start a chat there
+     and check it shows Remote · `<alias>`; and, for pop-ups: choose Skip,
+     and Continue with current model.
+   - **Connected:** the launch watches the container every 2 s for the
+     app's `codex app-server --listen` (`pgrep -f`) and then marks the launch
+     "Connected ✓" (`launch.json`) and the setup as connected once
+     (`<data>/codex-app/hosts.json`); the launcher's banner follows ("is
+     running…", then "working in the sandbox"). Later launches pass no link
+     and show "Waiting for the Codex app to reconnect…" with "It doesn't
+     connect: show the steps".
+   - **The launcher window:** "Open in: Codex app" is enabled when the app
+     is installed. Start for an app setup asks for the ssh line once (above),
+     then starts `um-codex launch --setup <id> --open app` in the background
+     (its own session, no window; output to `<data>/ui/app-launch.log`, its
+     steps to `um-codex.log`), which holds the relay until it's stopped. The
+     running list and the card say "Running in the Codex app"; below it the
+     guide or "Connected ✓", and the plain lines: "Chats must show Remote ·
+     `<alias>` to run in the sandbox. Other (local) chats in that Codex
+     window would run on this computer, outside the sandbox, so they're
+     blocked: they only answer with that reminder.", "The app may show the
+     chat's permissions as Custom (greyed): UM-Codex fixes them to full
+     access inside the sandbox, so there's nothing to choose there." (the GUI
+     test saw Custom; a seeded copy showed "Full access") and "The Codex
+     app's own browser runs on this computer, not in the sandbox; use the
+     Browser tool for browsing inside it." (also on the summary before
+     Start). The app marks a local chat only by the absence of the Remote ·
+     `<alias>` strip and globe. Stop removes the containers (the launch then
+     ends and cleans up); its question adds that the app will say it can't
+     reconnect, which is expected.
+   - **Lifetime:** the launch runs until Stop (or Ctrl-C when it was started
+     in a terminal). If `um-codex` is killed, the watchdog ends the container
+     as for any launch. The app's remote app-server lives in the container
+     and goes with it.
+   - **Windows:** the ssh side is written to work there (Windows OpenSSH
+     reads `%USERPROFILE%\.ssh\config` and runs a double-quoted ProxyCommand
+     itself; `ssh-proxy` runs `docker exec` as a child, since Windows has no
+     exec), but it isn't verified, and opening a second copy of the Store
+     app with its own `CODEX_HOME` and profile isn't known to work (the
+     spike's open question; packaged apps don't take a plain `open -n
+     --env`). So "Codex app" is disabled on Windows ("works with UM-Codex on
+     a Mac only, for now"), and `--open app` refuses there.
+   - **Live check** (this Mac, 2026-10-01; `um-codex-agent:m6` built from
+     this branch, the launcher's API with a scratch data folder, the real
+     key through the relay and the Include line already present, so the
+     person's own app, `~/.codex` and key were never touched):
+     - Start through the API ran the launch in the background and opened
+       UM-Codex's copy on the add link (its process carried the scratch
+       `--user-data-dir`); the person's own copy kept running.
+     - `ssh umcodex-<id>` through the ProxyCommand: `agent`,
+       `CODEX_HOME=/codex-home`, codex-cli 0.157.1, `/work` the scratch
+       folder, the token file 0640 root:agent; with the internet off,
+       `curl https://example.com` failed to resolve.
+     - The app's own commands replayed exactly (its login-shell wrapper,
+       `command -v codex`, `codex --version`, the `nohup codex -c
+       features.code_mode_host=true app-server --listen unix://` start, then
+       `ssh -T … exec codex app-server proxy` with a WebSocket handshake):
+       `initialize` gave `codexHome` `/codex-home`; `account/read`
+       `requiresOpenaiAuth: false`; `config/read` for `/work`
+       `danger-full-access`, `never`, `toolkit`, `forced_login_method
+       "api"`; a turn ran `pwd`/`whoami` (`/work`, `agent`) and wrote a file
+       that appeared on the Mac, through the Toolkit.
+     - The launch noticed the app-server and showed "Connected ✓" on the
+       page; Stop ended the launch, removed the containers and the copy's
+       token file, and ssh then said the setup isn't running.
+     - `codex exec` over ssh wrote a file through the Toolkit.
+     - A second launch (internet on, browser tool on) passed no link, found
+       the copy running and brought it to the front; `curl` gave HTTP 200
+       and the browser tool's MCP server was in the managed settings.
+     - Permissions: see above (`:workspace` → read-only → bwrap failure
+       without the requirements lines; all full access with them).
+     - Deleting the setup removed its key and Host.
+     - After merging #12's review fixes (browser tools pinned and direct), a
+       launch held the same way (internet and browser tool on, the app not
+       opened) again ran a `:workspace` chat with full access and a turn
+       through the Toolkit.
+   - **GUI test** (the maintainer's computer-use agent, 2026-10-01, at
+     b32b68e, before the copy was set up automatically): no sign-in,
+     connecting, commands in `/work` as `agent`, hello.txt on the Mac, the
+     models, the internet, the browser tool's approval card, the local block,
+     Stop, and the restart reconnecting by itself (24–32 s) passed; step 12
+     (an old local chat after Stop and Start) failed, which the fixed port
+     fixes. The steps it found for the connection and project are the
+     fallback above.
+   - **Not checked** (steps in `docs/spikes/2026-10-01-m6-codex-app-gui-test.md`):
+     the local-chats message inside the app's window after a restart, a
+     second setup in the same copy, pop-ups after an app update, and
+     Windows.
+8. **Acceptance, on a fresh Mac and a fresh Windows machine:**
    1. install from the README in under 20 minutes;
    2. launch with internet off: Codex answers, `curl https://example.com`
       fails, and it can write in the working folder but not in a read-only
@@ -914,8 +1233,10 @@ modes, rigor, and the frontend.
     `request_user_input`, `view_image`, the multi-agent and goal tools,
     `web_search`, and the `mcp__browser` tools when the browser tool was on.
   - So in the terminal Codex inside the container they do nothing; the M2b
-    browser tool (Playwright's MCP server) is what gives it a browser. Not
-    checked: Codex's desktop app, and whether the Browser Use plugin could
+    browser tool (Playwright's MCP server) is what gives it a browser. In
+    the desktop app (M6), the in-app browser runs on the Mac, not in the
+    sandbox, and a remote chat couldn't drive it (the hands-on test). Not
+    checked: whether the Browser Use plugin could
     be installed in the terminal Codex (it would need a browser to drive,
     which the container has only through Playwright).
 - The browser tool's size: the headless shell instead of the full Chromium

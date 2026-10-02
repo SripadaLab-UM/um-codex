@@ -119,10 +119,22 @@ section.block + section.block { border-top: 1px solid var(--line); }
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   padding: 8px 0; border-bottom: 1px solid var(--line);
 }
-.running-row:last-child { border-bottom: 0; }
+.running-row:last-child, .running-row:has(+ .app-panel) { border-bottom: 0; }
 .running-row .name { font-family: var(--serif); font-size: 17px; font-weight: 600; }
 .running-row .since { color: var(--muted); }
 .running-row .grow { flex: 1; }
+/* A launch in the Codex app (M6) */
+.app-panel { padding: 4px 0 12px 20px; border-bottom: 1px solid var(--line); }
+.app-panel:last-child { border-bottom: 0; }
+.app-panel p { margin: 4px 0; max-width: 64ch; }
+.app-panel .strong, .app-notes-block .strong { font-weight: 600; }
+.app-panel .connected { color: var(--ok); font-weight: 600; }
+.app-panel .steps { margin: 6px 0 8px; padding-left: 22px; max-width: 64ch; }
+.app-panel .steps li { margin: 3px 0; }
+.app-notes { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 13.5px; max-width: 64ch; }
+.app-notes li { margin: 2px 0; }
+.app-notes-block { margin: 0 0 12px; }
+.radios .help { display: block; color: var(--muted); font-size: 13px; }
 .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
 
 /* Setups */

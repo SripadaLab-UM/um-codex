@@ -344,3 +344,66 @@ def test_the_upstream_override_is_only_a_local_stub(monkeypatch, value, allowed)
     else:
         with pytest.raises(relay_module.UpstreamRefused):
             relay_module.upstream_base_url("https://default/v1")
+
+
+# --- The Codex app copy's local chats (M6): answered here, never upstream ---------
+
+
+def _events(text: str) -> list[dict]:
+    return [json.loads(line[6:]) for line in text.splitlines() if line.startswith("data: ")]
+
+
+LOCAL_RESPONSES = "/um-codex-local/umcodex-thesis-a1/v1/responses"
+
+
+def run_local_chats(test, running=None) -> None:
+    async def main() -> None:
+        app = relay_module.local_chats_app("inst-1", running)
+        async with serve(app) as port, httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            await test(client)
+
+    asyncio.run(main())
+
+
+def test_local_chats_get_the_remote_reminder_with_no_model_call():
+    async def test(client: httpx.AsyncClient) -> None:
+        response = await client.post(LOCAL_RESPONSES, content=codex_request())
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        events = _events(response.text)
+        assert [e["type"] for e in events] == [
+            "response.created",
+            "response.output_item.added",
+            "response.output_text.delta",
+            "response.output_item.done",
+            "response.completed",
+        ]
+        text = events[3]["item"]["content"][0]["text"]
+        assert text == relay_module.local_chats_message(["umcodex-now-b2"])  # what runs now, not the path's
+        assert "Remote · umcodex-now-b2" in text and "outside the sandbox" in text
+        assert events[-1]["response"]["status"] == "completed"
+        for other in ("models", "chat/completions", "responses/x"):
+            refused = await client.post(f"/um-codex-local/umcodex-thesis-a1/v1/{other}")
+            assert refused.status_code == 404
+        assert (await client.post("/um-codex-local/x/v1/responses")).status_code == 404
+        assert (await client.post("/relay/v1/responses")).status_code == 404  # no relaying here at all
+        whoami = await client.get("/um-codex-local/_whoami")
+        assert whoami.json() == {"app": "um-codex-local-chats", "instance": "inst-1"}
+
+    run_local_chats(test, running=lambda: ["umcodex-now-b2"])
+
+
+def test_with_nothing_running_the_reminder_says_so():
+    async def test(client: httpx.AsyncClient) -> None:
+        response = await client.post(LOCAL_RESPONSES, content=codex_request())
+        assert "no UM-Codex setup is running" in _events(response.text)[3]["item"]["content"][0]["text"]
+
+    run_local_chats(test, running=lambda: [])
+
+
+def test_the_relay_itself_doesnt_answer_local_chats():
+    async def test(client: httpx.AsyncClient, upstream: Upstream) -> None:
+        response = await client.post(LOCAL_RESPONSES, content=codex_request())
+        assert response.status_code == 401
+
+    assert run_with_relay(test).seen == []

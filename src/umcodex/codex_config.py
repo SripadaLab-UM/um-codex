@@ -52,6 +52,12 @@ from typing import Literal
 TOKEN_ENV = "UMCODEX_TOKEN"
 GATEWAY_BASE_URL = "http://gateway/v1"
 
+# "Open in: Codex app" (M6): the Codex app runs Codex over ssh, and ssh
+# sessions don't get the container's UMCODEX_TOKEN, so Codex reads the launch
+# token with this command (images/agent/umcodex-token), which prints the file
+# the launch writes at start (launch.py, codex_app.PREPARE).
+TOKEN_COMMAND = "/usr/local/bin/umcodex-token"
+
 # Where the files go in the container: Codex's own fixed paths on Linux.
 CODEX_ETC = "/etc/codex"
 REQUIREMENTS_FILE = "requirements.toml"
@@ -112,10 +118,16 @@ def render(
     internet: bool,
     browser: bool = False,
     browser_asks: bool = True,
+    app: bool = False,
 ) -> str:
     """managed_config.toml for one launch: the settings that win over the
     person's own config.toml. The browser tool needs the internet: with the
-    internet off it's never added."""
+    internet off it's never added.
+
+    `app` (opened in the Codex app, M6): `forced_login_method = "api"`, so
+    neither Codex nor the app offers a ChatGPT sign-in inside the container
+    (it would put ChatGPT tokens in the setup's volume). ForcedLoginMethod is
+    "chatgpt" or "api" (rust-v0.157.1)."""
     if approvals not in ("never", "on-request"):
         raise ValueError(f"unknown approval policy {approvals!r}")
     browser = browser and internet
@@ -132,6 +144,7 @@ def render(
         'sandbox_mode = "danger-full-access"',
         f"approval_policy = {approval_policy}",
         f'web_search = "{"live" if internet else "disabled"}"',
+        *(['forced_login_method = "api"'] if app else []),
         "",
         "[analytics]",
         "enabled = false",
@@ -179,10 +192,16 @@ def render(
     return "\n".join(lines) + "\n"
 
 
-def render_requirements(*, internet: bool, catalog: bool = True) -> str:
+def render_requirements(*, internet: bool, catalog: bool = True, app: bool = False) -> str:
     """requirements.toml for one launch: what Codex enforces, whatever the
     person's config.toml, profiles or `-c` flags say. `catalog`: models.json
-    was written (see model_catalog)."""
+    was written (see model_catalog).
+
+    `app` (opened in the Codex app, M6): the provider gets the launch token
+    from TOKEN_COMMAND (`[model_providers.toolkit.auth]`) instead of the
+    UMCODEX_TOKEN variable, which ssh sessions don't have (Codex 0.157.1
+    refuses `auth` together with `env_key`: model-provider-info's validate).
+    For every launch, full access is the only permission profile (see below)."""
     lines = [
         "# Written by UM-Codex for one launch, and mounted read-only. Do not edit.",
         "# Codex enforces these over every other setting.",
@@ -205,13 +224,34 @@ def render_requirements(*, internet: bool, catalog: bool = True) -> str:
         "[model_providers.toolkit]",
         'name = "U-M GPT Toolkit (through UM-Codex)"',
         f'base_url = "{GATEWAY_BASE_URL}"',
-        f'env_key = "{TOKEN_ENV}"',
+        *([] if app else [f'env_key = "{TOKEN_ENV}"']),
         'wire_api = "responses"',
         # The relay retries failed requests itself, honouring the server's
         # wait (relay.py); one more round from here at most.
         "request_max_retries = 1",
         "stream_max_retries = 2",
         "stream_idle_timeout_ms = 300000",
+    ]
+    if app:
+        lines += ["", "[model_providers.toolkit.auth]", f"command = {json.dumps(TOKEN_COMMAND)}"]
+    # Every launch: full access is the only permission profile. Codex's own
+    # sandbox (read-only, ":workspace") can't run in the container (bwrap: "No
+    # permissions to create a new namespace"), and a profile asked for that
+    # isn't allowed falls back to the default here (core config's
+    # resolve_default_permissions), where a disallowed sandbox mode would
+    # fall back to read-only. The Codex app starts each chat with a profile of
+    # its choosing (`thread/start` `permissions`, ":workspace" by default),
+    # and reads these to offer only full access; the TUI's /permissions too.
+    # Checked live (M6) with rust-v0.157.1: none, ":workspace" and
+    # ":read-only" all ran with full access.
+    at = lines.index("[feedback]") - 1  # before the blank line that ends the top-level keys
+    lines.insert(at, 'default_permissions = ":danger-full-access"')
+    lines += [
+        "",
+        "[allowed_permission_profiles]",
+        '":danger-full-access" = true',
+        '":read-only" = false',
+        '":workspace" = false',
     ]
     return "\n".join(lines) + "\n"
 

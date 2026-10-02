@@ -127,6 +127,10 @@ class LaunchSpec:
     # The agent image's own command (`Config.Cmd`), run under the watchdog
     # (see WATCHDOG). Empty: the image's command runs as it is, unwatched.
     image_cmd: tuple[str, ...] = ()
+    # More labels on the containers and networks: a launch opened in the
+    # Codex app has `umcodex.ssh=<setup>`, which `um-codex ssh-proxy` finds
+    # its agent by (codex_app.py).
+    extra_labels: tuple[tuple[str, str], ...] = ()
 
     @property
     def prefix(self) -> str:
@@ -166,6 +170,7 @@ class LaunchSpec:
             "--label", f"{APP_LABEL}={APP}",
             "--label", f"{INSTANCE_LABEL}={self.instance}",
             "--label", f"{LAUNCH_LABEL}={self.launch_id}",
+            *(arg for name, value in self.extra_labels for arg in ("--label", f"{name}={value}")),
         ]  # fmt: skip
 
     def network_commands(self) -> list[list[str]]:
@@ -301,11 +306,13 @@ class Docker:
     def __init__(self, run: Runner = subprocess.run) -> None:
         self._run = run
 
-    def status(self, *args: str, timeout: float = 120) -> tuple[int, str, str]:
+    def status(self, *args: str, timeout: float = 120, input: str | None = None) -> tuple[int, str, str]:
+        """`input`: text for the command's stdin (none: no stdin is passed)."""
+        extra = {} if input is None else {"input": input}
         try:
             done = self._run(
                 ["docker", *args], capture_output=True, text=True, timeout=timeout,
-                encoding="utf-8", errors="replace",
+                encoding="utf-8", errors="replace", **extra,
             )  # fmt: skip
         except FileNotFoundError as error:
             raise DockerError("Docker's `docker` command isn't installed or isn't on PATH.") from error

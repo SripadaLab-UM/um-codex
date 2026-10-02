@@ -7,8 +7,8 @@ the code and docs/DESIGN.md at the commit you record from**, and mark
 anything still in "Not built yet" as left out.
 
 Last updated: 2026-10-01 (M1 launcher, M2 installers, M2b browser tool, M3
-releases and updates, and M5 launcher window built; no release published
-yet, so record installs once one is).
+releases and updates, M5 launcher window and M6 "Open in: Codex app" (Mac)
+built; no release published yet, so record installs once one is).
 
 ## Who it's for
 
@@ -45,6 +45,29 @@ plain; no product pitch. These are separate from DataLab's users.
    the browser action, and a screenshot saved in the working folder when
    asked.
 
+7. **Opening a setup in the Codex app** (about 3 min, Mac only): for people
+   who prefer Codex's desktop app to a terminal. Show, in order:
+   - the ChatGPT desktop app installed (from chatgpt.com/download; Codex is
+     part of it), and the launcher's form with "Open in: Codex app" chosen
+     (before it's installed, the choice is greyed out with that link);
+   - Start: the summary, with "In the Codex app:" and its two lines; the
+     one-time question about the ssh line ("Let the Codex app find the
+     sandbox?", with the reason) and Allow;
+   - a second ChatGPT icon in the Dock: UM-Codex's own copy, which opens
+     with no sign-in (say: your own ChatGPT app isn't touched);
+   - the copy opening straight on a project named after the setup, with
+     "Remote · umcodex-<setup>" and a green dot under the composer: nothing
+     to set up (say: UM-Codex prepared it);
+   - the launcher turning to "Connected ✓";
+   - asking Codex to list the files and make one in the working folder, and
+     the file appearing in Finder; the diff and "View changes" in the app;
+   - optionally, a local (not Remote) chat answering with the reminder to
+     use a Remote chat;
+   - Stop in the launcher (its question says the app will show it can't
+     reconnect), and the app showing that;
+   - starting the setup again later: the app comes forward and reconnects by
+     itself.
+
 Later, when built: "On this computer" mode (M4).
 
 ## What to say (true now, in the code)
@@ -62,8 +85,7 @@ Later, when built: "On this computer" mode (M4).
   (off or on); with the internet on, the Browser tool and "Approve each
   browser action" (see below); "Ask me before commands" (off by default:
   Codex runs commands without asking); the model (default `gpt-5.6-terra`);
-  and "Open in": Terminal ("Codex app" is shown as coming soon: leave it out
-  of narration). Folders are chosen with the computer's own folder picker;
+  and "Open in": Terminal or Codex app (Mac; see below). Folders are chosen with the computer's own folder picker;
   a folder UM-Codex won't share is refused right there in plain words.
   Before Start it shows a summary in plain words, then opens Codex in a
   terminal window. Setups are kept as cards, with Start, Edit, Duplicate and
@@ -133,6 +155,27 @@ Later, when built: "On this computer" mode (M4).
   says when one is out. Updates don't touch
   your folders, setups or Codex history.
 
+- **The Codex app** (Mac only, for now). A setup can open in Codex's
+  desktop app instead of a terminal; the work still happens in the sealed
+  environment with the same folders, internet setting and key protection.
+  UM-Codex opens its own copy of the app, with its own settings, beside the
+  person's normal one; it needs no sign-in, and the person's own app isn't
+  changed. The app reaches the environment through ssh, so the first time
+  UM-Codex asks to add one line to the person's ssh settings (with a backup;
+  uninstalling takes it out). UM-Codex prepares its copy, so it opens on a
+  project named after the setup, already connected; the launcher says
+  "Connected" when the app is in. (Only if the copy was already open does the
+  launcher show a few steps instead.) Chats run in the
+  environment only when they show "Remote · umcodex-…". Other (local) chats
+  in that window would run on the person's computer, so UM-Codex blocks
+  them: they answer only "This UM-Codex window only works in Remote chats.
+  Start a chat on Remote · umcodex-… (its project in the sidebar). Local
+  chats would run on your Mac, outside the sandbox." The person's own ChatGPT app also lists
+  the `umcodex-*` hosts in its Connections (it reads the same ssh settings);
+  they can stay off there. The app's own browser is on the person's computer
+  too; the Browser tool is the one inside the environment. The setup runs
+  until Stop in the launcher.
+
 ## Careful wording
 
 - "Sealed environment" for the container, as in DataLab's videos; say
@@ -159,6 +202,7 @@ Later, when built: "On this computer" mode (M4).
 
 - "On this computer" mode, the person's own browser, computer control
   (M4; computer control depends on a spike).
+- The Codex app on Windows.
 - An install website; until then the README has the commands.
-- "Open in: Codex app" in the launcher window (shown, disabled, "coming
-  soon"): don't show it being chosen.
+- In the Codex app: that a later launch reconnects with no steps isn't
+  checked yet (DESIGN.md M6); say it only once it is.

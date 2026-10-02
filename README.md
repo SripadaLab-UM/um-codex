@@ -50,7 +50,8 @@ There you:
   with it on, the browser tool), whether Codex asks before commands, and the
   model. "Choose folder…" opens your computer's own folder picker;
 - press **Start** on a setup: the page shows what Codex will be able to see
-  and do, then opens a terminal window with Codex in it;
+  and do, then opens a terminal window with Codex in it (or the Codex app:
+  see below);
 - see what's **running** ("Running since 14:05") and **Stop** it;
 - see whether Docker is running, whether your key is saved ("Replace key…"),
   and whether a new version is out.
@@ -58,6 +59,54 @@ There you:
 The window closes by itself a while after you close its page; opening the
 app again brings it back. In a terminal, `um-codex ui` opens it too, and
 plain `um-codex` still asks the setup questions in the terminal instead.
+
+### Opening a setup in the Codex app (Mac)
+
+Instead of a terminal, a setup can open in **Codex's desktop app** (part of
+OpenAI's ChatGPT desktop app; get it from https://chatgpt.com/download). In
+the setup, choose **Open in: Codex app**. The work still happens in the
+sandbox, with the same folders, internet setting and key protection; the app
+is only the window you use. What to know:
+
+- UM-Codex opens **its own copy** of the app, with its own settings, beside
+  your normal one (a second ChatGPT icon in the Dock). Your own Codex/ChatGPT
+  app and its settings aren't touched, and the copy needs no sign-in.
+- The app reaches the sandbox through ssh. The first time, UM-Codex asks to
+  add one line at the top of your `~/.ssh/config`
+  (`Include ~/.ssh/um-codex/config`; your file is backed up first, and
+  uninstalling takes it out). Choose **Allow**, or use Terminal instead.
+  Settings in your own `Host *` entries (such as port forwards) still apply
+  to these hosts, as ssh does for every host.
+- **No set-up in the app:** UM-Codex prepares its copy before opening it,
+  so it opens on a project named after your setup, already connected to the
+  sandbox (Remote · `umcodex-<setup>`). Just start a chat there. The launcher
+  says "Connected ✓" once the app is in, and starting the setup again later
+  reconnects by itself.
+- If UM-Codex's copy was already open (or an app update changed how it keeps
+  its settings), the launcher shows the steps instead: in UM-Codex's Codex
+  window, Settings → Connections → **Add**, choose `umcodex-<setup>`, **Add**;
+  then Home → Choose project → **Create project**, named after the setup,
+  "Add a folder on this computer" → `umcodex-<setup>` → **Add**, type
+  `/work`, press Return, **Create project**. If the app asks what you'll use
+  it for, choose **Skip**; if it announces a new model, choose **Continue
+  with current model** (your setup decides the model).
+- **Chats must show "Remote · umcodex-<setup>"** to run in the sandbox. Other
+  (local) chats in that window would run on your computer, outside the
+  sandbox, so UM-Codex blocks them: they only answer with a reminder to start
+  a chat on Remote · `umcodex-<setup>` (while a setup runs or this launcher
+  window is open; otherwise they just wait for the network).
+- The app may show a chat's permissions as "Custom", greyed out: UM-Codex
+  fixes them to full access inside the sandbox.
+- Your own ChatGPT app reads the same `~/.ssh/config`, so it lists the
+  `umcodex-*` hosts under Settings → Connections too (switched off). You can
+  leave them off there; use UM-Codex's copy.
+- The app's own browser runs on your computer, not in the sandbox. For
+  browsing inside the sandbox, turn on the setup's Browser tool.
+- The setup runs until you press **Stop** in the launcher; the app then says
+  it can't reconnect, which is expected.
+- Windows: not yet (Terminal only).
+
+In a terminal: `um-codex launch --setup <name> --open app`.
 
 ## Updating
 

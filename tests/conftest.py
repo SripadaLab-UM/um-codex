@@ -85,3 +85,14 @@ def docker_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     program.write_bytes(b"")
     monkeypatch.setattr(windows_vm, "docker_desktop", lambda: program)
     return program
+
+
+@pytest.fixture(autouse=True)
+def ssh_home(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """No test reads or writes this computer's ~/.ssh: codex_app's home is a
+    folder of the test's own (outside tmp_path, which some tests list)."""
+    from umcodex import codex_app
+
+    home = tmp_path_factory.mktemp("ssh-home")
+    monkeypatch.setattr(codex_app, "user_home", lambda: home)
+    return home
