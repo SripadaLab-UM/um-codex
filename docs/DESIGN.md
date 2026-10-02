@@ -1282,8 +1282,13 @@ modes, rigor, and the frontend.
        the setup (Edit → Save, "Open in Terminal instead") with a moved
        folder's saved path needs the same confirmation (`Launcher.update`):
        otherwise saving would store where it leads now and skip the
-       question. Choosing the folder again in the picker is a new choice (it
-       comes back as its real path). The big Start at the top waits for it;
+       question; it's matched however the path is spelled (`link/`,
+       `link/.`, `a//link`, letter case), and the form then shows both
+       places with "Use them where they go now, and save". Choosing the
+       folder again in the picker is a new choice (it comes back as its real
+       path). Moved folders are found folder by folder (`setups.moved`): one
+       that's refused now (gone, say) is skipped, never hiding another that
+       moved, on the card or in a save. The big Start at the top waits for it;
      - the Codex app's ssh line, when the installer didn't add it: the card
        explains it and its button says "Add the line and start"
        (`allow_ssh_include` in the start request: the line is added, backed
@@ -1333,7 +1338,8 @@ modes, rigor, and the frontend.
      be closed over its control link and to Reopen, and doesn't offer
      Reopen for a newer install. Once it has updated, only Reopen is
      offered (a second Update is refused), so the version in use is never
-     the one an update prunes. Rollback stays in the terminal.
+     the one an update prunes. `um-codex uninstall` refuses while an update
+     holds its lock ("UM-Codex is updating…"). Rollback stays in the terminal.
    - **The installers ask about the ssh line** (`um-codex ssh-include`,
      above, and docs/INSTALLING.md), so a start in the Codex app needs no
      question later. It needs a terminal (no terminal: a message, exit 1,

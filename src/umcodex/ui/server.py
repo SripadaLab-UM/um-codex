@@ -108,12 +108,11 @@ def folder_json(path: str, *, write: bool | None = None) -> dict[str, Any]:
 
 def setup_json(setup: Setup, *, own_data: Path | None = None) -> dict[str, Any]:
     problem = None
-    changed: list[tuple[str, Path]] = []
     try:
         check(setup, own_data=own_data)
-        changed = moved(setup, own_data=own_data)
     except FolderRefused as why:
         problem = str(why)
+    changed = moved(setup, own_data=own_data)  # every folder that moved, even beside a refused one
     return {
         "id": setup.id,
         "name": setup.name,
@@ -243,15 +242,23 @@ def moved_confirmed(body: object, changed: list[tuple[str, Path]]) -> bool:
     return sorted(sent) == sorted(str(now) for _, now in changed)
 
 
-def _body_paths(body: object) -> set[str]:
+def _body_paths(body: object) -> list[str]:
     """The folder paths a setup request names, as sent."""
     if not isinstance(body, dict):
-        return set()
-    found = {body["working"]} if isinstance(body.get("working"), str) else set()
-    for entry in body.get("folders") or []:
+        return []
+    found = [body["working"]] if isinstance(body.get("working"), str) else []
+    raw = body.get("folders")
+    for entry in raw if isinstance(raw, list) else []:
         if isinstance(entry, dict) and isinstance(entry.get("path"), str):
-            found.add(entry["path"])
+            found.append(entry["path"])
     return found
+
+
+def _names_path(sent: list[str], saved: str) -> bool:
+    """Whether the request names this saved path, however it's spelled
+    (`link/`, `link/.`, `a//link`, letter case on a Mac or Windows)."""
+    want = Path(os.path.normpath(saved))
+    return any(folders.same(Path(os.path.normpath(path)), want) for path in sent if path.strip())
 
 
 def _name(raw: object) -> str:
@@ -535,11 +542,9 @@ class Launcher:
         # would skip Start's confirmation: a moved folder kept as it was
         # needs the same confirmation as Start (a folder chosen again
         # comes back as its real path, which is a new choice).
-        try:
-            changed = moved(current, own_data=self.own_data)
-        except FolderRefused:
-            changed = []
-        kept = [(saved, now) for saved, now in changed if saved in _body_paths(body)]
+        sent = _body_paths(body)
+        changed = moved(current, own_data=self.own_data)
+        kept = [(saved, now) for saved, now in changed if _names_path(sent, saved)]
         if kept and not moved_confirmed(body, kept):
             raise Invalid(MOVED, "moved", status=409)
         setup = setup_from(

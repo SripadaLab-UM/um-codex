@@ -1632,3 +1632,43 @@ def test_the_window_stays_up_while_its_update_runs():
         await ended
 
     asyncio.run(run())
+
+
+def test_a_missing_folder_doesnt_hide_a_moved_one_on_the_card_or_in_a_save(folders_here, tmp_path):
+    """The re-review's case: the working folder is a link to thesis now, and
+    a read-only folder is gone. The card shows both; removing the missing
+    folder and saving still needs the moved one confirmed."""
+    credentials.save_api_key(FAKE_KEY)
+    link = tmp_path / "link"
+    link.symlink_to(folders_here["thesis"])
+    gone = tmp_path / "gone"
+    SetupStore().save(Setup(id="linked-a1", name="linked", working=str(link), reads=(str(gone),)))
+    thesis = str(folders_here["thesis"])
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        (card,) = (await (await h.client.get("/api/state")).json())["setups"]
+        assert "doesn't exist" in card["problem"]
+        assert card["moved"] == [{"saved": str(link), "now": thesis}]
+        body = setup_body(link, name="linked")  # the missing folder removed
+        refused = await h.put("/api/setups/linked-a1", body)
+        assert refused.status == 409 and (await refused.json())["field"] == "moved"
+        for spelled in (f"{link}/", f"{link}/.", str(link).replace("/link", "//link")):
+            again = await h.put("/api/setups/linked-a1", setup_body(Path(spelled), name="linked"))
+            assert again.status == 409, spelled
+        assert (await h.post("/api/setups/linked-a1/start", {})).status in (400, 409)
+        assert h.launcher.openers["terminal"].opened == []  # type: ignore[attr-defined]
+        saved = SetupStore().get("linked-a1")
+        assert saved is not None and saved.working == str(link)
+        confirmed = await h.put("/api/setups/linked-a1", {**body, "confirm_moved": [thesis]})
+        assert confirmed.status == 200
+        started = await h.post("/api/setups/linked-a1/start", {})
+        assert started.status == 200 and h.launcher.openers["terminal"].opened == ["linked-a1"]  # type: ignore[attr-defined]
+
+    with_server(test)
+
+
+def test_the_form_shows_a_moved_folder_and_can_confirm_it():
+    script = (REPO / "src" / "umcodex" / "ui" / "static" / "app.js").read_text()
+    assert "errors.moved ? movedInForm(draft, errors.moved) : null" in script
+    assert "confirm_moved: (draft.moved || []).map((m) => m.now)" in script

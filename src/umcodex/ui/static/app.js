@@ -887,6 +887,7 @@ async function quickStart() {
 
 // Each field's control, for focusing the first problem (in the form's order).
 const FIELD_CONTROLS = {
+  moved: "confirm-moved",
   working: "pick-working",
   folders: "pick-more",
   model: "model",
@@ -1174,6 +1175,7 @@ function renderForm() {
       moreOptions,
     ),
     el("div", { class: "form-summary", id: "form-summary" }),
+    errors.moved ? movedInForm(draft, errors.moved) : null,
     errors.general ? el("p", { class: "message", role: "alert", text: errors.general }) : null,
     running ? el("p", { class: "note", text: "It's running now: changes apply the next time it starts." }) : null,
     el(
@@ -1199,10 +1201,27 @@ function renderSummary() {
   box.replaceChildren(el("h3", { class: "label", text: "What Codex gets" }), facts(view.draft, { key: "form" }), el("p", { class: "help", text: WORDS.key }));
 }
 
-async function saveForm(event, andStart) {
+// Saving a setup whose saved folder now leads somewhere else needs the same
+// confirmation as Start: both places, and a deliberate click.
+function movedInForm(draft, message) {
+  return el(
+    "div",
+    { class: "warning", role: "alert" },
+    el("p", { class: "strong", text: message }),
+    (draft.moved || []).map((m) => el("p", { class: "path" }, `${shortHome(m.saved)} → now ${shortHome(m.now)}`)),
+    el("button", {
+      type: "button",
+      key: "confirm-moved",
+      onclick: (e) => saveForm(e, false, { confirm_moved: (draft.moved || []).map((m) => m.now) }),
+      text: "Use them where they go now, and save",
+    }),
+  );
+}
+
+async function saveForm(event, andStart, extra = {}) {
   event.preventDefault();
   const { draft } = view;
-  const body = { ...bodyOf(draft), name: draft.name };
+  const body = { ...bodyOf(draft), name: draft.name, ...extra };
   try {
     const saved = draft.id
       ? await api("PUT", `/api/setups/${encodeURIComponent(draft.id)}`, body)
@@ -1211,6 +1230,10 @@ async function saveForm(event, andStart) {
     await refresh();
     if (andStart) startOrAsk(saved);
   } catch (error) {
+    if (error.field === "moved" && draft.id) {
+      await refresh(); // where the folders lead now, to show (and confirm) exactly that
+      draft.moved = setupOf(draft.id)?.moved || [];
+    }
     // Every problem at once, in the form's order; the first one gets the focus.
     view.errors = Object.keys(error.errors).length ? { ...error.errors } : { general: error.message };
     if (view.errors.name || view.errors.approvals) view.more = true;
