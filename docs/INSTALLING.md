@@ -84,6 +84,10 @@ Steps:
    takes it out), then "Add that line now? [Y/n]": Return is yes, `n` adds
    nothing. The question is asked by `um-codex` itself (`codex_app.
    offer_include`), so the installer's shell never touches `~/.ssh/config`.
+   An answer of no is remembered (`ssh-include-declined` in the data
+   folder), so installing again doesn't ask again (`um-codex ssh-include
+   --ask-again` asks). `um-codex ssh-include` itself refuses to ask without a
+   terminal (exit 1, nothing added).
    **No terminal adds nothing:** consent must be the person's, so it says
    the line wasn't asked about, and the launcher window explains it on the
    setup's card ("Add the line and start") when a setup in the Codex app is

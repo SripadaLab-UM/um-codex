@@ -36,7 +36,9 @@
   </section>
 
   <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
-  <main id="main" aria-live="polite"><p class="faint">Loading…</p></main>
+  <main id="main"><p class="faint">Loading…</p></main>
+  <!-- What changed on a card (its status line), said once; main itself isn't announced on every redraw. -->
+  <div id="announce" class="visually-hidden" role="status" aria-live="polite"></div>
 
   <!-- Only before something that can't be undone (Stop, Delete) or Windows' administrator prompt. -->
   <dialog id="confirm-dialog" aria-labelledby="confirm-title">

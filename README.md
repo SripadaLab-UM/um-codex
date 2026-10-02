@@ -25,7 +25,8 @@ It sets up Docker Desktop (if it isn't there, it asks first), UM-Codex and
 your key, then adds the UM-Codex app to Applications and a shortcut to the
 Desktop. If you have the Codex app (ChatGPT's desktop app), it also asks
 once whether to add the one line the Codex app needs in your `~/.ssh/config`
-(Return is yes; see below). Details: [docs/INSTALLING.md](docs/INSTALLING.md).
+(Return is yes; see below). If you say no, installing again doesn't ask
+again (`um-codex ssh-include --ask-again` does). Details: [docs/INSTALLING.md](docs/INSTALLING.md).
 
 ## Install on Windows
 
@@ -46,7 +47,7 @@ Spotlight; Windows: the Desktop shortcut or the Start menu). It opens
 UM-Codex's window in your web browser. The page runs on your own computer
 (at `127.0.0.1`, signed in by the link the app opens) and isn't on the web.
 
-- **The first time:** press **Choose a folder to work in…**, pick the folder
+- **The first time:** press **Choose a folder and start…**, pick the folder
   in your computer's own folder picker, and Codex starts there: in the Codex
   app if you have it (Mac), otherwise in a terminal window. It starts with
   the internet on, running commands without asking, on `gpt-5.6-terra`. (If

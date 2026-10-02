@@ -46,7 +46,7 @@ It follows ITS's "Codex Setup" articles for the model settings (the
       Start and the Desktop (Windows), with the logo.
 2. **Launch:** the app (or its Desktop or Start menu shortcut) opens the
    launcher window in the browser (`um-codex ui`, M5 below). Usually one
-   click (M7): the first time, "Choose a folder to work in…" and Codex
+   click (M7): the first time, "Choose a folder and start…" and Codex
    starts there with the defaults; after that, "Start <last setup>". Saved
    setups are cards that always show what Codex can do with them; Start opens
    UM-Codex's copy of the Codex app (M6) or a terminal with Codex in it. Or the
@@ -111,8 +111,10 @@ It follows ITS's "Codex Setup" articles for the model settings (the
    - `um-codex ssh-include` (M7): the installers' one question about the
      Codex app's line in `~/.ssh/config`. Asks only on a Mac with the Codex
      app installed and the line missing ("Add that line now? [Y/n]", Return
-     is yes); no answer (no terminal) adds nothing. Exit 0 when the line is
-     there or isn't needed here, 1 when it wasn't added.
+     is yes). No terminal: says so and exits 1, adding nothing. A "no" is
+     remembered in the data folder and not asked again unless
+     `--ask-again`. Exit 0 when the line is there or isn't needed here, 1
+     when it wasn't added.
    - `um-codex update --from-launcher` (hidden, M7): the launcher window's
      Update; as `um-codex update`, but it doesn't close the window that ran
      it.
@@ -1208,9 +1210,16 @@ modes, rigor, and the frontend.
    Built on branch `m7-one-click`. Starting Codex is usually one click; every
    safety fact stays on screen, as short lines instead of pop-ups and a page.
    - **First run** (no setups): the page has one main action, "Choose a
-     folder to work in…": the native picker, then a setup is made from the
-     folder alone and started at once: no form, no summary page, no
-     confirmation. "Choose options first…" opens the form instead.
+     folder and start…", with what it means right under it, before the
+     click: Codex starts in the Codex app (or Terminal) on that folder; it
+     can change and delete files there (real files, no undo); the internet
+     is on, so it could send what it reads anywhere (and reach this
+     computer, the local network and VPN). Then the native picker, and a
+     setup is made from the folder alone and started at once: no form, no
+     summary page, no confirmation. Notes about the folder (a network drive
+     on Windows) show on its card. "Choose options first…" opens the form
+     instead. "Choose another folder…" (returning) has the same short line
+     (`aria-describedby`).
    - **Returning:** "Start <last setup>" at the top (the setup used last;
      while it runs, its status line instead), and Start on every card,
      which starts at once. "Choose another folder…" makes and starts a new
@@ -1231,9 +1240,11 @@ modes, rigor, and the frontend.
      its working folder, made unique among the setups (`setups.default_name`:
      "thesis", "thesis 2", …, letter case aside; a duplicate of "thesis 2" is
      "thesis 3"). It's the card's title and the Codex app's project name.
-     The card has Rename (inline: Enter saves, Escape cancels; `POST
-     /api/setups/<id>/rename`), and the form has it under More options
-     (empty: the folder's name; an edit without one keeps the name).
+     The card has Rename (inline: Enter saves, Escape cancels, the typed
+     name kept while the page redraws, focus back on Rename afterwards;
+     `POST /api/setups/<id>/rename`, which refuses a name another setup has,
+     letter case aside), and the form has it under More options (empty: the
+     folder's name; an edit without one keeps the name).
    - **The cards** show, always: the folders (working folder and more, read
      only or read & write) with "Codex can change and delete files there:
      your real files, no undo."; under Access, "Internet on: Codex can reach
@@ -1249,7 +1260,8 @@ modes, rigor, and the frontend.
      Codex app…", "is running…", "Connected" banners): Starting… → Opening
      Codex… → "Connected ✓ The Codex app is working in the sandbox
      (<alias>)." (in Terminal: "Running in Terminal since 14:05"). Problems
-     go on that line too. The Codex app's first-time steps (only when its
+     go on that line too. Screen readers hear a line when it changes (one
+     polite live region), not every redraw of the page. The Codex app's first-time steps (only when its
      copy couldn't be set up) and its notes ("Use chats that show Remote ·
      <alias>; local chats are blocked.", folded) are under it.
    - **No pop-ups on the way to Codex.** A question in a pop-up is kept only
@@ -1263,8 +1275,15 @@ modes, rigor, and the frontend.
        as soon as it's running.");
      - a saved folder that now leads somewhere else (a real risk): the card
        shows both paths and why, and its button becomes "Use them where they
-       go now, and start" (`confirm_moved`, as before; a start without it is
-       refused with `field: "moved"`); the big Start at the top waits for it;
+       go now, and start". The request carries the places the card showed
+       (`confirm_moved`: each `now`), and the server refuses (`field:
+       "moved"`) unless they're exactly where the folders lead now, so a
+       folder that moved again since isn't confirmed by an older click. Saving
+       the setup (Edit → Save, "Open in Terminal instead") with a moved
+       folder's saved path needs the same confirmation (`Launcher.update`):
+       otherwise saving would store where it leads now and skip the
+       question. Choosing the folder again in the picker is a new choice (it
+       comes back as its real path). The big Start at the top waits for it;
      - the Codex app's ssh line, when the installer didn't add it: the card
        explains it and its button says "Add the line and start"
        (`allow_ssh_include` in the start request: the line is added, backed
@@ -1305,17 +1324,29 @@ modes, rigor, and the frontend.
      or "The update didn't finish, so this version is still the one in use.
      What happened is in um-codex.log, in UM-Codex's data folder." (update.py
      undoes a failed step itself). Refused while a setup runs: "Stop running
-     setups first: “thesis”." Rollback stays in the terminal.
+     setups first: “thesis”." (checked under the same lock Start takes, and
+     Start is refused while it runs: "Updating… wait for it to finish, then
+     start."). The update runs in a session of its own (a new process group
+     with no window on Windows) with its output in `ui/update.log`, which the
+     window reads for the progress words, so it goes on whatever happens to
+     the window; while it runs the window doesn't end when idle, refuses to
+     be closed over its control link and to Reopen, and doesn't offer
+     Reopen for a newer install. Once it has updated, only Reopen is
+     offered (a second Update is refused), so the version in use is never
+     the one an update prunes. Rollback stays in the terminal.
    - **The installers ask about the ssh line** (`um-codex ssh-include`,
      above, and docs/INSTALLING.md), so a start in the Codex app needs no
-     question later.
+     question later. It needs a terminal (no terminal: a message, exit 1,
+     nothing added). A "no" is kept (`ssh-include-declined` in the data
+     folder), so installing again doesn't ask again; `um-codex ssh-include
+     --ask-again` does, and the card still offers "Add the line and start".
    - **Clicks, from the launcher's page to a connected Codex app chat** (a
      Mac with the Codex app installed, the key saved and Docker running;
      the native folder picker counted apart):
 
      | | alpha.3 | M7 |
      |---|---|---|
-     | First run | 7 clicks + picker: New setup, Choose working folder…, (picker), Open in: Codex app, Save, Start, "Start in Codex app" on the summary page, Allow in the ssh pop-up | **1 click + picker**: Choose a folder to work in…, (picker) |
+     | First run | 7 clicks + picker: New setup, Choose working folder…, (picker), Open in: Codex app, Save, Start, "Start in Codex app" on the summary page, Allow in the ssh pop-up | **1 click + picker**: Choose a folder and start…, (picker) |
      | First run, the installer didn't add the ssh line | (as above) | 2 clicks + picker (+ "Add the line and start") |
      | Returning | 2 clicks: Start, "Start in Codex app" | **1 click**: Start "<setup>" |
      | Pop-up questions on the way | 1 (the ssh line) | 0 |
@@ -1332,7 +1363,7 @@ modes, rigor, and the frontend.
      were left alone):
      - the first-run page with the key field inline; the fake key saved
        there (checked against the stub);
-     - "Choose a folder to work in…" (the native picker was stood in for in
+     - "Choose a folder and start…" (the native picker was stood in for in
        the test browser, since it needs a person at the desktop; a picker
        that failed showed its line under the button) made "thesis" with the
        internet on and Open in: Codex app, and started it at once;

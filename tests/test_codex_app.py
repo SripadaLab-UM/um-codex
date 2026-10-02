@@ -156,7 +156,7 @@ def test_the_installers_question_defaults_to_yes(ssh_home):
     """`um-codex ssh-include`: Return adds the line; n, or no answer at all
     (no terminal), adds nothing."""
     app = Path("/Applications/ChatGPT.app")
-    mac = {"find": lambda: app, "platform": "darwin"}  # a Mac with the Codex app
+    mac = {"find": lambda: app, "platform": "darwin", "data": ssh_home}  # a Mac with the Codex app
     said: list[str] = []
     assert codex_app.offer_include(lambda _: "n", said.append, **mac) == 1
     assert not (ssh_home / ".ssh" / "config").exists()
@@ -168,7 +168,8 @@ def test_the_installers_question_defaults_to_yes(ssh_home):
     assert codex_app.offer_include(no_terminal, said.append, **mac) == 1
     assert not (ssh_home / ".ssh" / "config").exists()
     asked: list[str] = []
-    assert codex_app.offer_include(lambda q: asked.append(q) or "", said.append, **mac) == 0
+    # (a no is remembered: asked again only on request; see the test below)
+    assert codex_app.offer_include(lambda q: asked.append(q) or "", said.append, ask_again=True, **mac) == 0
     assert asked == ["Add that line now? [Y/n] "]
     assert codex_app.include_present()
     # Asked once: there now, so not asked again.
@@ -184,13 +185,32 @@ def test_the_installers_question_isnt_asked_without_the_app_or_off_a_mac(ssh_hom
     assert not (ssh_home / ".ssh" / "config").exists()
 
 
-def test_the_cli_runs_the_installers_question(monkeypatch):
+def test_the_cli_runs_the_installers_question_only_at_a_terminal(monkeypatch, capsys):
     from umcodex import cli
 
     calls = []
-    monkeypatch.setattr(codex_app, "offer_include", lambda ask, say: calls.append((ask, say)) or 1)
+    monkeypatch.setattr(
+        codex_app, "offer_include", lambda ask, say, ask_again: calls.append((ask, say, ask_again)) or 1
+    )
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     assert cli.main(["ssh-include"]) == 1
-    assert calls == [(input, print)]
+    assert calls == [] and "no terminal" in capsys.readouterr().out
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    assert cli.main(["ssh-include"]) == 1
+    assert cli.main(["ssh-include", "--ask-again"]) == 1
+    assert calls == [(input, print, False), (input, print, True)]
+
+
+def test_a_no_is_remembered_until_asked_again(ssh_home, tmp_path):
+    app = Path("/Applications/ChatGPT.app")
+    mac = {"find": lambda: app, "platform": "darwin", "data": tmp_path}
+    said: list[str] = []
+    assert codex_app.offer_include(lambda _: "no", said.append, **mac) == 1
+    assert (tmp_path / codex_app.INCLUDE_DECLINED).exists()
+    assert codex_app.offer_include(lambda _: pytest.fail("asked"), said.append, **mac) == 1
+    assert "you said no before" in said[-1]
+    assert codex_app.offer_include(lambda _: "", said.append, ask_again=True, **mac) == 0
+    assert codex_app.include_present() and not (tmp_path / codex_app.INCLUDE_DECLINED).exists()
 
 
 # --- UM-Codex's own ssh files ------------------------------------------------------------

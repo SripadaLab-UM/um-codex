@@ -3,7 +3,7 @@
 // fetch (the server refuses anything else; see ui/protection.py).
 //
 // M7, "one click": a returning person presses one Start; the first time, one
-// "Choose a folder to work in" and Codex starts with the defaults. No summary
+// "Choose a folder and start" and Codex starts with the defaults. No summary
 // page and no pop-ups on the way: what a setup gives Codex is always on its
 // card, problems and questions show on the card, and a pop-up question is
 // kept only before Stop and Delete (and Windows' administrator prompt).
@@ -21,7 +21,9 @@ let polling = true;
 const cards = new Map();
 let pending = null; // a Start waiting for the key or Docker: { id, extra }
 let hero = null; // the first-run button's own line: { text, bad }
-const renaming = new Set(); // setup ids whose name is being edited on the card
+const renaming = new Map(); // setup id -> the name being typed on its card (kept across redraws)
+const warned = new Map(); // setup id -> the folder notes from choosing it (a network drive, ...)
+const said = new Map(); // setup id -> its status line as last announced
 const shownSteps = new Set(); // launch ids whose Codex app steps were opened by hand
 
 // ---------------------------------------------------------------- helpers
@@ -82,6 +84,12 @@ async function api(method, path, body) {
 
 // One line under the status strip, for what belongs to no card (a copied
 // path, a saved key, a request that failed).
+// One polite announcement (a status line that changed), for screen readers.
+function announce(text) {
+  const box = document.getElementById("announce");
+  if (box) box.textContent = text;
+}
+
 function notice(text, bad = false) {
   const box = document.getElementById("notice");
   box.textContent = text;
@@ -271,7 +279,9 @@ let updateSaid = null; // { text, bad }: what Update or Check for updates said l
 
 function updateItems() {
   const u = state.update;
-  const item = (dot, text, ...rest) => el("div", { class: "item loud", role: "status" }, el("span", { class: `dot ${dot}` }), el("span", { text }), ...rest);
+  const item = (dot, text, ...rest) => el("div", { class: "item loud" }, el("span", { class: `dot ${dot}` }), el("span", { text }), ...rest);
+  if (u.words && u.words !== said.get("update")) announce(u.words);
+  said.set("update", u.words);
   if (u.phase === "running") return [item("attn", `Updating… ${u.words || ""}`)];
   if (u.phase === "updated")
     return [item("ok", `${u.words} Reopen to use it.`, el("button", { class: "link", key: "reopen", onclick: reopenNewer, text: "Reopen" }))];
@@ -517,10 +527,11 @@ function renderHome() {
           el(
             "span",
             { class: "head-actions" },
-            el("button", { key: "another", onclick: quickStart, text: "Choose another folder…" }),
+            el("button", { key: "another", onclick: quickStart, "aria-describedby": "another-help", text: "Choose another folder…" }),
             el("button", { class: "quiet", key: "new", onclick: () => showForm(null), text: "New setup with options…" }),
           ),
         ),
+        el("p", { class: "help", id: "another-help", text: `Choose another folder: it starts at once, as the first one did. ${WORDS.writes} Internet on.` }),
         el("div", { class: "cards" }, state.setups.map(card)),
       ),
     );
@@ -554,14 +565,20 @@ function firstRun() {
     "section",
     { class: "hero", "aria-label": "Start" },
     el("h2", { text: "Work with Codex in a folder" }),
-    el("button", { class: "primary big", key: "choose", onclick: quickStart, text: "Choose a folder to work in…" }),
-    hero ? el("p", { class: hero.bad ? "message" : "help", role: "status", text: hero.text }) : null,
-    el("p", {
-      class: "help",
-      text:
-        `Codex then opens in ${where}, working in that folder (it can change and delete files there), ` +
-        "with the internet on. Change any of it later with Edit.",
+    el("button", {
+      class: "primary big",
+      key: "choose",
+      onclick: quickStart,
+      "aria-describedby": "quick-help",
+      text: "Choose a folder and start…",
     }),
+    hero ? el("p", { class: hero.bad ? "message" : "help", text: hero.text }) : null,
+    el(
+      "div",
+      { class: "help", id: "quick-help" },
+      el("p", { text: `Codex starts in ${where}, working in the folder you choose. ${WORDS.writes}` }),
+      el("p", { text: `${WORDS.internetOn} Change any of it later with Edit.` }),
+    ),
     el("button", { class: "link", key: "options", onclick: () => showForm(null), text: "Choose options first…" }),
   );
 }
@@ -578,7 +595,7 @@ function lastHero() {
     run
       ? el(
           "p",
-          { class: `hero-status${status?.ok ? " ok" : ""}`, role: "status" },
+          { class: `hero-status${status?.ok ? " ok" : ""}` },
           el("span", { class: "pulse", "aria-hidden": "true" }),
           el("strong", { text: `“${s.name}”: ` }),
           status?.text || "Running.",
@@ -592,9 +609,13 @@ function lastHero() {
         }),
     el("p", { class: "help hero-line" }, pathView(s.working, { copy: false }), el("span", { text: ` · ${codexLine(s)}` })),
     !run && blocked ? el("p", { class: "note", text: "It needs a look on its card below first." }) : null,
-    !run && !blocked && needsInclude(s) ? el("p", { class: "help", text: "The line is for the Codex app: its card below says what it does." }) : null,
+    !run && !blocked && needsInclude(s) ? el("p", { class: "help", text: INCLUDE_REASON }) : null,
   );
 }
+
+const INCLUDE_REASON =
+  "The Codex app reaches the sandbox through your ssh settings: this adds one line at the top of " +
+  "~/.ssh/config (Include ~/.ssh/um-codex/config), backed up first; uninstalling takes it out.";
 
 function needsInclude(s) {
   return s.open_in === "codex-app" && !state.ssh_include;
@@ -615,6 +636,9 @@ function startOrAsk(s) {
 function card(s) {
   const run = runningOf(s.id);
   const status = statusOf(s, run);
+  // Screen readers hear a card's line when it changes, not every redraw.
+  if (status && said.get(s.id) !== status.text) announce(`${s.name}: ${status.text}`);
+  said.set(s.id, status?.text);
   const head = renaming.has(s.id)
     ? renameField(s)
     : el(
@@ -630,7 +654,8 @@ function card(s) {
     start = el("button", {
       class: "primary",
       key: `start-moved-${s.id}`,
-      onclick: () => startSetup(s.id, { confirm_moved: true }),
+      // The places shown on the card: if a folder moved again since, the server refuses.
+      onclick: () => startSetup(s.id, { confirm_moved: s.moved.map((m) => m.now) }),
       text: "Use them where they go now, and start",
     });
   } else if (needsInclude(s)) {
@@ -657,13 +682,14 @@ function card(s) {
     status
       ? el(
           "p",
-          { class: `status-line${status.bad ? " bad" : ""}${status.ok ? " ok" : ""}`, role: "status" },
+          { class: `status-line${status.bad ? " bad" : ""}${status.ok ? " ok" : ""}` },
           status.live ? el("span", { class: "pulse", "aria-hidden": "true" }) : null,
           status.text,
         )
       : null,
     run?.app ? appDetails(run) : null,
     s.problem ? el("p", { class: "problem", text: `Can't start as it is: ${s.problem} Edit it to change that.` }) : null,
+    (warned.get(s.id) || []).map((w) => el("p", { class: "note", text: w })),
     s.moved.length ? movedBlock(s) : null,
     !run && needsInclude(s) ? includeBlock(s) : null,
     facts(s, { key: s.id }),
@@ -749,28 +775,33 @@ function appDetails(run) {
 }
 
 function startRename(s) {
-  renaming.add(s.id);
+  renaming.set(s.id, s.name);
   redraw();
   const field = document.querySelector(`#main [data-key="name-${CSS.escape(s.id)}"]`);
   field?.focus();
   field?.select();
 }
 
+function endRename(s) {
+  renaming.delete(s.id);
+  redraw();
+  focusKey(`rename-${s.id}`);
+}
+
 function renameField(s) {
-  let message = null;
+  const message = el("span", { class: "message", role: "alert", hidden: true });
   const save = async (event) => {
     event.preventDefault();
-    const value = event.currentTarget.elements.name.value;
     try {
-      await api("POST", `/api/setups/${encodeURIComponent(s.id)}/rename`, { name: value });
+      await api("POST", `/api/setups/${encodeURIComponent(s.id)}/rename`, { name: renaming.get(s.id) });
       renaming.delete(s.id);
-      refresh();
+      await refresh();
+      focusKey(`rename-${s.id}`);
     } catch (error) {
       message.textContent = error.message;
       message.hidden = false;
     }
   };
-  message = el("span", { class: "message", role: "alert", hidden: true });
   return el(
     "form",
     { class: "card-title rename", onsubmit: save },
@@ -778,18 +809,16 @@ function renameField(s) {
       type: "text",
       name: "name",
       key: `name-${s.id}`,
-      value: s.name,
+      value: renaming.get(s.id),
       maxlength: "80",
       "aria-label": "Setup name",
+      oninput: (e) => renaming.set(s.id, e.target.value),
       onkeydown: (e) => {
-        if (e.key === "Escape") {
-          renaming.delete(s.id);
-          redraw();
-        }
+        if (e.key === "Escape") endRename(s);
       },
     }),
     el("button", { type: "submit", class: "primary", text: "Save" }),
-    el("button", { type: "button", text: "Cancel", onclick: () => (renaming.delete(s.id), redraw()) }),
+    el("button", { type: "button", text: "Cancel", onclick: () => endRename(s) }),
     message,
   );
 }
@@ -827,7 +856,7 @@ async function pickFolder(start) {
   }
 }
 
-// "Choose a folder to work in": the computer's own folder picker, then a
+// "Choose a folder and start": the computer's own folder picker, then a
 // setup with the defaults (named after the folder), started at once.
 async function quickStart() {
   notice("");
@@ -849,6 +878,7 @@ async function quickStart() {
     if (state.setups.length) notice(error.message, true);
     return redraw();
   }
+  if (chosen.warnings?.length) warned.set(made.id, chosen.warnings);
   await refresh();
   startOrAsk(made);
 }

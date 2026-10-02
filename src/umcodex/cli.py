@@ -107,10 +107,11 @@ def main(argv: list[str] | None = None) -> int:
         help="for the Mac installer: write the um-codex command in UM-Codex's own bin folder",
     )
     links.add_argument("--dry-run", action="store_true", help="with --refresh: only say what would change")
-    commands.add_parser(
+    include = commands.add_parser(
         "ssh-include",
         help="for the installers: ask once whether to add the Codex app's line to ~/.ssh/config (Mac)",
     )
+    include.add_argument("--ask-again", action="store_true", help="ask even if the answer was no before")
     remove = commands.add_parser("uninstall", help="remove UM-Codex's containers, key, images and data")
     data = remove.add_mutually_exclusive_group()
     data.add_argument("--delete-data", action="store_true", help="also delete saved setups and Codex history")
@@ -170,7 +171,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "ssh-include":
             from umcodex import codex_app
 
-            return codex_app.offer_include(input, print)
+            if not sys.stdin.isatty():
+                # The consent must be the person's: nothing to answer with, nothing added.
+                print("There's no terminal to answer in, so ~/.ssh/config wasn't changed.")
+                print(codex_app.INCLUDE_LATER)
+                return 1
+            return codex_app.offer_include(input, print, ask_again=args.ask_again)
         if args.command == "uninstall":
             from umcodex.uninstall import uninstall
 

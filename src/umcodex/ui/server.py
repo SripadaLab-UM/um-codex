@@ -227,6 +227,33 @@ def setup_from(
     )
 
 
+MOVED = (
+    "A saved folder now leads somewhere else (a link was put in its path): check it on the setup's "
+    "card and confirm it there, or choose the folder again."
+)
+
+
+def moved_confirmed(body: object, changed: list[tuple[str, Path]]) -> bool:
+    """Whether the request confirms exactly these moved folders: the page
+    sends the places it showed (`confirm_moved`: each `now`), so a folder
+    that moved again since is never confirmed by an older click."""
+    sent = body.get("confirm_moved") if isinstance(body, dict) else None
+    if not isinstance(sent, list) or not all(isinstance(p, str) for p in sent):
+        return False
+    return sorted(sent) == sorted(str(now) for _, now in changed)
+
+
+def _body_paths(body: object) -> set[str]:
+    """The folder paths a setup request names, as sent."""
+    if not isinstance(body, dict):
+        return set()
+    found = {body["working"]} if isinstance(body.get("working"), str) else set()
+    for entry in body.get("folders") or []:
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+            found.add(entry["path"])
+    return found
+
+
 def _name(raw: object) -> str:
     if not isinstance(raw, str) or not raw.strip():
         raise Invalid("Give the setup a name.", "name")
@@ -356,6 +383,7 @@ class Launcher:
     spawn: Callable[..., Any] = subprocess.Popen
     check_updates_now: Callable[[], str | None] | None = None
     update_job: UpdateJob = field(default_factory=UpdateJob)
+    update_poll_seconds: float = 0.2
     _update_lock: threading.Lock = field(default_factory=threading.Lock)
 
     # ----------------------------------------------------------- reading
@@ -433,9 +461,13 @@ class Launcher:
 
     def installed_version(self) -> str | None:
         """The version the installed launchers now open, when it isn't this
-        server's own (an update or a new install happened while it ran)."""
+        server's own (an update or a new install happened while it ran).
+        None while this window's own update runs: Reopen is offered once it
+        has finished."""
         from umcodex.update import Layout, install_root
 
+        if self.updating():
+            return None
         with contextlib.suppress(Exception):
             layout = Layout(install_root(), windows=self.platform == "win32")
             current = layout.pointer()[0]
@@ -447,6 +479,8 @@ class Launcher:
         """Close this server and start the installed version's launcher window."""
         if self.quit is None:
             raise Invalid("This window can't reopen itself. Open UM-Codex again from its app.", status=409)
+        if self.updating():
+            raise Invalid("Updating… wait for it to finish, then Reopen.", "update", status=409)
         self.reopen_after = True
         self.quit()
         return {"reopening": True}
@@ -497,6 +531,17 @@ class Launcher:
 
     def update(self, setup_id: str, body: object) -> dict[str, Any]:
         current = self.setup(setup_id)
+        # Saving a saved path again would save where it leads now, which
+        # would skip Start's confirmation: a moved folder kept as it was
+        # needs the same confirmation as Start (a folder chosen again
+        # comes back as its real path, which is a new choice).
+        try:
+            changed = moved(current, own_data=self.own_data)
+        except FolderRefused:
+            changed = []
+        kept = [(saved, now) for saved, now in changed if saved in _body_paths(body)]
+        if kept and not moved_confirmed(body, kept):
+            raise Invalid(MOVED, "moved", status=409)
         setup = setup_from(
             body,
             setup_id=setup_id,
@@ -511,7 +556,10 @@ class Launcher:
     def rename(self, setup_id: str, body: object) -> dict[str, Any]:
         """A new name only (the card's Rename)."""
         current = self.setup(setup_id)
-        renamed = replace(current, name=_name(body.get("name") if isinstance(body, dict) else None))
+        name = _name(body.get("name") if isinstance(body, dict) else None)
+        if name.casefold() in {other.casefold() for other in self._names(but=setup_id)}:
+            raise Invalid("Another setup has that name already.", "name")
+        renamed = replace(current, name=name)
         self.store.save(renamed)
         return setup_json(renamed, own_data=self.own_data)
 
@@ -556,7 +604,6 @@ class Launcher:
 
     def start(self, setup_id: str, body: object) -> dict[str, Any]:
         setup = self.setup(setup_id)
-        confirmed = isinstance(body, dict) and body.get("confirm_moved") is True
         # The person pressed the card's "Add the line and start", under the explanation.
         allow_include = isinstance(body, dict) and body.get("allow_ssh_include") is True
         if not self.key_saved(fresh=True):
@@ -583,17 +630,18 @@ class Launcher:
             changed = moved(setup, own_data=self.own_data)
         except FolderRefused as why:
             raise Invalid(f"This setup can't be used as it is: {why} Edit it to change that.") from None
-        if changed and not confirmed:
-            raise Invalid(
-                "A saved folder now leads somewhere else: check it and confirm first.", "moved", status=409
-            )
+        if changed and not moved_confirmed(body, changed):
+            raise Invalid(MOVED, "moved", status=409)
         if changed:
             setup = resolved(setup, layout)  # what the person confirmed
-        self.store.save(setup, used=True)
-        try:
-            opener.open(setup.id)
-        except OpenFailed as why:
-            raise Invalid(str(why), status=500) from None
+        with self._update_lock:  # (an update checks for running setups under it)
+            if self.updating():
+                raise Invalid("Updating… wait for it to finish, then start.", "update", status=409)
+            self.store.save(setup, used=True)
+            try:
+                opener.open(setup.id)
+            except OpenFailed as why:
+                raise Invalid(str(why), status=500) from None
         return {"opened": opener.label, "in_background": opener.key == "codex-app"}
 
     def allow_ssh_include(self) -> dict[str, Any]:
@@ -692,60 +740,90 @@ class Launcher:
         )
         return {"available": found, "words": words}
 
+    def updating(self) -> bool:
+        return self.update_job.phase == "running"
+
     def start_update(self) -> dict[str, Any]:
         """Update: `um-codex update` in the background (its own checks, and
-        it undoes itself if a step fails). Not while a setup runs."""
-        running = self.running()
-        if running:
-            names = ", ".join(sorted({f"“{run['setup_name']}”" for run in running}))
-            raise Invalid(f"Stop running setups first: {names}.", "update", status=409)
+        it undoes itself if a step fails). Not while a setup runs, and not
+        again before Reopen once it has updated (the version in use must
+        never be the one an update prunes)."""
         with self._update_lock:
             if self.update_job.phase == "running":
                 raise Invalid("The update is already under way.", "update", status=409)
+            if self.update_job.phase == "updated":
+                raise Invalid(
+                    f"Reopen first, to use UM-Codex {self.update_job.version}.", "update", status=409
+                )
+            running = self.running()
+            if running:
+                names = ", ".join(sorted({f"“{run['setup_name']}”" for run in running}))
+                raise Invalid(f"Stop running setups first: {names}.", "update", status=409)
             self.update_job = UpdateJob("running", "Starting the update…")
         log.info("launcher window: Update asked for")
         threading.Thread(target=self._run_update, name="update", daemon=True).start()
         return {"phase": "running", "words": self.update_job.words}
 
     def _run_update(self) -> None:
+        """The update runs in a session of its own, its output in a file
+        (`ui/update.log`), so it goes on whatever happens to this server; the
+        file is read for the progress words."""
         job = self.update_job
-        version, newest = None, False
+        found: dict[str, Any] = {"version": None, "newest": False}
+
+        def read(line: str) -> None:
+            line = line.rstrip()
+            if line:
+                log.info("update: %s", line)
+            for marker, words in UPDATE_STEPS:
+                if marker in line:
+                    job.words = words
+            found["newest"] = found["newest"] or "is the newest version" in line
+            updated = _UPDATED.search(line)
+            if updated:
+                found["version"] = updated.group(1)
+
+        code = None
         try:
-            child = self.spawn(
-                self.update_command(),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env={**os.environ, "PYTHONUTF8": "1"},
-                **_no_window(),
-            )
-            for raw in child.stdout:
-                line = raw.rstrip()
-                if line:
-                    log.info("update: %s", line)
-                for marker, words in UPDATE_STEPS:
-                    if marker in line:
-                        job.words = words
-                newest = newest or "is the newest version" in line
-                found = _UPDATED.search(line)
-                if found:
-                    version = found.group(1)
-            code = child.wait()
+            folder = self.data / "ui"
+            folder.mkdir(parents=True, exist_ok=True)
+            output = folder / "update.log"
+            with output.open("wb") as out:
+                child = self.spawn(
+                    self.update_command(),
+                    stdout=out,
+                    stderr=subprocess.STDOUT,
+                    env={**os.environ, "PYTHONUTF8": "1"},
+                    **_background(),
+                )
+            offset, rest = 0, b""
+            while True:
+                code = child.poll()
+                with output.open("rb") as file:
+                    file.seek(offset)
+                    chunk = file.read()
+                    offset += len(chunk)
+                *lines, rest = (rest + chunk).split(b"\n")
+                for line in lines:
+                    read(line.decode("utf-8", "replace"))
+                if code is not None:
+                    if rest:
+                        read(rest.decode("utf-8", "replace"))
+                    break
+                time.sleep(self.update_poll_seconds)
         except (OSError, ValueError):
             log.exception("launcher window: the update couldn't be run")
             code = None
-        if code == 0 and version:
-            job.phase, job.words, job.version = "updated", f"Updated to UM-Codex {version}.", version
+        if code == 0 and found["version"]:
+            version = found["version"]
+            job.version, job.words, job.phase = version, f"Updated to UM-Codex {version}.", "updated"
             self.status.update = None
-        elif code == 0 and newest:
-            job.phase, job.words = "newest", f"UM-Codex {__version__} is the newest version."
+        elif code == 0 and found["newest"]:
+            job.words, job.phase = f"UM-Codex {__version__} is the newest version.", "newest"
             self.status.update = None
         else:
             log.error("launcher window: the update ended with %s", code)
-            job.phase, job.words = "failed", UPDATE_FAILED
+            job.words, job.phase = UPDATE_FAILED, "failed"
 
 
 # --- HTTP -------------------------------------------------------------------
@@ -806,6 +884,8 @@ def make_app(
         return web.json_response({"path": session.new_sign_in_path()})
 
     async def control_quit(request: web.Request) -> web.Response:
+        if launcher.updating():  # its own update runs: closed once it's done
+            return web.json_response({"quitting": False, "error": "An update is running."}, status=409)
         if quit is not None:
             quit()
         return web.json_response({"quitting": True})
@@ -1091,7 +1171,7 @@ async def serve(
         while not stop.is_set():
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=min(10.0, idle_seconds))
-            if time.monotonic() - seen[-1] > idle_seconds:
+            if time.monotonic() - seen[-1] > idle_seconds and not launcher.updating():
                 log.info("launcher window: idle, ending")
                 break
             await loop.run_in_executor(None, answer_local_chats)
@@ -1141,12 +1221,6 @@ def start_installed() -> None:
     log.info("launcher window: reopening as the installed version")
     with contextlib.suppress(OSError):
         subprocess.Popen([str(command), "ui", "--detach"], **_background())
-
-
-def _no_window() -> dict[str, Any]:
-    if sys.platform == "win32":
-        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
-    return {}
 
 
 def _background() -> dict[str, Any]:
