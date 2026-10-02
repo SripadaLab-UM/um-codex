@@ -33,7 +33,7 @@
 #   dated Posit Package Manager snapshot;
 # - Codex CLI, Node and the Playwright MCP server (with the Chromium build
 #   its Playwright pins): exact versions;
-# - Python packages: requirements.txt (see requirements.in).
+# - Python packages: requirements.txt (see requirements.in), with hashes.
 
 FROM node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS node
 ARG CODEX_VERSION=0.157.1
@@ -43,7 +43,7 @@ ARG PLAYWRIGHT_MCP_VERSION=0.0.83
 RUN npm install -g "@openai/codex@${CODEX_VERSION}" "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" \
     && npm cache clean --force
 
-FROM rocker/r-ver:4.6.1@sha256:4e6e6696ff54a86625c7f80046478e67014a2184e942b85eeff43db7b992d93e
+FROM rocker/r-ver:4.6.1@sha256:4e6e6696ff54a86625c7f80046478e67014a2184e942b85eeff43db7b992d93e AS runtime
 
 # Freeze CRAN at a date, so rebuilding the image gives the same R packages.
 ARG CRAN_SNAPSHOT=https://p3m.dev/cran/__linux__/noble/2026-09-25
@@ -60,7 +60,7 @@ RUN apt-get update \
         ca-certificates curl wget file findutils git openssh-client jq less procps \
         ripgrep fd-find tree unzip zip sqlite3 sudo vim-tiny nano \
         build-essential pkg-config \
-        pandoc poppler-utils qpdf tesseract-ocr ghostscript \
+        poppler-utils qpdf tesseract-ocr ghostscript \
         fonts-dejavu-core fonts-liberation \
         python3 python3-venv python3-dev \
         libxml2 libfontconfig1 libfreetype6 libharfbuzz0b libfribidi0 libpng16-16 libtiff6 libjpeg-turbo8 \
@@ -105,12 +105,41 @@ RUN useradd --create-home --uid 10004 --shell /bin/bash agent \
     && visudo -cf /etc/sudoers.d/agent
 
 # Python: a venv the agent owns, so `pip install` works without sudo.
-COPY requirements.txt /tmp/requirements.txt
+COPY requirements.txt /opt/um-codex/python-requirements.txt
 RUN python3 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-deps -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt \
+    && /opt/venv/bin/pip install --no-deps --require-hashes -r /opt/um-codex/python-requirements.txt \
+    && /opt/venv/bin/pip check \
     && chown -R agent:agent /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
+
+# Research authoring and dashboard tools. Versions are fixed; Quarto's
+# release assets are verified on both supported architectures. Quarto brings
+# its own Pandoc and Typst, which are the image's `pandoc` (for R Markdown
+# too) and `typst`: HTML, DOCX and PDF (through Typst, fonts included) work
+# offline. No TeX or GPU stack: those need a project-specific installation.
+ARG QUARTO_VERSION=1.10.18
+RUN arch="$(dpkg --print-architecture)" \
+    && case "$arch" in \
+        amd64) checksum=4bdf5a17df300003beb2f8f0e4dfe568e2ca0ff91318220c8537d2655015c430 ;; \
+        arm64) checksum=ed3f70f63ee12b290ea1e38da08aa7c74c6843f6bed6df828e1e1652ef6d7d98 ;; \
+        *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL "https://github.com/quarto-dev/quarto-cli/releases/download/v${QUARTO_VERSION}/quarto-${QUARTO_VERSION}-linux-${arch}.deb" -o /tmp/quarto.deb \
+    && echo "$checksum  /tmp/quarto.deb" | sha256sum -c - \
+    && dpkg -i /tmp/quarto.deb \
+    && rm /tmp/quarto.deb \
+    && ln -s "/opt/quarto/bin/tools/$(uname -m)/pandoc" /usr/local/bin/pandoc \
+    && ln -s "/opt/quarto/bin/tools/$(uname -m)/typst" /usr/local/bin/typst \
+    && pandoc --version && typst --version
+# CRAN's fs binary (used by renv/Shiny) links against Ubuntu's libuv.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libuv1t64 \
+    && rm -rf /var/lib/apt/lists/*
+RUN install2.r --error --skipinstalled --ncpus -1 renv shiny \
+    && Rscript -e 'stopifnot(as.character(packageVersion("renv")) == "1.2.4", as.character(packageVersion("shiny")) == "1.14.0")' \
+    && rm -rf /tmp/downloaded_packages
+RUN npm install -g typescript@7.0.2 esbuild@0.28.2 \
+    && npm cache clean --force
 
 # Base instructions Codex reads (copied into CODEX_HOME at start) and the
 # smoke test, which CI can also run: `docker run --rm <image> um-codex-smoke`.
@@ -142,6 +171,24 @@ COPY umcodex-token /usr/local/bin/umcodex-token
 RUN chmod 0644 /etc/um-codex/sshd_config /etc/profile.d/um-codex.sh \
     && chmod 0755 /usr/local/bin/umcodex-token
 
+# UM-Codex's skills: user skills, which Codex 0.157.1 finds in
+# $HOME/.agents/skills (HOME=/home/agent; ext/skills host_roots.rs) and are
+# on by default, in the terminal and over ssh alike. Not /etc/codex/skills:
+# the launch mounts /etc/codex, hiding the image's. Codex's own bundled
+# skills are turned off in managed_config.toml (codex_config.py). ~/.agents
+# belongs to agent, so a session can add skills there too (for that launch:
+# home isn't kept; a project's .agents/skills under /work is).
+COPY --chown=agent:agent skills/ /home/agent/.agents/skills/
+COPY project-env.py /usr/local/bin/um-codex-env
+COPY dashboard.py /usr/local/bin/um-codex-dashboard
+COPY capability-check.py /usr/local/bin/um-codex-capability-check
+COPY dashboard-check.js /usr/local/bin/um-codex-dashboard-check
+COPY skills-check.py /usr/local/bin/um-codex-skills-check
+RUN chown agent:agent /home/agent/.agents \
+    && chmod -R a+rX /home/agent/.agents \
+    && chmod 0755 /usr/local/bin/um-codex-env /usr/local/bin/um-codex-dashboard /usr/local/bin/um-codex-capability-check \
+        /usr/local/bin/um-codex-dashboard-check /usr/local/bin/um-codex-skills-check
+
 USER agent
 WORKDIR /work
 ENV HOME=/home/agent \
@@ -149,7 +196,19 @@ ENV HOME=/home/agent \
     MPLCONFIGDIR=/tmp/matplotlib \
     R_LIBS_USER=/home/agent/R/library
 
-RUN um-codex-smoke
+# Runtime is also a diagnostic target; the shipped default stage always
+# executes the smoke test. Do not publish the unvalidated runtime target.
+# The smoke test's leftovers (caches, Quarto/Jupyter state, R and browser
+# temp folders) are removed. Then /codex-home must hold nothing but what
+# alpha.3's did (Codex's tmp/arg0 helper links, if anything): Docker copies
+# it into every new setup's volume, so an installation id, databases or
+# skills left there would be shared by every person's setup.
+FROM runtime AS validated
+RUN --network=none um-codex-smoke \
+    && sudo -n rm -rf /home/agent/.cache /home/agent/.ipython /home/agent/.jupyter /home/agent/.local \
+        /tmp/node-compile-cache /tmp/pw-* /tmp/Rtmp* \
+    && leftovers="$(find /codex-home -mindepth 1 ! -path /codex-home/tmp ! -path '/codex-home/tmp/arg0' ! -path '/codex-home/tmp/arg0/*')" \
+    && if [ -n "$leftovers" ]; then echo "/codex-home must be empty in the image; found:" >&2; echo "$leftovers" >&2; exit 1; fi
 
 ENTRYPOINT []
 # Put the base instructions where Codex reads them (they're the app's file,
