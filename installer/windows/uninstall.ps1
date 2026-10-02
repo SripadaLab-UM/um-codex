@@ -274,8 +274,15 @@ $Program = Join-Path $Root "versions\$Version\Scripts\um-codex.exe"
 if ($Version -and (Test-Path -LiteralPath $Program -PathType Leaf)) {
     $before = $Env:PYTHONUTF8
     $Env:PYTHONUTF8 = "1"
+    # The installed UM-Codex's own data folder, never another one: the
+    # program files go afterwards, which would orphan the installed one's things.
+    $dataBefore = $Env:UMCODEX_DATA_DIR
+    Remove-Item Env:UMCODEX_DATA_DIR -ErrorAction SilentlyContinue
     try { & $Program uninstall @choice; $code = $LASTEXITCODE }
-    finally { if ($null -eq $before) { Remove-Item Env:PYTHONUTF8 -ErrorAction SilentlyContinue } else { $Env:PYTHONUTF8 = $before } }
+    finally {
+        if ($null -eq $before) { Remove-Item Env:PYTHONUTF8 -ErrorAction SilentlyContinue } else { $Env:PYTHONUTF8 = $before }
+        if ($null -ne $dataBefore) { $Env:UMCODEX_DATA_DIR = $dataBefore }
+    }
     if ($code -ne 0) {
         Write-Host ""
         Write-Host "UM-Codex's program files were left as they were. Once that's sorted out, run the" -ForegroundColor Yellow

@@ -21,6 +21,9 @@ set +a
 # UMCODEX_INSTALL_DIR is for tests only (a temporary folder in place of this one).
 ROOT="${UMCODEX_INSTALL_DIR:-$HOME/Library/Application Support/UM-Codex/app}"
 UMCODEX="$ROOT/bin/um-codex"
+# The installed UM-Codex's own data folder, never another one: the program
+# files go afterwards, and that would orphan the installed data folder's things.
+unset UMCODEX_DATA_DIR
 
 if [ -x "$UMCODEX" ] && [ -f "$ROOT/current" ]; then
   # Its questions are answered in the terminal, even when this script came on

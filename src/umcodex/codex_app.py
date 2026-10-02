@@ -110,6 +110,8 @@ WINDOWS_FALLBACKS = {
     "couldn't close its Codex window: close it yourself (the second ChatGPT icon in the taskbar). "
     + _USE_TERMINAL,
     "not-started": "UM-Codex's Codex window didn't open, so UM-Codex stopped the sandbox. " + _USE_TERMINAL,
+    "already-open": "The Codex app didn't connect to the sandbox, so UM-Codex stopped this setup's sandbox. "
+    "Its Codex window was already open, and stays open (another setup may be using it). " + _USE_TERMINAL,
 }
 WINDOWS_FALLBACK = WINDOWS_FALLBACKS["stopped"]
 WINDOWS_NOTES = (
@@ -2157,7 +2159,9 @@ class AppHold:
 
         _, user_data = copy_paths(self.data)
         if self._started_pid is None:
-            outcome = "not-started"
+            # Open from before (this launch brought it forward): not this launch's to close.
+            opened_before = state.get("copy") in ("brought-forward", "already-open")
+            outcome = "already-open" if opened_before else "not-started"
         elif self._copy_shared(running):
             outcome = "shared"
         elif win.stop(self._started_pid, user_data, self.run, self._started):

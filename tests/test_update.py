@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import subprocess
@@ -17,7 +18,15 @@ from tests.fake_github import AGENT, GATEWAY, FakeGitHub, make_release, sha256
 from umcodex import signing
 from umcodex.launch import LaunchLock
 from umcodex.releases import NOT_CONFIGURED, ChecksumMismatch, ReleaseSource
-from umcodex.update import Layout, Updater, check_images, check_requirements, launch_notice, remember_check
+from umcodex.update import (
+    Layout,
+    Updater,
+    check_images,
+    check_requirements,
+    launch_notice,
+    remember_check,
+    say_now,
+)
 
 
 class FakeTools:
@@ -536,6 +545,9 @@ def test_images_that_cant_be_pulled_undo_the_install(app, github, key, data_fold
     tools.pull_code = 1
     assert updater(app, github, public, tools, said, data_folder).update() == 1
     assert "UM-Codex 0.1.0a1 is still the one in use" in said[-1]
+    # The new version's `um-codex pull` said why (Docker, the registry, the
+    # disk); this doesn't guess.
+    assert "the lines above say why" in said[-1] and "Docker Desktop" not in said[-1]
     assert pointer(app) == ("0.1.0a1", "0.0.9")
     assert not (app / "versions" / "0.1.0a3").exists() and not (app / "downloads").exists()
 
@@ -850,3 +862,29 @@ def test_the_cli_takes_from_launcher(monkeypatch):
     assert cli.main(["update", "--from-launcher"]) == 0
     assert cli.main(["update"]) == 0
     assert made == [{"close_window": False}, {"close_window": True}]
+
+
+def test_what_the_update_says_comes_before_a_steps_own_output(tmp_path):
+    """With stdout a file or a pipe (the launcher's Update, Windows), the
+    update's lines aren't held back until after the image pull's progress."""
+    script = tmp_path / "order.py"
+    script.write_text(
+        "import sys\n"
+        "from umcodex import update\n"
+        "update.say_now('Checking for a newer UM-Codex...')\n"
+        "print('Downloading its container images...')\n"  # plain print: run_command flushes it
+        "child = [sys.executable, '-c', 'print(\"docker progress\")']\n"
+        "update.run_command(child, timeout=60, capture=False)\n"
+        "print('after')\n"
+    )
+    out = tmp_path / "out.txt"
+    with out.open("wb") as file:
+        subprocess.run([sys.executable, str(script)], stdout=file, timeout=60, check=True)
+    assert out.read_text().splitlines() == [
+        "Checking for a newer UM-Codex...",
+        "Downloading its container images...",
+        "docker progress",
+        "after",
+    ]
+    assert inspect.signature(Updater).parameters["say"].default is say_now
+

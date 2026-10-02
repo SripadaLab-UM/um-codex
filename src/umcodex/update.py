@@ -57,6 +57,7 @@ from typing import Protocol
 import httpx
 
 from umcodex import __version__
+from umcodex.containers import say_now
 from umcodex.launch import LaunchLock, launch_is_live, launches_dir
 from umcodex.paths import app_dir, data_dir, default_data_dir
 from umcodex.releases import (
@@ -119,6 +120,11 @@ def run_command(
 ) -> subprocess.CompletedProcess[str]:
     """Run a step. Captured steps (uv, --version) are quiet; the rest (pulling
     images) show their own progress in the terminal."""
+    # What this process printed goes out first: a child writes to the same
+    # terminal, file or pipe directly, and stdout to a file or a pipe (the
+    # launcher's Update, Windows) is buffered.
+    sys.stdout.flush()
+    sys.stderr.flush()
     return subprocess.run(
         list(command),
         capture_output=capture,
@@ -409,7 +415,7 @@ class Updater:
         uv: str | None = None,
         platform: str = sys.platform,
         data: Path | None = None,
-        say: Say = print,
+        say: Say = say_now,
         close_window: bool = True,
     ) -> None:
         self.platform = platform
@@ -567,7 +573,7 @@ class Updater:
             self.say("Downloading its container images...")
             if not self._pull(version):
                 raise UpdateFailed(
-                    f"Its container images couldn't be downloaded (is Docker Desktop running?). "
+                    f"Its container images couldn't be downloaded (the lines above say why). "
                     f"UM-Codex {self.current} is still the one in use; try again later."
                 )
             if running_launch(self.data):

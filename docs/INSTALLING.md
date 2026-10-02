@@ -55,7 +55,10 @@ Steps:
    works as people use it (`um-codex --version` through the link, run in
    another folder). The end of the install says how to run it: `um-codex` if
    `~/.local/bin` was on PATH and the link works, otherwise the full path.
-4. **Images:** `um-codex pull`. If it fails, the install stops and says to
+4. **Images:** `um-codex pull`. An image already here by its pinned digest
+   isn't pulled again, and a failed pull is tried twice more; if it still
+   fails, `um-codex pull` says why (Docker not running, the registry or the
+   network, the disk), quoting Docker, and the install stops and says to
    run it again.
 5. **Toolkit key:** if the Keychain has a key already (`security
    find-generic-password -s UM-Codex -a toolkit-api-key`, which doesn't read
@@ -87,7 +90,9 @@ Steps:
    An answer of no is remembered (`ssh-include-declined` in the data
    folder), so installing again doesn't ask again (`um-codex ssh-include
    --ask-again` asks). `um-codex ssh-include` itself refuses to ask without a
-   terminal (exit 1, nothing added).
+   terminal (exit 1, nothing added). On Windows a terminal is a console
+   (`GetConsoleMode` on the input handle, `cli.stdin_is_terminal`):
+   `isatty()` is also true there for NUL, so `< NUL` would have passed.
    **No terminal adds nothing:** consent must be the person's, so it says
    the line wasn't asked about, and the launcher window explains it on the
    setup's card ("Add the line and start") when a setup in the Codex app is
@@ -95,7 +100,9 @@ Steps:
    Then "Done", where everything went, and the offer to show and open it.
 
 `installer/macos/uninstall.sh` runs `um-codex uninstall` (which first asks
-"Uninstall UM-Codex? [y/N]", then about the images and the data; its options
+"Uninstall UM-Codex? [y/N]", then about the images and the data; scoped to
+its data folder, see DESIGN) with `UMCODEX_DATA_DIR` unset: the program files
+go afterwards, so it must be the installed data folder's uninstall (its options
 are passed on, `--yes` included), reading `/dev/tty` when it can be opened
 (with no terminal a question reads end-of-input, which `um-codex` takes as
 no). If that stops or fails, it says "Nothing else was removed." and exits
@@ -384,8 +391,11 @@ the consent is the person's, not the one running the installer for them.
 Then "All done!" with a summary.
 
 `uninstall.ps1 [-DeleteData | -KeepData] [-Yes]` (both data options at once:
-refused, exit 2) runs `um-codex uninstall` (containers, networks, images, the
-key, and the data if asked). Only once that has succeeded does it remove uv,
+refused, exit 2) runs `um-codex uninstall` with `UMCODEX_DATA_DIR` removed
+from its environment (put back afterwards) (containers, networks, images, the
+key, and the data if asked; see DESIGN for its scope: only the installed
+copy's data folder removes the key and the images, and no uninstall removes
+another data folder's containers). Only once that has succeeded does it remove uv,
 the installer's folders and the program files (`versions`, `bin`, `icons`, `downloads`, `current`,
 `previous`, `launchers`), the shortcuts, the PATH entry and the installer's leftovers, and
 lists anything it couldn't remove.

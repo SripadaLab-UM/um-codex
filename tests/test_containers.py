@@ -67,6 +67,16 @@ def test_everything_created_is_labelled(tmp_path, internet):
     assert labels_of(s.volume_command())["umcodex.setup"] == "thesis-a1b2c3"
 
 
+def test_a_launch_names_its_data_folder_too(tmp_path):
+    """umcodex.data, beside the instance (a hash): a later version can tell a
+    data folder that's gone from one in use."""
+    s = LaunchSpec(**{**spec(tmp_path, internet=True).__dict__, "data_folder": "/Users/x/UM-Codex"})
+    created = [*s.network_commands(), s.gateway_commands()[0], s.agent_commands()[0], s.volume_command()]
+    for command in created:
+        assert labels_of(command)["umcodex.data"] == "/Users/x/UM-Codex", command
+        assert labels_of(command)["umcodex.instance"] == "0123456789abcdef"
+
+
 def test_internet_off_internal_network_only_and_no_dns(tmp_path):
     s = spec(tmp_path, internet=False)
     create, gateway_bridge = s.network_commands()

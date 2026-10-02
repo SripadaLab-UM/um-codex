@@ -482,6 +482,7 @@ def run(
             env_file=folder / "agent.env",
             image_cmd=image_command(docker, image),
             extra_labels=hold.labels if hold is not None else (),
+            data_folder=str(data.resolve()),
         )
         # Files the Linux containers read get Unix line ends, on Windows too.
         _write(spec.gateway_conf, render_gateway_conf(port))

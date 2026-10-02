@@ -205,10 +205,10 @@ def test_the_cli_runs_the_installers_question_only_at_a_terminal(monkeypatch, ca
     monkeypatch.setattr(
         codex_app, "offer_include", lambda ask, say, ask_again: calls.append((ask, say, ask_again)) or 1
     )
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(cli, "stdin_is_terminal", lambda: False)
     assert cli.main(["ssh-include"]) == 1
     assert calls == [] and "no terminal" in capsys.readouterr().out
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "stdin_is_terminal", lambda: True)
     assert cli.main(["ssh-include"]) == 1
     assert cli.main(["ssh-include", "--ask-again"]) == 1
     assert calls == [(input, print, False), (input, print, True)]
@@ -2037,3 +2037,53 @@ def test_an_unreadable_copy_state_isnt_reopened(tmp_path, data_folder, monkeypat
     )  # fmt: skip
     hold(_running(tmp_path, data_folder))
     assert not any("terminate()" in " ".join(c) for c in run.calls)
+
+
+def test_on_windows_a_copy_that_was_already_open_is_left_open(tmp_path, data_folder):
+    """The copy was open before this launch (brought forward, not started):
+    if the app then doesn't connect, only this launch's sandbox stops, and
+    the message says the window stays open (another setup may use it)."""
+    running = _running(tmp_path, data_folder)
+    # Not seeded (the copy was open), so the first steps show: the longer limit.
+    times = iter([0.0, codex_app.WINDOWS_STEPS_SECONDS + 1])
+    docker = FakeDocker(running_for=99, connects_after=None)
+    hold, calls, started, said = _windows_hold(tmp_path, data_folder, docker, clock=lambda: next(times))
+    _, user_data = codex_app.copy_paths(data_folder)
+    plain_run = hold.run
+
+    def open_already(command, **options):
+        if command[0].lower().endswith("powershell.exe") and "Win32_Process" in command[-1]:
+            calls.append(command)
+            line = f'777 "{WINDOWS_PACKAGE}\\app\\ChatGPT.exe" --user-data-dir={user_data}'
+            return subprocess.CompletedProcess(command, 0, line, "")
+        if command[0].lower().endswith("powershell.exe") and "AppActivate" in command[-1]:
+            return subprocess.CompletedProcess(command, 0, "True\r\n", "")
+        return plain_run(command, **options)
+
+    hold.run = open_already
+    assert hold(running) == 1
+    assert started == []  # not started again
+    assert not any(c[0].lower().endswith("taskkill.exe") for c in calls)  # and not closed
+    assert said[-1] == codex_app.WINDOWS_FALLBACKS["already-open"]
+    assert "stays open" in said[-1] and "didn't open" not in said[-1]
+    assert codex_app.last_fallback("thesis-a1", data_folder) == codex_app.WINDOWS_FALLBACKS["already-open"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows' consoles")
+def test_on_windows_only_a_console_counts_as_a_terminal():
+    """isatty() is True for NUL on Windows (a character device); the console
+    mode isn't: NUL and a pipe aren't terminals, so ssh-include asks nothing."""
+    probe = (
+        "from umcodex.cli import stdin_is_terminal; import sys; "
+        "print(stdin_is_terminal(), sys.stdin.isatty())"
+    )
+
+    def asked_with(stdin):
+        command = [sys.executable, "-c", probe]
+        done = subprocess.run(command, stdin=stdin, capture_output=True, text=True, timeout=60)
+        return done.stdout.split(), done.stderr
+
+    nul, said = asked_with(subprocess.DEVNULL)
+    assert nul == ["False", "True"], said  # NUL: isatty() says yes (the quirk), the console check no
+    piped, said = asked_with(subprocess.PIPE)
+    assert piped[:1] == ["False"], said
