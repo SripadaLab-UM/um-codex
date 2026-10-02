@@ -504,6 +504,36 @@ def test_without_a_package_it_says_how_to_run_it(machine):
     assert done.returncode == 2 and "Usage: sh install.sh --package" in done.stdout
 
 
+def test_the_uv_it_used_is_noted_for_um_codex_update(machine):
+    """`um-codex update` may run without the installer's PATH (from the app,
+    which has no /opt/homebrew/bin): the installer notes its uv's full path."""
+    done = install(machine, "0.1.0a3")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (root(machine) / "uv").read_text() == f"{machine['tools'] / 'uv'}\n"
+    assert not (root(machine) / ".uv.new").exists()
+
+
+def test_a_homebrew_uv_is_noted_by_its_link_not_the_versioned_file(machine, tmp_path):
+    """Homebrew's /opt/homebrew/bin/uv is a link into Cellar/uv/<version>,
+    which `brew upgrade` replaces: the link is what's noted (and run)."""
+    cellar = tmp_path / "homebrew" / "Cellar" / "uv" / "0.12.19" / "bin"
+    cellar.mkdir(parents=True)
+    executable(cellar / "uv", FAKE_UV)
+    brew_bin = tmp_path / "homebrew" / "bin"
+    brew_bin.mkdir()
+    (brew_bin / "uv").symlink_to(cellar / "uv")
+    (machine["tools"] / "uv").unlink()
+    path = f"{brew_bin}:{machine['tools']}:{machine['system']}"
+    done = install(machine, "0.1.0a3", PATH=path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (root(machine) / "uv").read_text() == f"{brew_bin / 'uv'}\n"
+    # Installing again with another uv first on PATH notes that one instead.
+    executable(machine["tools"] / "uv", FAKE_UV)
+    again = install(machine, "0.1.0a4")
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert (root(machine) / "uv").read_text() == f"{machine['tools'] / 'uv'}\n"
+
+
 def test_uv_installs_only_what_requirements_txt_pins_by_hash(machine):
     done = install(machine, "0.1.0a3", UV_INDEX_URL="https://evil.example/simple")
     assert done.returncode == 0, done.stdout + done.stderr

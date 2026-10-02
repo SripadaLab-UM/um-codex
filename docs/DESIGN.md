@@ -91,7 +91,9 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      and prints diagnostics with no secrets in them.
    - `um-codex update` installs the newest signed release beside this one,
      pulls its images and switches to it; `--rollback` switches back
-     (docs/RELEASING.md). Once a day a launch says when one is out.
+     (docs/RELEASING.md). Each launch says when one is out (GitHub asked
+     at most every ten minutes), and the launcher window checks when it
+     opens and every hour while it's open.
    - `um-codex uninstall`.
 
    The installers call some of these, so their names, flags and exit codes
@@ -540,7 +542,7 @@ um-codex/
     signing.py              Ed25519 release signatures (from DataLab)
     release_keys.py         the pinned release public keys (from DataLab; empty until the maintainer adds one)
     releases.py             which GitHub release is offered, and its checks (from DataLab)
-    update.py               `um-codex update`, rollback, the daily notice (from DataLab's updater, simpler)
+    update.py               `um-codex update`, rollback, the launch-time check (from DataLab's updater, simpler)
     launchers.py            what the Mac app and Windows shortcuts contain; written by the installers,
                             brought up to date by update, rollback and a launch (when the recorded format differs)
     gateway.conf            (from DataLab, /mcp removed)
@@ -785,8 +787,12 @@ modes, rigor, and the frontend.
      requirements, images matching the package's), installed beside with
      the installers' uv flags, images pulled, `current`/`previous` switched,
      older versions pruned; refused while a launch runs. `--rollback`. A
-     launch checks at most once a day, waits 3 s at most, and prints one
-     line when a newer release is out.
+     launch checks (at most once a day until alpha.6; since then GitHub is
+     asked at most every ten minutes, with the list's ETag, and the
+     launcher window checks hourly too), waits 3 s at most, and prints one
+     line when a newer release is out. uv is the one the installer noted in
+     `<app>/uv` (since alpha.6), else `~/.local/bin`, Homebrew's, then PATH:
+     the app's launcher window has no Homebrew on its PATH.
    - Not yet: the key is the maintainer's to make and pin
      (`release_keys.py` ships empty, so no release can be published and
      no installed copy offers an update until then); no release has been
@@ -1057,8 +1063,8 @@ modes, rigor, and the frontend.
        explanation the terminal gives, then one administrator prompt);
        the key saved or not ("Replace key…": a small masked form posted to
        the local API, checked against the Toolkit's `/models`, saved in the
-       keychain, never echoed or logged); an update when the daily check
-       found one ("run um-codex update in a terminal");
+       keychain, never echoed or logged); an update when the launch-time
+       check found one ("run um-codex update in a terminal");
      - running launches: "*setup* · Running since 14:05 · Stop";
      - saved setups as cards (name, working folder, other folders as chips
        marked read or read & write, internet, browser tool, approvals, "Open

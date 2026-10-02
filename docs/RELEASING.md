@@ -251,8 +251,16 @@ but nothing checks that pair against the key).
    new `um-codex --version`, then write `.complete` with the package's
    checksum (as the installers do, so the same package is reused; a reused
    folder that no longer passes `--version` is removed and installed
-   afresh). uv is the installers' own: `%LOCALAPPDATA%\UM-Codex\uv\uv.exe`
-   on Windows, `~/.local/bin/uv` on a Mac, before any other on PATH.
+   afresh). uv is the one the installer used, which it notes by its full
+   path in `<app>/uv` (since 0.1.0-alpha.6; Homebrew's link, not the
+   versioned file it leads to), if that still runs and says `uv ...`;
+   otherwise the first of `%LOCALAPPDATA%\UM-Codex\uv\uv.exe` (Windows),
+   `~/.local/bin/uv`, `/opt/homebrew/bin/uv`, `/usr/local/bin/uv` (Mac), then
+   PATH (`update.find_uv`). The launcher window, started by the Mac app, has
+   no `/opt/homebrew/bin` on its PATH: before alpha.6 its Update couldn't
+   find a Homebrew uv. Without one it says where it looked and to run
+   `um-codex update` in Terminal; after an update it notes the uv it used,
+   so installs from before alpha.6 get the note too.
 4. **Pull** the new version's images with its own `um-codex pull`.
 5. **Switch**: on Windows first, `bin\um-codex.exe` becomes a copy of the
    new version's launcher (copied beside it as `.um-codex.exe.new`, the
@@ -293,7 +301,7 @@ most once a day, in the log only).
 are caught at a launch too. Before tagging, `um-codex launchers --refresh
 --dry-run` on an installed Mac shows what the update will change.
 
-**From the launcher window** (M7): when the daily check (or **Check for
+**From the launcher window** (M7): when the launch-time check (or **Check for
 updates**, which asks GitHub at once through `update.check_now`, with the
 same signature checks) finds a newer release, the window's status strip
 says "UM-Codex X is available · Update". Update runs this very version's
@@ -305,17 +313,28 @@ shows only fixed words for its progress (`ui/server.py` `UPDATE_STEPS`:
 the new image…"), each chosen by a line the update prints and never that
 line itself; the update's output goes to `um-codex.log`. Then "Updated to
 UM-Codex X · Reopen" (Reopen ends this window's server and starts the
-installed version's), or one plain line pointing to `um-codex.log`. It's
+installed version's), or one plain line pointing to `um-codex.log` (or, if
+the update found no uv, one saying to run `um-codex update` in Terminal). It's
 refused while a setup is running ("Stop running setups first: …").
 Rollback stays in the terminal (`um-codex update --rollback`).
 
-**At launch**, at most once a day, `um-codex` asks the same question and,
-when a newer release is out, prints one line: "UM-Codex X is available: run
-um-codex update". It waits for GitHub 3 seconds at most (a slower answer is
-remembered for the next launch), and says nothing when offline, in a
-development copy, or while no key is pinned. It remembers the last check in
-`update-check.json` in the data folder. `UMCODEX_NO_UPDATE_CHECK=1` turns it
-off.
+**At launch** (each `um-codex launch`), when the launcher window opens,
+and every hour while it's open, UM-Codex asks the same question
+(`update.launch_notice`); in a terminal, when a newer release is out, it
+prints one line: "UM-Codex X is available: run um-codex update", and the
+window shows "UM-Codex X is available · Update" at its next poll. A launch
+waits for GitHub 3 seconds at most (a slower answer is remembered for the
+next one), and nothing is asked in a development copy or while no key is
+pinned. GitHub is asked at most every ten minutes: a check sooner gets the
+last answer, kept in `update-check.json` in the data folder with the
+version it was for and the ETag of GitHub's list. Offline, the last answer
+stands. The next check sends that ETag (`If-None-Match`): GitHub answers
+304 when no release changed, which it doesn't count against the 60
+requests an hour it allows an address without signing in. A full check is
+three requests (the list, `SHA256SUMS`, its signature), so one computer
+makes 18 an hour at most however often it's launched, and usually 3 an
+hour or none; computers sharing an address (a campus network) stay under
+the limit too. `UMCODEX_NO_UPDATE_CHECK=1` turns it all off.
 
 ## Where the app lives
 

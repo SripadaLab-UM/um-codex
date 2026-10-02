@@ -773,7 +773,21 @@ export PATH="$HOME/.local/bin:$PATH"
 if ! command -v uv >/dev/null 2>&1; then
   curl -q -LsSf --proto '=https' --proto-redir '=https' --tlsv1.2 "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
 fi
-uv --version
+# The uv used, by its full path: it's used so below, and noted in the install
+# folder (step 3) for `um-codex update`, which may run without this PATH (the
+# app's Update doesn't see /opt/homebrew/bin). A link (Homebrew's) is noted as
+# it is, not the file it leads to, which a Homebrew upgrade moves.
+UV="$(command -v uv)"
+case "$UV" in
+  /*) ;;
+  */*) UV="$(cd "$(dirname "$UV")" && pwd)/$(basename "$UV")" ;;
+  *) UV="" ;;
+esac
+if [ -z "$UV" ] || [ ! -x "$UV" ]; then
+  echo "uv couldn't be found after installing it. Run this installer again."
+  exit 1
+fi
+"$UV" --version
 
 step "3/6 UM-Codex"
 # The package's file name carries its version: umcodex-<version>-py3-none-any.whl
@@ -826,11 +840,11 @@ else
   # uv's own Python build (downloaded once, kept by uv), never one found on
   # this Mac (Homebrew's, python.org's, Xcode's), which an upgrade or
   # uninstall elsewhere could change or remove from under UM-Codex.
-  uv venv -q --no-config --python 3.13 --python-preference only-managed "$TARGET"
+  "$UV" venv -q --no-config --python 3.13 --python-preference only-managed "$TARGET"
   # Every file checked against requirements.txt's hashes, only wheels, and
   # only from PyPI. Copied, not hardlinked into uv's cache (which fails in a
   # cloud-synced or redirected folder).
-  (cd "$STAGE" && uv pip install -q --no-config --require-hashes --only-binary :all: \
+  (cd "$STAGE" && "$UV" pip install -q --no-config --require-hashes --only-binary :all: \
     --default-index https://pypi.org/simple --link-mode copy --python "$TARGET/bin/python" -r requirements.txt)
   SAID="$("$TARGET/bin/um-codex" --version)"
   if [ "$SAID" != "UM-Codex $VERSION" ]; then
@@ -858,6 +872,8 @@ if [ -n "$OLD" ] && [ "$OLD" != "$VERSION" ]; then
   printf '%s\n' "$OLD" > "$ROOT/.previous.new" && mv "$ROOT/.previous.new" "$ROOT/previous"
 fi
 printf '%s\n' "$VERSION" > "$ROOT/.current.new" && mv "$ROOT/.current.new" "$ROOT/current"
+# The uv this install used, for `um-codex update` (update.py's find_uv).
+printf '%s\n' "$UV" > "$ROOT/.uv.new" && mv "$ROOT/.uv.new" "$ROOT/uv"
 UMCODEX="$ROOT/bin/um-codex"
 "$UMCODEX" --version
 # The plain `um-codex` command: a link in ~/.local/bin (uv's installer puts

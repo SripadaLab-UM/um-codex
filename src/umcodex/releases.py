@@ -3,9 +3,12 @@
 # DataLab's; its settings, channels and hourly check are left out.
 """Checking GitHub for a newer UM-Codex release.
 
-`um-codex update` (and, at most once a day, a launch) asks the GitHub Releases
-API of SripadaLab-UM/um-codex for its releases, without signing in: the repo
-is public. Nothing else makes this call, and never a container.
+`um-codex update` (and a launch, or the launcher window, at most every ten
+minutes: update.py) asks the GitHub Releases API of SripadaLab-UM/um-codex for
+its releases, without signing in: the repo is public. Nothing else makes this
+call, and never a container. A repeated check sends the list's last ETag
+(`If-None-Match`): GitHub answers 304 when nothing changed, and a 304 doesn't
+count against its limit for unsigned-in requests (60 an hour per address).
 
 Which release is offered (DataLab's rules):
 
@@ -83,6 +86,10 @@ class ChecksumMismatch(RuntimeError):
 
 class NotSigned(ChecksumMismatch):
     """A release's SHA256SUMS has no valid signature from a pinned key."""
+
+
+class NotModified(Exception):
+    """GitHub's list of releases is as it was when it gave the ETag sent (304)."""
 
 
 class NotConfigured(RuntimeError):
@@ -216,7 +223,8 @@ def find_update(source: ReleaseSource, current: str, keys: Sequence[str]) -> Off
     """The newest release to install over `current`, checked, or None if there's none.
 
     Raises CheckProblem when GitHub can't be asked, NotSigned or
-    ChecksumMismatch when the newest release doesn't pass."""
+    ChecksumMismatch when the newest release doesn't pass, and NotModified
+    when the source sent an ETag and the list hasn't changed since."""
     releases, _skipped = releases_from(source.list(), source.repository, source.api)
     release = choose(releases, current)
     if release is None:
@@ -254,21 +262,31 @@ class ReleaseSource:
         api: str | None = None,
         http: httpx.Client | None = None,
         timeout: httpx.Timeout = TIMEOUT,
+        etag: str | None = None,
     ) -> None:
         self.repository = repository
         self.api = api or api_base()
         self._http = http or httpx.Client(timeout=timeout)
+        # Sent as If-None-Match with the list; then the ETag GitHub gave for it.
+        self.etag = etag
 
     def list(self) -> list[Any]:
+        """The releases. Raises NotModified if `etag` was given and still holds."""
+        headers = dict(_HEADERS)
+        if self.etag:
+            headers["if-none-match"] = self.etag
         try:
             response = self._http.get(
                 f"{self.api}/repos/{self.repository}/releases",
                 params={"per_page": "30"},
-                headers=_HEADERS,
+                headers=headers,
             )
         except httpx.HTTPError:
             raise CheckProblem("Couldn't reach GitHub (no internet connection?).") from None
+        if response.status_code == 304 and self.etag:
+            raise NotModified(self.etag)
         _raise_for(response)
+        self.etag = response.headers.get("etag") or None
         try:
             return response.json()
         except ValueError:

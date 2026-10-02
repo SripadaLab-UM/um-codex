@@ -1277,6 +1277,15 @@ function Write-Atomically($file, $value) {
     Move-Item -LiteralPath "$file.tmp" -Destination $file -Force
 }
 
+# Notes the uv this install used, by its full path, in "<root>\uv", for
+# `um-codex update` (update.py's find_uv reads it first). UTF-8 without a BOM:
+# the path may have letters ASCII doesn't (the account's folder name).
+function Write-UvRecord($root, $uv) {
+    $record = Join-Path $root "uv"
+    [System.IO.File]::WriteAllBytes("$record.tmp", (New-Object System.Text.UTF8Encoding($false)).GetBytes("$uv`n"))
+    Move-Item -LiteralPath "$record.tmp" -Destination $record -Force
+}
+
 # Puts a version's launcher at $destination. A running um-codex.exe can't be
 # overwritten, but it can be renamed: the new copy is made beside it first
 # (".um-codex.exe.new", so a copy that fails part way never leaves bin without
@@ -1859,6 +1868,7 @@ $CurrentFile = Join-Path $Root "current"
 $Old = if (Test-Path -LiteralPath $CurrentFile) { "$(Get-Content -LiteralPath $CurrentFile -TotalCount 1)".Trim() } else { "" }
 if ($Old -and $Old -ne $Version) { Write-Atomically (Join-Path $Root "previous") $Old }
 Write-Atomically $CurrentFile $Version
+Write-UvRecord $Root $Uv
 & $UmCodex --version
 Add-UserPath $Bin
 

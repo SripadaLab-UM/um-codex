@@ -328,8 +328,9 @@ def _setups() -> int:
 
 
 def _update_notice() -> None:
-    """One line if a newer release is out (GitHub asked at most once a day, 3 s
-    at most). Nothing about it, not even importing it, may stop a launch."""
+    """One line if a newer release is out (GitHub asked at most every ten
+    minutes, 3 s at most). Nothing about it, not even importing it, may stop
+    a launch."""
     try:
         from umcodex.update import launch_notice
 

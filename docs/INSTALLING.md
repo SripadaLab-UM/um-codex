@@ -35,7 +35,11 @@ Steps:
 
 1. **Docker Desktop:** found, started, or (asked first) downloaded, checked
    and installed. This is DataLab's step, unchanged but for names.
-2. **uv:** installed if it's missing (pinned 0.12.19).
+2. **uv:** installed if it's missing (pinned 0.12.19). The uv used (the
+   one on PATH, Homebrew's included, by its full path, a link kept as a
+   link) is noted in `<app>/uv` for `um-codex update`, which may run from
+   the app without the terminal's PATH. Windows notes its pinned uv.exe
+   the same way.
 3. **UM-Codex:** the package, with its own Python, in
    `~/Library/Application Support/UM-Codex/app` (`UMCODEX_INSTALL_DIR` for
    tests):
