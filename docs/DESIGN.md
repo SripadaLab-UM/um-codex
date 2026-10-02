@@ -11,7 +11,9 @@ container on a Mac or Windows computer. There's no web app and no knowledge
 base: **Codex's own terminal interface is the front end**, or, on a Mac,
 Codex's desktop app working in the container (M6). At each launch the
 person decides what the container can see and do, then Codex opens in their
-terminal (or the app).
+terminal (or the app). As a secondary choice, behind a caution dialog, a
+setup can run Codex directly on the Mac in a local copy of the app, for
+computer and browser control (M4, "On this computer"): no sandbox there.
 
 It follows ITS's "Codex Setup" articles for the model settings (the
 `toolkit` provider, `https://api.toolkit.umgpt.umich.edu/v1`,
@@ -436,7 +438,7 @@ um-codex/
     codex_config.py         Codex's enforced settings and model catalog (from DataLab's config.toml)
     codex_app.py            "Open in: Codex app" (M6): ssh files, ssh-proxy, the container's ssh side,
                             the app copy, the launch held while the app uses it
-    this_computer.py        "On this computer" (M4 spike): the local app copy's config, state and relay
+    this_computer.py        "On this computer" (M4): the local app copy, its config, state, relay and launch
     credentials.py          (from DataLab)
     secret_prompt.py        (from DataLab)
     docker_path.py          (from DataLab)
@@ -696,44 +698,116 @@ modes, rigor, and the frontend.
      (`release_keys.py` ships empty, so no release can be published and
      no installed copy offers an update until then); no release has been
      made; Windows update and rollback are unit-tested only.
-5. **M4, "On this computer" mode (asked for on 2026-10-01):**
-   - The first launch question becomes "Where should Codex run? In a
-     sandbox (container) / On this computer". It's saved with the setup.
-     The group is expected to use both.
-   - On this computer:
-     - A native Codex, pinned and installed by UM-Codex in its program
-       folder, not whatever `codex` is on PATH.
-     - The same localhost relay, so the key stays in the keychain and is
-       never put in `auth.json`.
-     - A working folder, and Codex's own sandbox as a choice: "full access"
-       (the default) or "this folder only".
-   - Browser control in the person's own browser: the Playwright MCP server
-     connected to their running Chrome or Edge through its extension. Each
-     action asks for approval by default.
-   - Computer control:
-     - First, a short spike on the pinned Codex: do `computer_use`,
-       `browser_use` and `in_app_browser` work in the terminal Codex?
-     - If they don't, add a computer-control MCP tool (screenshots, mouse,
-       keyboard), with approval for each action.
-     - On a Mac, this needs one-time Screen Recording and Accessibility
-       permission.
-   - The summary says plainly that Codex can do anything the person can do
-     on this computer.
-   - Docker becomes optional in the installer for people who use only this
-     mode.
-   - **2026-10-02 spike** (`docs/spikes/2026-10-02-this-computer.md`, branch
-     `m4-this-computer`): the Codex app on the Mac as the front end. "On
-     this computer" is the secondary choice (under "More options"), behind a
-     caution dialog shown once when it's chosen (Cancel focused), with an
-     "On this computer" marker on the setup's card. A second UM-Codex copy
-     of the app (`<data>/codex-app-local/`), separate from the sandbox copy,
-     with the Toolkit through a relay on a fixed port, held by the launch
-     while the copy is open. Computer Use, the in-app browser and Chrome
-     control are bundled plugins behind remote flags (Statsig gates) and
-     the `node_repl` MCP server; whether the gates pass with no ChatGPT
-     account is the GUI test's first question. Image inputs through the
-     relay work. `this_computer.py` has the copy's config, state, relay and
-     tests; the live run of the copy is the GUI test's step 1.
+5. **M4, "On this computer" (asked for on 2026-10-01; spike and build on
+   branch `m4-this-computer`, 2026-10-02; spike notes and the GUI test in
+   `docs/spikes/2026-10-02-this-computer.md`).** Codex's desktop app working
+   directly on the Mac, for computer and browser control. Mac only.
+   `this_computer.py`.
+   - **The choice is secondary.** The setup's `runs_on` is `sandbox` (the
+     default; setups saved before M4 have no key, which means that) or
+     `this-computer`. The launcher form shows it under **More options** as
+     "Where Codex runs: In the sandbox (recommended) / On this computer".
+     Choosing "On this computer" opens the **caution dialog**, the one
+     deliberate pop-up (`confirmBox`, Cancel focused, so Return or Esc keep
+     the sandbox): "Codex will run on your Mac, not in the sandbox. It can
+     read, change and delete any of your files, use your apps and browser,
+     and act with your accounts. While it runs, it may also be able to reach
+     UM-Codex's own Toolkit key (it runs as you). Use it only when you need
+     computer or browser control." (`this_computer.WARNING`), buttons
+     Cancel and "Run on this computer". The card then carries an **"On this
+     computer"** badge (and a coloured edge; its accessible name says so
+     too), and Start never asks again. The terminal's questions don't offer
+     it; editing such a setup there keeps it.
+   - **The form for it:** read-only folders aren't offered (the other
+     folders become Read & write, with a note; the API refuses read-only
+     ones: Codex can read every file there anyway); "What Codex can change":
+     "Anything I can (full access)" (`local_access = "full"`, the default)
+     or "Only this setup's folders" (`folder`: Codex's own macOS sandbox,
+     Seatbelt, `sandbox_mode = "workspace-write"`, network from the setup's
+     internet setting), with the plain note that it doesn't limit computer
+     and browser control; "Ask before commands" on by default; "Computer
+     and browser control" (`computer_use`, default on); no internet or
+     browser-tool switches (the sandbox's browser tool is off); "Open in"
+     is the local window.
+   - **A separate app copy**, `<data>/codex-app-local/` (`codex-home`,
+     `user-data`, `relay-port`, `relay-token`, `models.json`), opened as M6
+     opens its copy (`open -n --env CODEX_HOME=… --env
+     CODEX_ELECTRON_USER_DATA_PATH=… --args --user-data-dir=…`), apart from
+     the person's own app and from the sandbox copy (`codex-app/`, whose
+     local chats stay blocked), so local and sandbox chats never share a
+     window, history or state file.
+   - **Its config.toml** (`local_config`, written at each start, the app's
+     other settings kept): provider `toolkit` at
+     `http://127.0.0.1:<port>/relay/v1` with `auth = { command =
+     "/bin/cat", args = [<relay-token>], refresh_interval_ms = 300000 }`
+     and no `requires_openai_auth` (no sign-in), `forced_login_method =
+     "api"`, analytics, feedback and update checks off, the setup's model,
+     the bundled catalog (no upgrade offers), `approval_policy` from the
+     setup, `approvals_reviewer = "user"` (no "Approve for me": it needs a
+     reviewer model the Toolkit doesn't have), the folders trusted, and,
+     with control off, `plugins."<name>@openai-bundled".enabled = false`
+     for `computer-use`, `browser` and `chrome` (switched back on, a false
+     UM-Codex wrote is set true; otherwise the app's own choice). These are
+     defaults the person can change in the app: nothing on a Mac enforces
+     settings for one copy only.
+   - **Seeded before it opens** (`seed_copy`, only while it isn't running),
+     the M6 way: a local project (`local-projects`, `{id, name, rootPaths,
+     createdAt, updatedAt}`, its id stable per working folder) with the
+     setup's folders, selected and first; the welcome flow and the bundled
+     models' announcements marked seen.
+   - **The launch** (`run_local`; the launcher's `LocalAppOpener` starts
+     `um-codex launch --setup <id> --open local` in the background, output
+     in `ui/local-launch.log`; in a terminal, `um-codex launch --setup <id>`
+     does the same in the foreground). No Docker. It takes a launch folder
+     and lock (`launch.json` with `app = {"local": true, "copy", "pid",
+     "seeded", "notes"}`, so the launcher's running list and Update's
+     "a setup is running" check see it), starts the relay
+     (`LocalRelay`: `RelayServer` on the port fixed per data folder; a
+     token written to `relay-token`, 0600), writes the files, opens the
+     copy (or brings it forward if it's open: it then keeps the settings
+     and project it opened with, and the relay keeps its token, so its
+     chats carry on), waits for the copy's main process to end, then stops
+     the relay and deletes the token. One setup on this computer at a time
+     (one copy, one relay). If another program took the port, a new one is
+     chosen (only while the copy is closed).
+   - **Stop** in the launcher quits UM-Codex's local copy (`stop_local`:
+     only the process whose arguments carry the copy's profile folder,
+     asked to quit through AppKit as its Quit menu does, else SIGTERM);
+     its launch then ends.
+   - **The key:** in the keychain, read only by the relay; never in the
+     copy's files or `auth.json`. The token works only through the relay,
+     only while it runs. Limits said plainly (the dialog, the summary): any
+     program running as the person can read the token file and use the
+     Toolkit through the relay while the copy is open; and Codex, running as
+     the person with full access, may be able to read UM-Codex's keychain
+     item the way UM-Codex does.
+   - **Computer Use, the in-app browser and Chrome** are OpenAI's bundled
+     plugins in that copy, behind its remote flags (Statsig gates
+     `1506311413`, `410262010`, `410065390`), the Codex features
+     `computer_use`, `browser_use`, `browser_use_external` and the
+     requirements' `allowBrowserAndComputerUse`; all three run through the
+     app's `node_repl` MCP server. Whether the gates pass with no ChatGPT
+     account is the GUI test's open question. Image inputs through the relay
+     work (checked live). Computer Use's macOS permissions (Screen Recording,
+     Accessibility) are asked for "Codex Computer Use"
+     (`com.openai.sky.CUAService`, copied into the copy's
+     `codex-home/computer-use/`); UM-Codex never grants or edits them.
+   - **Uninstall** refuses while the local copy is open; it removes
+     `codex-app-local` (settings, chats, plugins, its Computer Use copy:
+     nothing opens it without UM-Codex) and Chrome's native messaging
+     manifest (`com.openai.codexextension.json`) only when it leads into
+     that folder.
+   - **Not yet:** the terminal variant (a native `codex`, pinned and
+     installed by UM-Codex, with the same relay hold): it needs a pinned
+     download and its checks, left for later. Windows. Docker optional in the
+     installers for people who use only this mode.
+   - **Checked** with unit tests and the API (a stand-in copy of the app,
+     a stand-in key): the setup's fields, the form's API rules, Start with
+     no Docker and no question, one at a time, the launch holding the relay
+     until the copy quits (the relay answering with the token, the token
+     gone after), Stop quitting only UM-Codex's copy, uninstall. The live
+     run of a copy is the GUI test's (this session's permission check
+     refuses opening a full-access copy of the app).
 6. **M5, launcher window (asked for on 2026-10-01: the terminal's setup
    questions weren't friendly enough).** The UM-Codex app (Mac) and the
    Start menu and Desktop shortcuts (Windows) open a small page in the
@@ -1432,8 +1506,9 @@ modes, rigor, and the frontend.
   integrity-locked (no lockfile or hash for Codex's own npm dependencies), so
   a rebuild can pick up different dependency files; the release's provenance
   and digest pin what was actually built.
-- Controlling the person's own computer (desktop, apps, their browser): out
-  of scope. The container can't reach the host by design. A virtual desktop
+- Controlling the person's own computer (desktop, apps, their browser): not
+  from the sandbox (the container can't reach the host by design); that's
+  what "On this computer" (M4) is for, outside the sandbox. A virtual desktop
   inside the container that the person watches (noVNC) is a possible later
   option, if the group needs GUI apps.
 - Codex's own `browser_use`, `in_app_browser` and `computer_use` (checked on

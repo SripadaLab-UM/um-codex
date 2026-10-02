@@ -55,6 +55,11 @@ class FakeAppOpener(FakeOpener):
     label = "Codex app"
 
 
+class FakeLocalOpener(FakeOpener):
+    key = "this-computer"
+    label = "Codex app, on this computer"
+
+
 class FakeDocker:
     """`docker` as a list of the commands asked for; it answers `info`."""
 
@@ -125,6 +130,7 @@ def launcher_for_tests(**changes) -> server.Launcher:
             "terminal": FakeOpener(),
             "codex-app": opening.CodexAppOpener(find=lambda: None, platform="darwin"),
         },
+        "local_opener": FakeLocalOpener(),
         "docker": Docker(fake_docker),
         "run": fake_docker,
         "check_key": lambda key: "ok",
@@ -1386,7 +1392,9 @@ def test_models_come_newest_first_with_the_default_kept(folders_here):
 def test_the_page_starts_at_once_and_asks_only_before_stop_and_delete():
     script = (REPO / "src" / "umcodex" / "ui" / "static" / "app.js").read_text()
     assert "/prepare" not in script  # no summary page before a start
-    assert script.count("confirmBox(") == 4  # its definition, Stop, Delete and Windows' fix
+    # Its definition, Stop, Delete, Windows' fix, and choosing "On this computer" (M4: the one
+    # deliberate pop-up when the choice is made; Start never asks).
+    assert script.count("confirmBox(") == 5
     assert "/api/codex-app/allow" not in script and "allow_ssh_include: true" in script
     # The safety facts, short, on every card and under the form.
     for words in ("your real files, no undo", "could send what it can read anywhere", "only the model"):

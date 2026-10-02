@@ -193,9 +193,21 @@ const WORDS = {
   internetOff: "Internet off: Codex can reach only the model.",
   browserOn: "Browser tool on: a fresh browser in the sandbox, with none of your logins",
   key: "Your Toolkit key stays on this computer; the sandbox never sees it.",
+  // M4, "On this computer".
+  local: "On this computer: Codex runs on your Mac, not in the sandbox. It can do anything you can do here.",
+  localFull: "Codex can change and delete any of your files, not only these: no undo.",
+  localFolder: "Codex's commands can change only these folders (its own sandbox). Computer and browser control aren't limited by that.",
+  localControlOn: "Computer and browser control on: Computer Use, the app's browser and your Chrome (macOS asks once for Screen Recording and Accessibility).",
+  localControlOff: "Computer and browser control off.",
+  localKey: "Your Toolkit key stays in the keychain, but Codex runs as you here, so it may be able to reach it.",
 };
 
+function onThisComputer(s) {
+  return s.runs_on === "this-computer";
+}
+
 function accessLines(s) {
+  if (onThisComputer(s)) return [WORDS.local, s.computer_use === false ? WORDS.localControlOff : WORDS.localControlOn];
   const lines = [s.internet ? WORDS.internetOn : WORDS.internetOff];
   if (s.internet && s.browser) lines.push(WORDS.browserOn + (s.browser_asks ? " (asks before each action)." : "."));
   return lines;
@@ -203,6 +215,7 @@ function accessLines(s) {
 
 function codexLine(s) {
   const asks = s.approvals === "never" ? "runs commands without asking" : "asks before commands";
+  if (onThisComputer(s)) return ["UM-Codex's local Codex window", s.model, asks].join(" · ");
   return [openerLabel(s.open_in), s.model, asks].join(" · ");
 }
 
@@ -223,7 +236,7 @@ function facts(s, { key = "" } = {}) {
         more.map((f) => chip(f)),
         s.working ? el("button", { type: "button", class: "copy", key: `copy-${key}`, text: "Copy path", onclick: () => copyPath(s.working.path, splitPath(s.working.shown).name) }) : null,
       ),
-      el("p", { class: "line", text: WORDS.writes }),
+      el("p", { class: "line", text: onThisComputer(s) ? (s.local_access === "folder" ? WORDS.localFolder : WORDS.localFull) : WORDS.writes }),
     ),
     el("div", { class: "fact" }, el("span", { class: "label", text: "Access" }), accessLines(s).map((t) => el("p", { class: "line", text: t }))),
     el("div", { class: "fact" }, el("span", { class: "label", text: "Codex" }), el("p", { class: "line", text: codexLine(s) })),
@@ -446,6 +459,14 @@ function statusOf(s, run) {
   const mine = cards.get(s.id);
   if (run) {
     const app = run.app;
+    if (app?.local) {
+      if (app.copy === "failed") return { text: "UM-Codex's local Codex window couldn't be opened. Stop, then Start again.", bad: true, live: true };
+      if (app.copy === "already-open")
+        return { text: "Running on this computer. UM-Codex's local Codex window was already open: switch to it (another ChatGPT icon in the Dock).", live: true };
+      if (!app.pid) return { text: "Opening UM-Codex's local Codex window…", live: true };
+      return { text: "Running on this computer, in UM-Codex's local Codex window. Quit that window, or Stop here.", ok: true, live: true };
+    }
+    if (!app && onThisComputer(s)) return { text: "Opening UM-Codex's local Codex window…", live: true };
     if (!app && s.open_in === "codex-app") return { text: "Opening Codex… preparing the sandbox for the Codex app.", live: true };
     if (!app) return { text: `Running in Terminal since ${run.since}. Quit Codex there, or Stop here.`, live: true };
     if (app.copy === "failed") return { text: "UM-Codex's Codex window couldn't be opened. Stop, then Start again.", bad: true, live: true };
@@ -618,7 +639,7 @@ const INCLUDE_REASON =
   "~/.ssh/config (Include ~/.ssh/um-codex/config), backed up first; uninstalling takes it out.";
 
 function needsInclude(s) {
-  return s.open_in === "codex-app" && !state.ssh_include;
+  return !onThisComputer(s) && s.open_in === "codex-app" && !state.ssh_include;
 }
 
 // The card's own Start: the ssh line, when it's missing, is part of it (the
@@ -645,6 +666,7 @@ function card(s) {
         "div",
         { class: "card-title" },
         el("h3", { text: s.name }),
+        onThisComputer(s) ? el("span", { class: "badge local", title: WORDS.local, text: "On this computer" }) : null,
         el("button", { class: "link small", key: `rename-${s.id}`, "aria-label": `Rename ${s.name}`, text: "Rename", onclick: () => startRename(s) }),
       );
   let start;
@@ -677,7 +699,7 @@ function card(s) {
   }
   return el(
     "article",
-    { class: run ? "card live" : "card", "aria-label": s.name },
+    { class: `card${run ? " live" : ""}${onThisComputer(s) ? " local" : ""}`, "aria-label": onThisComputer(s) ? `${s.name} (on this computer)` : s.name },
     head,
     status
       ? el(
@@ -687,7 +709,8 @@ function card(s) {
           status.text,
         )
       : null,
-    run?.app ? appDetails(run) : null,
+    run?.app && !run.app.local ? appDetails(run) : null,
+    run?.app?.local ? localDetails(run) : null,
     s.problem ? el("p", { class: "problem", text: `Can't start as it is: ${s.problem} Edit it to change that.` }) : null,
     (warned.get(s.id) || []).map((w) => el("p", { class: "note", text: w })),
     s.moved.length ? movedBlock(s) : null,
@@ -771,6 +794,16 @@ function appDetails(run) {
       el("summary", { text: `Use chats that show Remote · ${app.alias}; local chats are blocked.` }),
       el("ul", { class: "app-notes" }, app.notes.map((line) => el("li", { text: line }))),
     ),
+  );
+}
+
+// A launch on this computer: what that window is, in plain lines.
+function localDetails(run) {
+  return el(
+    "details",
+    { class: "app-notes-block" },
+    el("summary", { text: "About UM-Codex's local Codex window" }),
+    el("ul", { class: "app-notes" }, (run.app.notes || []).map((line) => el("li", { text: line }))),
   );
 }
 
@@ -894,6 +927,8 @@ const FIELD_CONTROLS = {
   open_in: "open-terminal",
   name: "name",
   approvals: "ask",
+  runs_on: "runs-on-sandbox",
+  local_access: "local-full",
 };
 
 // A saved setup as the API takes it back (an edit sends every field).
@@ -908,6 +943,9 @@ function bodyOf(s) {
     approvals: s.approvals,
     model: s.model,
     open_in: s.open_in,
+    runs_on: s.runs_on || "sandbox",
+    local_access: s.local_access || "full",
+    computer_use: s.computer_use !== false,
   };
 }
 
@@ -926,8 +964,11 @@ function showForm(existing) {
         approvals: "never",
         model: null,
         open_in: state?.default_open_in || "terminal",
+        runs_on: "sandbox",
+        local_access: "full",
+        computer_use: true,
       };
-  view = { name: "form", draft, errors: {}, more: Boolean(existing && existing.approvals !== "never") };
+  view = { name: "form", draft, errors: {}, more: Boolean(existing && (existing.approvals !== "never" || onThisComputer(existing))) };
   renderForm();
   focusKey(existing ? "pick-working" : "pick-working");
   loadModels();
@@ -945,6 +986,7 @@ async function loadModels() {
 
 function renderForm() {
   const { draft, errors } = view;
+  const local = onThisComputer(draft);
   const running = Boolean(draft.id && state?.running.some((run) => run.setup_id === draft.id));
   const errorId = (field) => (errors[field] ? `err-${field}` : null);
   const describe = (...ids) => ids.filter(Boolean).join(" ") || null;
@@ -1019,7 +1061,9 @@ function renderForm() {
           el(
             "span",
             { class: "controls" },
-            el("span", { class: "segmented", role: "group", "aria-label": `Access to ${name}` }, access(false, "Read only"), access(true, "Read & write")),
+            local
+              ? el("span", { class: "access", text: "READ & WRITE" })
+              : el("span", { class: "segmented", role: "group", "aria-label": `Access to ${name}` }, access(false, "Read only"), access(true, "Read & write")),
             el("button", {
               type: "button",
               class: "remove",
@@ -1047,12 +1091,18 @@ function renderForm() {
         if (chosen.error) errors.folders = chosen.error;
         else {
           delete errors.folders;
-          draft.folders.push({ path: chosen.path, shown: chosen.shown, write: false, warnings: chosen.warnings });
+          draft.folders.push({ path: chosen.path, shown: chosen.shown, write: local, warnings: chosen.warnings });
         }
         renderForm();
       },
     }),
-    el("span", { class: "help", id: "help-more", text: "Optional. Read only: Codex can look but not change. Read & write: it can change and delete there too." }),
+    el("span", {
+      class: "help",
+      id: "help-more",
+      text: local
+        ? "Optional. On this computer they're part of Codex's project, Read & write (read-only isn't offered: Codex can read all your files here)."
+        : "Optional. Read only: Codex can look but not change. Read & write: it can change and delete there too.",
+    }),
     draft.folders.flatMap((f) => f.warnings || []).map((w) => el("p", { class: "note", text: w })),
     error("folders"),
   );
@@ -1121,13 +1171,15 @@ function renderForm() {
     switchRow(
       "ask",
       "Ask before commands",
-      "Off (recommended): Codex runs commands without asking; the sandbox is what keeps it in.",
+      local
+        ? "On (recommended here): Codex asks before commands that need your OK. There's no sandbox around it on this computer."
+        : "Off (recommended): Codex runs commands without asking; the sandbox is what keeps it in.",
       draft.approvals === "on-request",
       (e) => ((draft.approvals = e.target.checked ? "on-request" : "never"), renderSummary()),
     ),
     error("approvals"),
     nameField,
-    // M4 adds "Where Codex runs: In the sandbox / On this computer" here.
+    whereField(draft, errors, error),
   );
 
   const form = el(
@@ -1135,7 +1187,52 @@ function renderForm() {
     { class: "setup", onsubmit: (e) => saveForm(e, !running), novalidate: true },
     el("h2", { text: draft.id ? `Edit “${draft.name}”` : "New setup" }),
     section("Folder", working, more),
-    section(
+    local
+      ? section(
+          "Access",
+          el("p", { class: "warning-line", text: WORDS.local }),
+          el(
+            "div",
+            { class: "field" },
+            el("span", { class: "label", id: "label-local-access", text: "What Codex can change" }),
+            el(
+              "div",
+              { class: "radios", role: "radiogroup", "aria-labelledby": "label-local-access" },
+              [
+                ["full", "Anything I can (full access)"],
+                ["folder", "Only this setup's folders"],
+              ].map(([value, label]) =>
+                el(
+                  "label",
+                  {},
+                  el("input", {
+                    type: "radio",
+                    name: "local_access",
+                    key: `local-${value}`,
+                    value,
+                    checked: (draft.local_access || "full") === value,
+                    onchange: () => ((draft.local_access = value), renderForm()),
+                  }),
+                  label,
+                ),
+              ),
+            ),
+            el("span", {
+              class: "help",
+              text:
+                "“Only this setup's folders” uses Codex's own macOS sandbox for its commands and file edits. It doesn't limit computer and browser control: those act through your apps, which can change anything you can.",
+            }),
+            error("local_access"),
+          ),
+          switchRow(
+            "computer-use",
+            "Computer and browser control",
+            "Computer Use (your Mac's apps), the app's own browser and your Chrome. macOS asks once for Screen Recording and Accessibility.",
+            draft.computer_use !== false,
+            (e) => ((draft.computer_use = e.target.checked), renderSummary()),
+          ),
+        )
+      : section(
       "Access",
       switchRow("internet", "Internet", "On: the whole internet. Off: Codex can reach only the model.", draft.internet, (e) => {
         draft.internet = e.target.checked;
@@ -1162,7 +1259,9 @@ function renderForm() {
     section(
       "Codex",
       modelField,
-      el(
+      local
+        ? el("div", { class: "field" }, el("span", { class: "label", text: "Open in" }), el("p", { class: "line", text: "UM-Codex's local Codex window (a separate copy of the Codex app, apart from the sandbox's)." }))
+        : el(
         "div",
         { class: "field" },
         el("span", { class: "label", text: "Open in" }),
@@ -1192,6 +1291,71 @@ function renderForm() {
   );
   render(form);
   renderSummary();
+}
+
+// "Where Codex runs" (M4), in More options: the sandbox is the default. Choosing
+// "On this computer" asks first, the one deliberate pop-up (Cancel has the focus);
+// Start never asks again.
+function whereField(draft, errors, error) {
+  const info = state?.this_computer || { available: false, reason: null, warning: "" };
+  const current = draft.runs_on || "sandbox";
+  const choose = async (value) => {
+    if (value === current) return;
+    if (value === "this-computer") {
+      renderForm(); // the radio stays on the sandbox until the answer is yes
+      const yes = await confirmBox("Run Codex on this computer?", info.warning, "Run on this computer");
+      if (!yes) {
+        focusKey("runs-on-this-computer");
+        return;
+      }
+      draft.runs_on = "this-computer";
+      draft.approvals = "on-request";
+      draft.browser = false;
+      if (draft.folders.some((f) => !f.write)) {
+        draft.folders.forEach((f) => (f.write = true));
+        view.notes = ["Read-only isn't offered on this computer, so the other folders are now Read & write (part of Codex's project). Remove any you don't want."];
+      }
+    } else {
+      draft.runs_on = "sandbox";
+      view.notes = [];
+    }
+    renderForm();
+    focusKey(`runs-on-${draft.runs_on}`);
+  };
+  const option = (value, label) =>
+    el(
+      "label",
+      { class: value === "this-computer" && !info.available ? "off" : "" },
+      el("input", {
+        type: "radio",
+        name: "runs_on",
+        key: `runs-on-${value}`,
+        value,
+        checked: current === value,
+        disabled: value === "this-computer" && !info.available && current !== "this-computer",
+        onchange: () => choose(value),
+      }),
+      label,
+    );
+  return el(
+    "div",
+    { class: "field" },
+    el("span", { class: "label", id: "label-runs-on", text: "Where Codex runs" }),
+    el(
+      "div",
+      { class: "radios", role: "radiogroup", "aria-labelledby": "label-runs-on" },
+      option("sandbox", "In the sandbox (recommended)"),
+      option("this-computer", "On this computer"),
+    ),
+    el("span", {
+      class: "help",
+      text: info.available
+        ? "On this computer: Codex works directly on your Mac, with computer and browser control. Only when you need that."
+        : info.reason || "",
+    }),
+    (view.notes || []).map((n) => el("p", { class: "note", text: n })),
+    error("runs_on"),
+  );
 }
 
 // Under the form: what Codex gets with it, as the card will show it.
@@ -1236,7 +1400,7 @@ async function saveForm(event, andStart, extra = {}) {
     }
     // Every problem at once, in the form's order; the first one gets the focus.
     view.errors = Object.keys(error.errors).length ? { ...error.errors } : { general: error.message };
-    if (view.errors.name || view.errors.approvals) view.more = true;
+    if (view.errors.name || view.errors.approvals || view.errors.runs_on) view.more = true;
     renderForm();
     const first = Object.keys(view.errors).find((field) => FIELD_CONTROLS[field]);
     if (first) focusKey(FIELD_CONTROLS[first]);

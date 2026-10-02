@@ -12,6 +12,11 @@ removed before that's answered yes. Then, found by label only:
 - the Codex app's ssh entries: the `Include ~/.ssh/um-codex/config` line at
   the top of ~/.ssh/config (its backup too, if the file is now the same as
   it) and ~/.ssh/um-codex;
+- UM-Codex's local copy of the Codex app ("On this computer", M4):
+  `codex-app-local` in the data folder (its settings, chats, plugins and
+  its copy of Computer Use), always, since nothing can open it without
+  UM-Codex; and Chrome's link to it (the ChatGPT extension's native host
+  manifest) when it leads into that folder;
 - the agent image and, if no container uses it, the gateway image (asked first);
 - with --delete-data, the data folder's contents (saved setups, logs, the
   Codex app copy's settings and chats in `codex-app`), but never its `app`
@@ -55,6 +60,11 @@ def uninstall(
     if _running(data):
         say("UM-Codex is running (a launch is open). Quit Codex first, then run the uninstaller again.")
         return 1
+    from umcodex import this_computer
+
+    if this_computer.running_copy(data) is not None:
+        say("UM-Codex's local Codex window is open. Quit it first, then run the uninstaller again.")
+        return 1
     if _updating():
         say(
             "UM-Codex is updating (from its window or a terminal). Wait for it to finish, then run the "
@@ -94,6 +104,15 @@ def uninstall(
 
     for line in codex_app.remove_include() + codex_app.remove_ssh_files():
         say(line)
+
+    # The local copy of the Codex app (M4): its chats ran on this computer,
+    # and nothing opens it without UM-Codex.
+    local = this_computer.local_folder(data)
+    for line in this_computer.forget_chrome_manifests(data):
+        say(line)
+    if local.exists():
+        say("Removing UM-Codex's local Codex window's settings and chats (On this computer)...")
+        remove_tree(local)
 
     if docker_ok:
         _remove_images(run, say, confirm)

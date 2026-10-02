@@ -246,6 +246,9 @@ class CodexAppOpener:
     key = "codex-app"
     label = "Codex app"
     FIND_EVERY_SECONDS = 60.0
+    LOG = "app-launch.log"
+    OPEN = "app"
+    FAILED = "UM-Codex couldn't start the sandbox for the Codex app."
 
     def __init__(
         self,
@@ -284,7 +287,7 @@ class CodexAppOpener:
         return self.reason() is None
 
     def command(self, setup_id: str) -> list[str]:
-        return [*launch_args(self._program, setup_id), "--open", "app"]
+        return [*launch_args(self._program, setup_id), "--open", self.OPEN]
 
     def open(self, setup_id: str) -> None:
         if not SAFE_ID.fullmatch(setup_id):
@@ -295,7 +298,7 @@ class CodexAppOpener:
         folder = self._folder or data_dir() / "ui"
         folder.mkdir(parents=True, exist_ok=True)
         try:
-            with (folder / "app-launch.log").open("ab") as output:
+            with (folder / self.LOG).open("ab") as output:
                 self._popen(
                     self.command(setup_id),
                     stdin=subprocess.DEVNULL,
@@ -306,7 +309,27 @@ class CodexAppOpener:
                     start_new_session=True,
                 )
         except OSError as error:
-            raise OpenFailed("UM-Codex couldn't start the sandbox for the Codex app.") from error
+            raise OpenFailed(self.FAILED) from error
+
+
+class LocalAppOpener(CodexAppOpener):
+    """A setup that runs on this computer (M4, this_computer.py): the launch
+    runs in the background, holds the relay and opens UM-Codex's local copy
+    of the Codex app, until that copy quits. Not one of the "Open in"
+    choices: a setup's "Where Codex runs" picks it."""
+
+    key = "this-computer"
+    label = "Codex app, on this computer"
+    LOG = "local-launch.log"
+    OPEN = "local"
+    FAILED = "UM-Codex couldn't open its local Codex window."
+
+    def reason(self) -> str | None:
+        from umcodex import this_computer
+
+        if self._platform != "darwin":
+            return this_computer.unavailable_reason(self._platform)
+        return this_computer.unavailable_reason(self._platform, self.app())
 
 
 def openers() -> dict[str, Opener]:

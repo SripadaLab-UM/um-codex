@@ -330,3 +330,18 @@ button.danger-solid { background: var(--danger); border-color: var(--danger); co
 .status .stale { flex-basis: 100%; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 #quick-help p { margin: 0 0 4px; }
+
+/* M4, "On this computer": a setup that runs outside the sandbox says so plainly. */
+.badge.local {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid var(--danger);
+  border-radius: 999px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.card.local { border-left: 4px solid var(--danger); }
+.warning-line { margin: 4px 0 8px; padding: 8px 10px; border-radius: 6px; background: var(--danger-soft); color: var(--ink); font-weight: 600; }

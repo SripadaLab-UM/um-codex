@@ -172,7 +172,7 @@ pass every one of these:
   person's own decision in System Settings; UM-Codex never grants or edits
   them.
 
-## 3. Design
+## 3. Design (the spike's, before the build)
 
 Maintainer's requirement (2026-10-02): **"On this computer" is the secondary
 option.** The sandbox stays the default and the prominent choice.
@@ -293,7 +293,7 @@ option.** The sandbox stays the default and the prominent choice.
   through its extension, each action asking. Docker becomes optional for
   people who use only this mode.
 
-## The proof
+## The spike's proof
 
 Added `src/umcodex/this_computer.py` (new module; nothing in `ui/` or the
 M6 code changed): the copy's paths and `open -n` command, `local_config`,
@@ -308,115 +308,191 @@ the token file.
 **The live run was not done.** Opening a local-mode copy of the app on this
 Mac (scratch data folder, stub upstream, stand-in key) was refused by this
 session's permission check as "creating an unsafe agent" (a Codex app copy
-with full access to the Mac). That run is the GUI agent's, step 1 below,
+with full access to the Mac). That run is the GUI round's (part F below),
 with the maintainer present. What *was* checked live: the relay path with
 the real key and an image (above).
 
-## Open questions for the GUI test
+## 4. Design, as built (2026-10-02)
 
-1. Do the gates pass with no ChatGPT account: does the copy offer Computer
-   Use, the in-app browser and Chrome (Plugins, Settings > Computer Use,
-   `@` menu)? Which reason does it show if not?
+The spike's design was built on this branch after M7 merged; DESIGN.md M4
+is the reference (the choice behind the caution dialog, the card marker,
+the separate copy in `<data>/codex-app-local/`, its config and seeded state,
+the relay held by the launch, Stop, uninstall). Changes from the spike:
+
+- The caution dialog also says Codex "may also be able to reach UM-Codex's
+  own Toolkit key" while it runs (the keychain limit found above).
+- `approvals_reviewer = "user"` in the copy's config (no "Approve for me").
+- The relay keeps its token while the copy stays open (`keep_token`), so a
+  relay restarted by a second Start doesn't strand open chats.
+- Stop quits the copy through AppKit (as its Quit menu does), else SIGTERM,
+  only the process whose arguments carry the copy's profile folder.
+- Uninstall removes `codex-app-local` and Chrome's native host manifest
+  only when it leads into that folder.
+- **The terminal variant is left for later:** a native `codex` pinned and
+  installed by UM-Codex needs a pinned download (GitHub release asset and
+  SHA-256), its update path and tests; not small. On this computer is
+  Codex-app only for now.
+
+## Open questions for the GUI round
+
+1. Do the gates pass with no ChatGPT account: does the local copy offer
+   Computer Use, the in-app browser and Chrome (Plugins, Settings >
+   Computer Use, the `@` menu)? Which reason does it show if not?
 2. Does Plugins > Computer Use > Install work with a custom provider and no
-   sign-in? Where do the plugin ids show in `config.toml`?
-3. The macOS permissions: which app is named in the prompts, and are they
-   shared with the person's own ChatGPT copy (granted already there or not)?
-4. A Computer Use turn on the Toolkit model (screenshot round trip) under
-   "ask me before commands", then under "never": do the app prompts and
-   node_repl's "Run JavaScript" prompt appear, or are they declined?
-5. Chrome: does the extension pair with this copy without a ChatGPT account?
+   sign-in? Which plugin ids does `config.toml` get (expected
+   `computer-use@openai-bundled`, `browser@…`, `chrome@…`), and does the
+   control switch (off) hide them?
+3. The macOS permission prompts: which app do they name, and are the grants
+   shared with the person's own ChatGPT copy?
+4. A Computer Use turn on the Toolkit model, with "Ask before commands" on,
+   then off ("never"): do the app's own prompts and node_repl's "Run
+   JavaScript" prompt appear, or are they declined?
+5. Chrome: does the extension pair with this copy with no ChatGPT account?
    Does the person's own app still control Chrome afterwards (the shared
    native host manifest)?
-6. Does the seeded local project open selected, with no welcome flow?
-7. "Only this folder": is a write outside the folder refused? Does the app
-   show the config's defaults ("Custom (config.toml)"), and can the person
-   change them per chat?
-8. Relay restart: kill the launch process, see "Reconnecting…", Start again,
-   and the same chat carries on.
+6. Does the seeded local project open selected, with no welcome flow and
+   no model announcement?
+7. "Only this setup's folders": is a write outside refused, and how does
+   the app label the permissions?
+8. Does Stop's quit ask the person first (the app's own quit confirmation)?
 
-## GUI test steps (for the maintainer's computer-use agent)
+## The GUI round: M7 and M4 together (for the maintainer's computer-use agent)
 
-Preconditions: a test Mac account or the maintainer's, ChatGPT.app 26.928.x
-installed, UM-Codex from this branch (`uv run um-codex ui` from the worktree)
-with a **scratch data folder** (`UMCODEX_DATA_DIR=<scratch>`), a Toolkit key
-saved, Chrome with the person's normal profile. The person's own ChatGPT app
-may be open; don't use it except where a step says so. Grant macOS
-permissions only when a step says so, and record exactly what each prompt
-says.
+**Preconditions.** A Mac with ChatGPT.app 26.928.x and Docker Desktop.
+UM-Codex from `main` with this branch merged (or this branch), run from
+the worktree: `UMCODEX_DATA_DIR=<scratch> uv run um-codex ui`, so the
+installed UM-Codex and its data are untouched. A Toolkit key saved for that
+scratch data folder (the real one, in the keychain, entered by the
+maintainer). The person's own ChatGPT app may be open; never use it except
+where a step says so. Grant macOS permissions only where a step says so,
+and record each prompt's exact words. Screenshot each "Expect".
 
-Until the launcher form has the field (m7-one-click owns `ui/`), steps 2–5
-are run against the new form when it lands; step 1 can run now with a
-small script that does what the launch will do (`this_computer`:
-`LocalRelay(credentials.api_key, toolkit.BASE_URL).start()`,
-`local_config(...)` into `<scratch>/codex-app-local/codex-home/config.toml`
-with a scratch folder, `seed_copy(...)`, `open_command(...)`, then
-`wait_while_running(pid)` and `stop()`).
+**A. First run (M7).**
+1. Open the launcher page. Expect: the first-run page, "Choose a folder and
+   start…" with its lines under it (Codex app or Terminal; changes and
+   deletes, no undo; the internet on), the quiet strip (Docker running ·
+   Toolkit key saved).
+2. Click "Choose a folder and start…", pick a scratch folder `demo` in the
+   native picker. Expect: no form, no pop-up; a card "demo", Starting… →
+   Opening Codex… → Connected ✓; UM-Codex's sandbox copy of the app opens
+   on the project "demo", Remote · `umcodex-demo-…`, with no sign-in or
+   welcome flow.
+3. In that chat: "List the files here and create hello.txt saying hi".
+   Expect: `hello.txt` in `demo` in Finder.
 
-1. **Copy opens and a local chat answers.** Start the local copy. Expect: a
-   second ChatGPT window, no sign-in screen, the scratch project selected,
-   no welcome flow or model announcement. Type "Say hello and run `pwd`",
-   Return. Expect an answer from the Toolkit model and the scratch folder's
-   path; the chat has no "Remote ·" strip. Screenshot. Check `ps` shows the
-   copy's `--user-data-dir` under `<scratch>/codex-app-local/`.
-2. **Secondary choice and caution dialog.** In the launcher, new setup:
-   "In the sandbox" is the selected, prominent choice; "On this computer" is
-   under "More options" (or less prominent). Choose it. Expect the caution
-   dialog with the exact text above, Cancel focused. Press Return: the
-   setup stays "In the sandbox". Choose it again, click "Run on this
-   computer": the form shows the folder, "What Codex can change", approvals
-   and computer/browser control fields; read-only folders aren't offered.
-3. **Card marker.** Save. The setup's card shows "On this computer"
-   clearly; a sandbox setup's card doesn't.
-4. **No re-ask.** Start the setup: no caution dialog; the copy opens (step 1
-   expectations). Stop: the copy quits, the running list clears, and
-   `<scratch>/codex-app-local/relay-token` is gone. Start again: still no
-   dialog.
-5. **Changing it back and forth.** Edit the setup to "In the sandbox"
-   (no dialog), then to "On this computer" (dialog again).
-6. **Feature availability** (question 1–2). In the local copy: open
-   Plugins; note whether Computer Use, Browser and Chrome are listed,
-   installed, or show a reason. Open `codex://settings/computer-use/google-chrome`
-   and Settings > Computer Use; note what's there. Type `@` in a new chat and
-   note the entries (Computer, Browser, Chrome). Save the copy's
-   `config.toml` `[plugins]` section and the list of
-   `<scratch>/codex-app-local/codex-home/computer-use/` and
-   `.../plugins/` to the results.
-7. **Computer Use** (only if offered). With the maintainer's OK: install
-   the plugin if needed. Ask "Use Computer Use to open Calculator and
-   compute 12×12". Record each prompt: the app's "Allow Codex to use
-   Calculator?", node_repl's "Run JavaScript", and macOS's Screen Recording
-   and Accessibility prompts (which app they name). Grant only for this test
-   and note it. Expect 144 and screenshots in the transcript. Then System
-   Settings > Privacy & Security > Screen Recording and Accessibility: list
-   the entries for Codex Computer Use (one or two?).
-8. **Approval policy** (question 4). Repeat 7 with the setup's approvals on
-   "never": do the app and JavaScript prompts still appear, does it run
-   without them, or does it fail?
-9. **In-app browser.** Ask "@Browser open https://example.com and tell me
-   the heading". Expect the in-app browser pane and the answer.
-10. **Chrome** (question 5). Settings > Computer Use > Google Chrome >
-    Install (the extension store page opens in Chrome). Stop here unless the
-    maintainer wants the extension installed; if so, install it, ask
-    "@Chrome open example.com and read its heading", record the site prompt.
-    Then, in the person's own ChatGPT app, check Chrome control still works
-    (or note it now points at UM-Codex's copy). Record the contents of
+**B. Returning (M7).**
+4. Stop on the card (its question; Cancel focused, confirm). Expect: the app
+   shows it can't reconnect; the card idle.
+5. Reload the page. Expect: "Start “demo”" at the top. Click it once.
+   Expect: connected again (about 10–30 s), no question.
+6. "Choose another folder…" with a second folder: a second card, started
+   at once. Stop both.
+
+**C. Update (M7).**
+7. Click "Check for updates". Expect "UM-Codex X is the newest version."
+   (or, if a newer release exists, the Update line). With a setup running,
+   Update is refused with "Stop running setups first: “demo”." Don't
+   install an update in this round unless the maintainer says so.
+
+**D. The sandbox Codex app (M6), still right after M4.**
+8. Start "demo". In UM-Codex's sandbox copy, start a local (not Remote)
+   chat: expect only the reminder to use Remote · `umcodex-demo-…`. Stop.
+
+**E. On this computer (M4): the choice and the caution dialog.**
+9. "New setup with options…" (or Edit on a new scratch setup `here` with
+   folder `here`). In **More options**, expect "Where Codex runs" with "In
+   the sandbox (recommended)" selected and "On this computer" below it.
+   Nothing else on the form mentions it.
+10. Choose "On this computer". Expect the dialog "Run Codex on this
+    computer?" with the text: Codex will run on your Mac, not in the
+    sandbox… delete any of your files, use your apps and browser, and act
+    with your accounts… may also be able to reach UM-Codex's own Toolkit
+    key… Use it only when you need computer or browser control. Buttons
+    Cancel (focused) and "Run on this computer".
+11. Press Return. Expect: the dialog closes and "In the sandbox" is still
+    selected. Choose "On this computer" again; press Esc: same.
+12. Choose it again and click "Run on this computer". Expect: the Access
+    section shows the red line "On this computer: …", "What Codex can
+    change" (Anything I can (full access) selected; Only this setup's
+    folders) with the note that it doesn't limit computer and browser
+    control, "Computer and browser control" on; no Internet or Browser
+    tool switches; "Ask before commands" on; Open in shows UM-Codex's
+    local Codex window; added folders are Read & write, with no Read only
+    button. If a read-only folder was there before, it's now Read & write
+    with a note.
+13. Save. Expect: the card shows the "On this computer" badge and a red
+    edge, and its facts: "On this computer: Codex runs on your Mac…",
+    "Codex can change and delete any of your files…", "Computer and
+    browser control on…", "UM-Codex's local Codex window · model · asks
+    before commands". The "demo" card has no badge.
+14. Edit "here", switch to "In the sandbox" (no dialog), Save, then back to
+    "On this computer" (the dialog again), Save.
+
+**F. On this computer: starting, the window, Stop.**
+15. Start "here". Expect: no dialog, no Docker needed (it works with Docker
+    Desktop quit, too: try it once); the card says "Running on this
+    computer, in UM-Codex's local Codex window…"; a ChatGPT window opens
+    that is neither the person's own nor the sandbox copy (`ps` shows
+    `--user-data-dir=<scratch>/codex-app-local/user-data`), with no
+    sign-in, the project "here" selected, no welcome flow, no model
+    announcement (question 6).
+16. In a new chat: "Say hello and run pwd". Expect an answer from the
+    Toolkit model and the folder `here`; no "Remote ·" strip. Ask it to
+    create `hi.txt`: with "Ask before commands" on, the app asks first.
+17. Check `<scratch>/codex-app-local/relay-token` exists (0600) and contains
+    no `sk-` key; `codex-home/config.toml` has the `toolkit` provider at
+    127.0.0.1 and no key.
+18. Start "demo" (sandbox) at the same time: both run; the sandbox copy and
+    the local copy are separate windows; the local copy has no `umcodex-*`
+    hosts; the sandbox copy has no "here" project.
+19. Stop "here" in the launcher. Expect: the local window quits (note if
+    the app asks to confirm, question 8), the card goes idle, `relay-token`
+    is gone. Start it again: the window reopens on "here".
+20. Quit the local window yourself (Cmd-Q). Expect: the card goes idle
+    within a few seconds.
+
+**G. On this computer: computer and browser control.**
+21. With "here" running: open Plugins, Settings > Computer Use, and type
+    `@` in a new chat. Record what's offered (Computer Use, Browser,
+    Chrome) and any reason shown (questions 1–2). Save `codex-home/config.toml`'s
+    `[plugins]` part and the lists of `codex-home/computer-use/` and
+    `codex-home/plugins/`.
+22. Only if offered, and with the maintainer's OK: "Use Computer Use to
+    open Calculator and compute 12×12". Record each prompt in order: the
+    app's "Allow Codex to use Calculator?", node_repl's "Run JavaScript",
+    macOS's Screen Recording and Accessibility prompts (which app they
+    name). Grant for this test only. Expect 144, and screenshots in the
+    chat. Then System Settings > Privacy & Security > Screen Recording and
+    Accessibility: list the "Codex Computer Use" entries (question 3).
+23. Edit "here": "Ask before commands" off; Start; repeat 22 (question 4).
+24. "@Browser open https://example.com and tell me the heading": the
+    app's own browser pane and the answer.
+25. Chrome (question 5): Settings > Computer Use > Google Chrome. Stop here
+    unless the maintainer wants the extension installed. If so: install it,
+    "@Chrome open example.com and read its heading", record the site
+    prompt; record the `path` in
     `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.openai.codexextension.json`
-    (its `path`) before and after.
-11. **Only this folder** (question 7). Set "What Codex can change" to
-    "Only this folder", Start. Ask Codex to create `hello.txt` in the
-    project (works) and `~/Desktop/um-codex-outside.txt` (refused or asks).
-    Note the permission picker's label in the chat.
-12. **Relay restart** (question 8). With a chat open, kill the background
-    `um-codex launch` process (Activity Monitor or `kill <pid>`). Send a
-    message: expect "Reconnecting…". Start the setup again in the launcher:
-    the copy comes forward, the message goes through in the same chat.
-13. **Separation.** With a sandbox setup running in the M6 copy and this
-    setup in the local copy: the M6 copy's local chats still answer only
-    with the "use a Remote chat" reminder; the local copy has no
-    `umcodex-*` hosts; the person's own app shows neither project.
-14. **Cleanup.** Quit both copies (Stop), check no `um-codex` process or
-    relay port is left, and note any permission grants made for the
-    maintainer to remove if wanted.
+    before and after; then check the person's own ChatGPT app can still
+    use Chrome.
+26. Edit "here": "Computer and browser control" off, Stop and Start.
+    Expect: Computer Use, Browser and Chrome not offered (or disabled) in
+    the local window; `config.toml` has them `enabled = false`.
+27. Edit "here": "Only this setup's folders", Start. Ask Codex to write
+    `here/inside.txt` (works) and `~/Desktop/um-codex-outside.txt`
+    (refused or asks). Record the permission label in the chat (question 7).
+
+**H. Cleanup.**
+28. Stop everything. With the local window open, `um-codex uninstall`
+    (against the scratch data folder) refuses ("Quit it first"). Quit it;
+    run `UMCODEX_DATA_DIR=<scratch> uv run um-codex uninstall --keep-data`
+    only if the maintainer wants the uninstall checked (it removes the
+    scratch key from the keychain too: answer accordingly). Expect:
+    "Removing UM-Codex's local Codex window's settings and chats…", and
+    `<scratch>/codex-app-local` gone; a Chrome manifest leading into it
+    removed, one of the person's own app left.
+29. List any macOS permissions granted during the round for the maintainer
+    to remove if wanted.
+
 
 ## Sources
 

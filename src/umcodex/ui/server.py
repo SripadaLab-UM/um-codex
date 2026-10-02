@@ -40,15 +40,17 @@ from typing import Any
 from aiohttp import web
 from keyring.errors import KeyringError
 
-from umcodex import __version__, codex_app, credentials, folders, toolkit, windows_vm
+from umcodex import __version__, codex_app, credentials, folders, this_computer, toolkit, windows_vm
 from umcodex.containers import Docker, DockerError, volume_name
 from umcodex.docker_path import ensure_docker_on_path
 from umcodex.folders import FolderRefused
 from umcodex.launch import LaunchLock, running_launches, stop_launch
 from umcodex.paths import data_dir
 from umcodex.setups import (
+    LOCAL_ACCESS,
     MAX_NAME,
     OPEN_IN,
+    RUNS_ON,
     Setup,
     SetupStore,
     check,
@@ -61,7 +63,7 @@ from umcodex.setups import (
     unique_name,
 )
 from umcodex.ui import picker
-from umcodex.ui.opener import Opener, OpenFailed, openers
+from umcodex.ui.opener import LocalAppOpener, Opener, OpenFailed, openers
 from umcodex.ui.protection import BrowserSession, add_security_headers, protection
 
 log = logging.getLogger(__name__)
@@ -125,6 +127,10 @@ def setup_json(setup: Setup, *, own_data: Path | None = None) -> dict[str, Any]:
         "approvals": setup.approvals,
         "model": setup.model,
         "open_in": setup.open_in,
+        # M4: where Codex runs, and on this computer, what its commands may change.
+        "runs_on": setup.runs_on,
+        "local_access": setup.local_access,
+        "computer_use": setup.computer_use,
         "problem": problem,
         # Saved folders that now lead somewhere else: Start needs a confirmation (on the card).
         "moved": [{"saved": saved, "now": str(now)} for saved, now in changed],
@@ -207,6 +213,17 @@ def setup_from(
     open_in = body.get("open_in") or default_open_in
     if open_in not in OPEN_IN:
         errors["open_in"] = "That choice of where to open Codex wasn't understood."
+    runs_on = body.get("runs_on") or "sandbox"
+    if runs_on not in RUNS_ON:
+        errors["runs_on"] = "That choice of where Codex runs wasn't understood."
+    local_access = body.get("local_access") or "full"
+    if local_access not in LOCAL_ACCESS:
+        errors["local_access"] = "That choice of what Codex can change wasn't understood."
+    if runs_on == "this-computer" and reads and "folders" not in errors:
+        errors["folders"] = (
+            "Read-only folders aren't available on this computer: Codex can read all your files there. "
+            "Remove them, or make them Read & write."
+        )
     if errors:
         field, message = next(iter(errors.items()))
         raise Invalid(message, field, errors=errors)
@@ -220,9 +237,13 @@ def setup_from(
         internet=internet,
         model=model,
         approvals=approvals,
-        browser=browser,
+        # On this computer there's no sandbox browser tool (the app's own browser and Chrome instead).
+        browser=browser and runs_on != "this-computer",
         browser_asks=body.get("browser_asks") is not False,
         open_in=open_in,
+        runs_on=runs_on,
+        local_access=local_access,
+        computer_use=body.get("computer_use") is not False,
     )
 
 
@@ -372,6 +393,7 @@ class Launcher:
     store: SetupStore = field(default_factory=SetupStore)
     data: Path = field(default_factory=data_dir)
     openers: dict[str, Opener] = field(default_factory=openers)
+    local_opener: Opener = field(default_factory=LocalAppOpener)  # M4: setups that run on this computer
     docker: Docker = field(default_factory=lambda: Docker(_quiet_run))
     run: Callable[..., subprocess.CompletedProcess] = _quiet_run
     has_key: Callable[[], bool] = credentials.has_api_key
@@ -459,6 +481,12 @@ class Launcher:
             # The Codex app (M6): whether ~/.ssh/config has UM-Codex's line yet.
             "ssh_include": codex_app.include_present(self.ssh_home),
             "include_explained": codex_app.INCLUDE_EXPLAINED,
+            # M4: whether "On this computer" can be used here, and the caution dialog's words.
+            "this_computer": {
+                "available": (local_reason := self.local_opener.reason()) is None,
+                "reason": local_reason,
+                "warning": this_computer.WARNING,
+            },
         }
 
     def default_open_in(self) -> str:
@@ -609,6 +637,8 @@ class Launcher:
 
     def start(self, setup_id: str, body: object) -> dict[str, Any]:
         setup = self.setup(setup_id)
+        if setup.on_this_computer:
+            return self._start_local(setup, body)
         # The person pressed the card's "Add the line and start", under the explanation.
         allow_include = isinstance(body, dict) and body.get("allow_ssh_include") is True
         if not self.key_saved(fresh=True):
@@ -649,6 +679,41 @@ class Launcher:
                 raise Invalid(str(why), status=500) from None
         return {"opened": opener.label, "in_background": opener.key == "codex-app"}
 
+    def _start_local(self, setup: Setup, body: object) -> dict[str, Any]:
+        """A setup that runs on this computer (M4): no Docker, no ssh line;
+        the caution was given when the choice was made, so nothing is asked."""
+        if not self.key_saved(fresh=True):
+            raise Invalid("Save your Toolkit key first (Add key…).", "key", status=409)
+        opener = self.local_opener
+        reason = opener.reason()
+        if reason is not None:
+            raise Invalid(reason, status=409)
+        local = [launch for launch in running_launches(self.data) if launch.app and launch.app.get("local")]
+        if local:
+            raise Invalid(
+                f"“{local[0].setup_name}” is running on this computer now. Stop it first.", status=409
+            )
+        try:
+            layout = check(setup, own_data=self.own_data)
+            changed = moved(setup, own_data=self.own_data)
+        except FolderRefused as why:
+            raise Invalid(f"This setup can't be used as it is: {why} Edit it to change that.") from None
+        if setup.reads:
+            raise Invalid("Read-only folders aren't available on this computer: edit the setup.", status=409)
+        if changed and not moved_confirmed(body, changed):
+            raise Invalid(MOVED, "moved", status=409)
+        if changed:
+            setup = resolved(setup, layout)
+        with self._update_lock:
+            if self.updating():
+                raise Invalid("Updating… wait for it to finish, then start.", "update", status=409)
+            self.store.save(setup, used=True)
+            try:
+                opener.open(setup.id)
+            except OpenFailed as why:
+                raise Invalid(str(why), status=500) from None
+        return {"opened": opener.label, "in_background": True}
+
     def allow_ssh_include(self) -> dict[str, Any]:
         """The person chose Allow: the Include line at the top of ~/.ssh/config
         (backed up first)."""
@@ -669,6 +734,18 @@ class Launcher:
         if not re.fullmatch(r"[0-9a-f]{8}", launch_id):
             raise Invalid("There's no such launch.", status=404)
         log.info("launcher window: Stop asked for launch %s", launch_id)
+        found_local = next(
+            (
+                r
+                for r in running_launches(self.data)
+                if r.launch_id == launch_id and r.app and r.app.get("local")
+            ),
+            None,
+        )
+        if found_local is not None:  # on this computer: quit UM-Codex's local copy; its launch then ends
+            if not this_computer.stop_local(self.data, found_local, run=self.run):
+                raise Invalid("UM-Codex's local Codex window has already closed.", status=404)
+            return {"stopped": True}
         try:
             found = stop_launch(self.docker, self.data, launch_id)
         except DockerError:
