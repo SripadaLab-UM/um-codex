@@ -45,7 +45,6 @@ own CODEX_HOME and profile (`windows_open`). Checked hands-on on 2026-10-02;
 from __future__ import annotations
 
 import contextlib
-import functools
 import json
 import logging
 import os
@@ -60,7 +59,7 @@ import time
 import tomllib
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 
 import tomli_w
 
@@ -99,10 +98,20 @@ WINDOWS_COPY = True
 WINDOWS_CONNECT_SECONDS = 180.0
 WINDOWS_STEPS_SECONDS = 900.0
 WINDOWS_START_CHECKS = 15  # looks for the started copy, poll_seconds apart
-WINDOWS_FALLBACK = (
-    "The Codex app didn't connect to the sandbox, so UM-Codex closed its Codex window and stopped "
-    "the sandbox. The Codex app on Windows is experimental: use Open in: Terminal for this setup."
-)
+# What the launch (and the setup's card) says when the Windows copy didn't
+# connect or start, by what became of the copy.
+_USE_TERMINAL = "The Codex app on Windows is experimental: use Open in: Terminal for this setup."
+WINDOWS_FALLBACKS = {
+    "stopped": "The Codex app didn't connect to the sandbox, so UM-Codex closed its Codex window and "
+    "stopped the sandbox. " + _USE_TERMINAL,
+    "shared": "The Codex app didn't connect to this setup's sandbox, so UM-Codex stopped it. Its Codex "
+    "window stays open for your other setup running there. " + _USE_TERMINAL,
+    "still-open": "The Codex app didn't connect to the sandbox, so UM-Codex stopped the sandbox, but "
+    "couldn't close its Codex window: close it yourself (the second ChatGPT icon in the taskbar). "
+    + _USE_TERMINAL,
+    "not-started": "UM-Codex's Codex window didn't open, so UM-Codex stopped the sandbox. " + _USE_TERMINAL,
+}
+WINDOWS_FALLBACK = WINDOWS_FALLBACKS["stopped"]
 WINDOWS_NOTES = (
     "On Windows the Codex app is experimental. UM-Codex's Codex window runs without the app's "
     "Windows sandbox and Computer Use; work in Remote chats runs in UM-Codex's sandbox instead.",
@@ -312,29 +321,103 @@ def _mode(path: Path) -> int:
         return 0o600
 
 
-def add_include(home: Path | None = None) -> str:
+def _is_the_persons_ssh(home: Path | None) -> bool:
+    """Whether ssh_dir(home) is the ~/.ssh Windows' ssh itself reads."""
+    profile = os.environ.get("USERPROFILE")
+    if not profile:
+        return False
+    with contextlib.suppress(OSError):
+        return os.path.samefile(ssh_dir(home), Path(profile) / ".ssh")
+    return False
+
+
+SSH_DIR_MADE = "made-ssh-folder"  # in ~/.ssh/um-codex: UM-Codex made ~/.ssh itself
+
+
+def _made_ssh_dir(home: Path | None) -> None:
+    with contextlib.suppress(OSError):
+        own_ssh_dir(home).mkdir(parents=True, exist_ok=True)
+        (own_ssh_dir(home) / SSH_DIR_MADE).write_text("yes\n", encoding="utf-8")
+
+
+def repair_ssh_dir(
+    home: Path | None = None, run: Runner = subprocess.run, platform: str = sys.platform
+) -> bool:
+    """Windows: an ~/.ssh an earlier UM-Codex made with Python 3.13's
+    mkdir(mode=0o700) (SYSTEM, Administrators, OWNER RIGHTS, nothing
+    inherited; see _ssh_mkdir) makes ssh refuse what's in it. Only such a
+    folder, and only one UM-Codex made (its note, or ~/.ssh/um-codex there),
+    is changed, and only so: the person given the rights OWNER RIGHTS gave,
+    then OWNER RIGHTS taken away. True if it was repaired."""
+    ssh = ssh_dir(home)
+    if platform != "win32" or not ssh.is_dir():
+        return False
+    ours = (own_ssh_dir(home) / SSH_DIR_MADE).is_file() or own_ssh_dir(home).is_dir()
+    if not ours or not win.owner_rights_only(ssh, run):
+        return False
+    sid = _windows_user_sid()
+    if sid is None:
+        return False
+    icacls = str(win.system_dir() / "icacls.exe")
+    options = {"capture_output": True, "text": True, "timeout": 30, "stdin": subprocess.DEVNULL,
+               "creationflags": win.hidden()}  # fmt: skip
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        granted = run([icacls, str(ssh), "/grant", f"*{sid}:(OI)(CI)F", "/Q"], **options)
+        if granted.returncode == 0:
+            removed = run([icacls, str(ssh), "/remove:g", "*S-1-3-4", "/T", "/Q"], **options)
+            if removed.returncode == 0:
+                log.info("repaired %s's permissions (OWNER RIGHTS taken out)", ssh)
+                return True
+    log.warning("couldn't repair %s's permissions", ssh)
+    return False
+
+
+def add_include(
+    home: Path | None = None, *, platform: str = sys.platform, run: Runner = subprocess.run
+) -> str:
     """Put the Include line at the very top of ~/.ssh/config, after backing
     the file up (the backup is refreshed whenever it no longer matches the
-    file as it is before the line goes in). The file keeps its own
-    permissions and line endings, is replaced atomically, and a link to it
-    keeps working. Returns "created", "added" or "already there". Raises
-    OSError or UnicodeDecodeError (a file that isn't text) and changes nothing."""
+    file as it is before the line goes in). The file keeps its line endings,
+    is replaced atomically, and a link to it keeps working. It keeps its
+    permissions: on a Mac its mode; on Windows its access rules (which the
+    replacement, a new file, wouldn't otherwise have), given to the backup
+    too, and then Windows' ssh is asked whether it still reads the file: if
+    not, the file is put back as it was and SshPermissionsError raised.
+    Returns "created", "added" or "already there". Raises OSError (also
+    SshPermissionsError) or UnicodeDecodeError (a file that isn't text) and
+    changes nothing."""
     folder = ssh_dir(home)
     config = folder / "config"
+    if platform == "win32":
+        repair_ssh_dir(home, run, platform)
     if not config.exists():
         # ~/.ssh keeps the permissions it has if it's there; made here, it's set as ssh wants.
-        _ssh_mkdir(folder, parents=True, own=not folder.is_dir())
-        _ssh_write(config, INCLUDE_LINE + "\n")
+        made = not folder.is_dir()
+        _ssh_mkdir(folder, parents=True, platform=platform, own=made)
+        if made:
+            _made_ssh_dir(home)
+        _ssh_write(config, INCLUDE_LINE + "\n", platform=platform)
         return "created"
     data = _read(config)
     text = data.decode("utf-8")
     if INCLUDE_LINE in _top_lines(text):
         return "already there"
+    rules = win.access_rules(config, run) if platform == "win32" else None
     backup = folder / BACKUP_NAME
     if not backup.exists() or _read(backup) != data:
         _replace(backup, data, mode=_mode(config))
+        if rules:
+            win.set_access_rules(backup, rules, run)
     newline = "\r\n" if "\r\n" in text else "\n"
     _replace(config, (INCLUDE_LINE + newline + text).encode("utf-8"), mode=_mode(config))
+    if rules:
+        win.set_access_rules(config, rules, run)
+    if platform == "win32" and _is_the_persons_ssh(home) and (said := win.ssh_refuses_config(run)):
+        _replace(config, data, mode=_mode(config))
+        if rules:
+            win.set_access_rules(config, rules, run)
+        log.warning("ssh refused ~/.ssh/config after the Include line went in (%s); put back as it was", said)
+        raise SshPermissionsError(config)
     return "added"
 
 
@@ -513,23 +596,34 @@ _SYSTEM_SID = "S-1-5-18"
 _ADMINISTRATORS_SID = "S-1-5-32-544"
 
 
-def _system32() -> PureWindowsPath:
-    """Windows' System32, as a Windows path on any OS (so commands read the same in tests)."""
-    return PureWindowsPath(os.environ.get("SYSTEMROOT") or r"C:\Windows") / "System32"
+class SshPermissionsError(OSError):
+    """Windows: a file or folder ssh reads couldn't be given the permissions
+    OpenSSH accepts. Nothing is left that would break the person's ssh."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(
+            f"UM-Codex couldn't set the permissions Windows' ssh needs on {path}, so it stopped there "
+            "(your own ssh settings weren't changed). Use Open in: Terminal for now."
+        )
+        self.path = path
 
 
-@functools.cache
-def _windows_user_sid() -> str | None:
-    """The person's SID (whoami /user), or None if Windows can't say."""
-    whoami = _system32() / "whoami.exe"
+_sid: str | None = None  # the person's SID, once found (a failure isn't kept)
+
+
+def _windows_user_sid(run: Runner = subprocess.run) -> str | None:
+    """The person's SID (whoami /user), or None if Windows can't say now."""
+    global _sid
+    if _sid is not None:
+        return _sid
     with contextlib.suppress(OSError, subprocess.SubprocessError):
-        done = subprocess.run(
-            [str(whoami), "/user", "/fo", "csv", "/nh"],
-            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        done = run(
+            [str(win.system_dir() / "whoami.exe"), "/user", "/fo", "csv", "/nh"],
+            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=win.hidden(),
         )  # fmt: skip
         sid = done.stdout.strip().split(",")[-1].strip().strip('"')
         if done.returncode == 0 and sid.startswith("S-1-"):
+            _sid = sid
             return sid
     return None
 
@@ -538,20 +632,19 @@ def _windows_owner_only(
     path: Path, *, folder: bool, run: Runner = subprocess.run, sid: str | None = None
 ) -> bool:
     """Windows: `path` readable by the person, SYSTEM and Administrators only,
-    and not inheriting anything else (a folder hands the same down)."""
+    and not inheriting anything else (a folder hands the same down). False
+    if that couldn't be done."""
     sid = sid or _windows_user_sid()
     if sid is None:
-        log.warning("couldn't find this account's SID; %s keeps the permissions it has", path)
+        log.warning("couldn't find this account's SID, so %s's permissions weren't set", path)
         return False
-    icacls = _system32() / "icacls.exe"
     flags = "(OI)(CI)F" if folder else "F"
     who = (sid, _SYSTEM_SID, _ADMINISTRATORS_SID)
     grants = [part for one in who for part in ("/grant:r", f"*{one}:{flags}")]
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         done = run(
-            [str(icacls), str(path), "/inheritance:r", *grants, "/Q"],
-            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            [str(win.system_dir() / "icacls.exe"), str(path), "/inheritance:r", *grants, "/Q"],
+            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=win.hidden(),
         )  # fmt: skip
         if done.returncode == 0:
             return True
@@ -564,20 +657,24 @@ def _ssh_mkdir(
 ) -> None:
     """Make a folder for ssh's files. On Windows without a mode (see above),
     and, if it's UM-Codex's own (`own`), with only the person, SYSTEM and
-    Administrators."""
+    Administrators; raises SshPermissionsError if that can't be done."""
     if platform == "win32":
         folder.mkdir(parents=parents, exist_ok=True)
-        if own:
-            _windows_owner_only(folder, folder=True)
+        if own and not _windows_owner_only(folder, folder=True):
+            raise SshPermissionsError(folder)
     else:
         folder.mkdir(mode=0o700, parents=parents, exist_ok=True)
 
 
 def _ssh_write(path: Path, text: str, *, platform: str = sys.platform) -> None:
-    """_private_write for a file ssh reads, with Windows' permissions set too."""
+    """_private_write for a file ssh reads, with Windows' permissions set too.
+    If they can't be, the file is taken away again (ssh skips an Include
+    that matches nothing, but refuses one it can't trust, and with it every
+    host) and SshPermissionsError is raised."""
     _private_write(path, text)
-    if platform == "win32":
-        _windows_owner_only(path, folder=False)
+    if platform == "win32" and not _windows_owner_only(path, folder=False):
+        path.unlink(missing_ok=True)
+        raise SshPermissionsError(path)
 
 
 def _private_dir(folder: Path) -> None:
@@ -595,6 +692,10 @@ def _locked(home: Path | None = None):
     ssh = ssh_dir(home)
     if not ssh.is_dir():
         _private_dir(ssh)
+        if sys.platform == "win32":
+            _made_ssh_dir(home)
+    elif sys.platform == "win32":
+        repair_ssh_dir(home)
     _private_dir(own_ssh_dir(home))
     with locks.held(own_ssh_dir(home) / LOCK, timeout=30):
         yield
@@ -1081,6 +1182,8 @@ def unavailable_reason(platform: str = sys.platform, app: Path | None = None) ->
                 "The Codex app isn't installed. It's part of OpenAI's ChatGPT desktop app: get it from "
                 f"the Microsoft Store ({APP_DOWNLOAD}), then come back. Terminal works in the meantime."
             )
+        if not win.openssh_installed():
+            return win.OPENSSH_MISSING
         return None
     if platform != "darwin":
         return "The Codex app works with UM-Codex on a Mac only."
@@ -1125,8 +1228,10 @@ def windows_open(
     """Windows: the copy's command and environment (codex_app_windows), its
     folders checked first: never the person's own. Raises win.UnsafePaths."""
     home, user_data = copy_paths(data)
-    win.check_paths(home, user_data, app_folder(data), user_home(), _app_data())
-    return win.open_command(app, home, user_data, link, dict(os.environ if environ is None else environ))
+    environ = dict(os.environ if environ is None else environ)
+    theirs = next((value for key, value in environ.items() if key.upper() == "CODEX_HOME"), None)
+    win.check_paths(home, user_data, app_folder(data), user_home(), _app_data(), theirs)
+    return win.open_command(app, home, user_data, link, environ)
 
 
 def _app_data() -> Path | None:
@@ -1632,6 +1737,40 @@ def connected_before(setup_id: str, data: Path | None = None) -> bool:
     return isinstance(hosts, dict) and alias(setup_id, data) in hosts
 
 
+# Windows: why a setup's last launch in the Codex app fell back to Terminal,
+# for the setup's card (the launch's own folder is gone by then). Kept until
+# the setup is started again or the app connects.
+FALLBACKS = "fallbacks.json"
+
+
+def _fallbacks(data: Path | None) -> dict:
+    try:
+        found = json.loads((app_folder(data) / FALLBACKS).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def record_fallback(setup_id: str, message: str | None, data: Path | None = None) -> None:
+    """Keep (or, with None, forget) why the setup fell back to Terminal."""
+    found = _fallbacks(data)
+    if message is None and setup_id not in found:
+        return
+    if message is None:
+        found.pop(setup_id, None)
+    else:
+        found[setup_id] = {"message": message, "at": time.time()}
+    with contextlib.suppress(OSError):
+        app_folder(data).mkdir(parents=True, exist_ok=True)
+        _private_write(app_folder(data) / FALLBACKS, json.dumps(found) + "\n")
+
+
+def last_fallback(setup_id: str, data: Path | None = None) -> str | None:
+    entry = _fallbacks(data).get(setup_id)
+    message = entry.get("message") if isinstance(entry, dict) else None
+    return message if isinstance(message, str) else None
+
+
 def mark_connected(setup_id: str, data: Path | None = None) -> None:
     path = _hosts_file(data)
     try:
@@ -1674,6 +1813,7 @@ class AppHold:
     labels: tuple[tuple[str, str], ...] = ()
     runtime_busy: Callable[[], bool] = lambda: win.runtime_update_running(user_home(), time.time())
     _started_pid: int | None = field(default=None, init=False)  # Windows: the copy this launch started
+    _started: object = field(default=None, init=False)  # Windows: its process, while held
 
     def __post_init__(self) -> None:
         self.labels = ((SSH_LABEL, self.setup_id),)
@@ -1684,8 +1824,19 @@ class AppHold:
         spec, setup = running.spec, running.setup
         name = alias(setup.id, self.data)
         self.say("Preparing the sandbox for the Codex app...")
-        public = ensure_key(setup.id, run=self.run, data=self.data)
-        write_config(self.proxy_for, setup_ids={*_saved_setup_ids(self.data), setup.id}, data=self.data)
+        try:
+            public = ensure_key(setup.id, run=self.run, data=self.data)
+            write_config(self.proxy_for, setup_ids={*_saved_setup_ids(self.data), setup.id}, data=self.data)
+        except SshPermissionsError as error:  # Windows: nothing left that would break ssh
+            from umcodex.launch import update_launch_app
+
+            log.error("launch %s: %s", spec.launch_id, error)
+            state = {"alias": alias(setup.id, self.data), "connected": False, "copy": "not-opened"}
+            state.update(fallback="terminal", fallback_message=str(error))
+            update_launch_app(running.folder, state)
+            record_fallback(setup.id, str(error), self.data)
+            self.say(str(error))
+            return 1
         prepare_container(self.docker, spec.agent, public)
         responder = LocalChatsServer(self.data)
         if not self.local_chats:
@@ -1706,6 +1857,7 @@ class AppHold:
             "steps": first_steps(setup.id, setup.name, self.data, self.platform),
             "notes": notes(setup.id, local_chats=self.local_chats, data=self.data, platform=self.platform),
             "copy": "not-opened",
+            "icon": second_icon(self.platform),  # where the launcher says the copy is
         }
         token_file = app_folder(self.data) / "launch-token"
         try:
@@ -1808,7 +1960,10 @@ class AppHold:
     def _open_windows(self, link: str | None) -> str:
         """Windows: ChatGPT.exe itself, started and left running (never by
         its package, which would drop CODEX_HOME: codex_app_windows), then
-        found again by its profile folder, so it's known to be ours."""
+        found again by its profile folder, so it's known to be ours. If the
+        lookup can't find it while the process we started still runs, that
+        process is the copy (a second copy on the same profile would hand
+        over to the first and end)."""
         assert self.app is not None
         try:
             command, env = windows_open(self.app, self.data, link)
@@ -1816,7 +1971,7 @@ class AppHold:
             log.error("the Codex app copy wasn't started: %s", error)
             return "refused"
         try:
-            win.start(command, env, self.popen)
+            self._started = win.start(command, env, self.popen)
         except OSError as error:
             log.warning("the Codex app copy didn't open (%s)", error)
             return "failed"
@@ -1826,21 +1981,45 @@ class AppHold:
                 self._started_pid = pid
                 return "opened"
             self.sleep(self.poll_seconds)
+        if win.still_running(self._started) and isinstance(getattr(self._started, "pid", None), int):
+            log.warning("the Codex app copy runs but wasn't found by its profile; keeping its process")
+            self._started_pid = self._started.pid  # type: ignore[attr-defined]
+            return "opened"
         log.warning("the Codex app copy was started but isn't running with UM-Codex's profile")
         return "failed"
 
+    def _copy_shared(self, running) -> bool:
+        """Whether another setup's launch in the Codex app (this data folder's)
+        is running now: they share UM-Codex's one copy of the app."""
+        from umcodex.launch import running_launches
+
+        mine = running.spec.launch_id
+        with contextlib.suppress(OSError):
+            return any(launch.app and launch.launch_id != mine for launch in running_launches(self.data))
+        return False
+
     def _fall_back(self, running, state: dict, why: str) -> int:
         """Windows: the copy didn't connect in time (or didn't start). Stop
-        the copy this launch started (by its PID), end the launch, and say to
-        use Terminal."""
+        the copy this launch started (by its PID), unless another setup's
+        launch uses it, end the launch, and say what happened and to use
+        Terminal (the launcher shows it on the setup's card)."""
         from umcodex.launch import update_launch_app
 
         _, user_data = copy_paths(self.data)
-        if self._started_pid is not None and win.stop(self._started_pid, user_data, self.run):
+        if self._started_pid is None:
+            outcome = "not-started"
+        elif self._copy_shared(running):
+            outcome = "shared"
+        elif win.stop(self._started_pid, user_data, self.run, self._started):
+            outcome = "stopped"
             log.info("stopped the Codex app copy (pid %d)", self._started_pid)
-        update_launch_app(running.folder, {**state, "fallback": "terminal"})
-        log.warning("launch %s: %s; ending it", running.spec.launch_id, why)
-        self.say(WINDOWS_FALLBACK)
+        else:
+            outcome = "still-open"
+        message = WINDOWS_FALLBACKS[outcome]
+        update_launch_app(running.folder, {**state, "fallback": "terminal", "fallback_message": message})
+        record_fallback(running.setup.id, message, self.data)  # for the card, once the launch is gone
+        log.warning("launch %s: %s; ending it (the copy: %s)", running.spec.launch_id, why, outcome)
+        self.say(message)
         return 1
 
     def _say_ready(self, name: str, state: dict) -> None:
@@ -1894,6 +2073,7 @@ class AppHold:
             if not state["connected"] and app_server_running(self.docker, agent):
                 state = {**state, "connected": True, "first_time": False}
                 mark_connected(running.setup.id, self.data)
+                record_fallback(running.setup.id, None, self.data)
                 update_launch_app(running.folder, state)
                 log.info("launch %s: the Codex app connected", running.spec.launch_id)
                 self.say(f"Connected: the Codex app is working in the sandbox ({state['alias']}).")

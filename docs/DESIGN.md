@@ -1383,6 +1383,44 @@ modes, rigor, and the frontend.
          copy's own arguments (the app reads links from its command line on
          Windows too); one opened through Windows would reach the person's
          own app, which the package registers.
+       - From the review (2026-10-02):
+         - PowerShell's output is read as UTF-8 (`[Console]::OutputEncoding`
+           set first, `encoding="utf-8"`): Windows PowerShell 5.1 otherwise
+           writes it in the OEM code page, so a profile under `C:\Users\José`
+           came back as "Jos?" and the copy was never found. The process the
+           launch started is also kept: if the lookup still can't find the
+           copy while that process runs, it's the copy (a second one on the
+           same profile hands over and ends), and `stop` may end it by that
+           handle (a held process's number can't be reused).
+         - The fallback stops the copy only if no other setup's launch in
+           the Codex app (this data folder's) is running: they share it. What
+           it says depends on what became of the copy (`WINDOWS_FALLBACKS`:
+           stopped, shared, still open, never opened), and it's kept in
+           `codex-app/fallbacks.json` for the setup's card (the launch's own
+           folder is gone by then), which shows it with "Open in Terminal
+           instead" until the next Start or a connection. The card also
+           shows a refused copy, and says "taskbar" on Windows (the launch's
+           `icon`).
+         - "Codex app" is unavailable on Windows without Windows' own ssh
+           (`System32\OpenSSH\ssh.exe`, the OpenSSH Client optional feature),
+           with a plain message on how to add it.
+         - The ssh files' permissions: an icacls or whoami failure on a file
+           or folder the Include reaches stops the launch (the file is taken
+           away again: ssh skips an Include that matches nothing, but refuses
+           one it can't trust, and every host with it), with a plain message;
+           a failed SID lookup isn't kept.
+         - The Include line: on Windows the new `~/.ssh/config` (a new file)
+           and its backup get the original's access rules (`Get-Acl` SDDL,
+           `Set-Acl`), then Windows' ssh is asked to read it (`ssh -G`); on
+           "Bad permissions" the file is put back as it was. An `~/.ssh` with
+           exactly Python 3.13's 0o700 rules (SYSTEM, Administrators, OWNER
+           RIGHTS, protected) that UM-Codex made (its note in
+           `~/.ssh/um-codex`, or that folder there) is repaired: the person
+           given full rights, then OWNER RIGHTS removed (removing it alone
+           would leave the person without access).
+         - The copy's environment also leaves out `ELECTRON_*` and
+           `NODE_OPTIONS`; `check_paths` also refuses the person's own
+           `CODEX_HOME`; the newest registered version of the package is used.
        - The launcher's notes add `WINDOWS_NOTES`: experimental, no Windows
          sandbox or Computer Use in UM-Codex's window, and an app component
          update (about 1 GB) may download the first time.

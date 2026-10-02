@@ -63,11 +63,17 @@ def hidden() -> int:
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+# Windows PowerShell 5.1 writes redirected output in the console's OEM code
+# page, so a folder named after José would come back as "Jos?": UTF-8 it is.
+_UTF8 = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); "
+
+
 def _powershell(command: str, run: Runner, timeout: float = 30) -> subprocess.CompletedProcess | None:
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         return run(
-            [powershell(), "-NoProfile", "-NonInteractive", "-Command", command],
-            capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, creationflags=hidden(),
+            [powershell(), "-NoProfile", "-NonInteractive", "-Command", _UTF8 + command],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+            stdin=subprocess.DEVNULL, creationflags=hidden(),
         )  # fmt: skip
     return None
 
@@ -89,8 +95,9 @@ class Package:
 def package(run: Runner = subprocess.run) -> Package | None:
     """The installed Store package, as Windows reports it now."""
     done = _powershell(
-        f"Get-AppxPackage -Name {PACKAGE} | Select-Object -First 1 "
-        "InstallLocation, PackageFamilyName, Publisher | ConvertTo-Json -Compress",
+        # The newest registered version (compared as a version, not as text), if several are.
+        f"Get-AppxPackage -Name {PACKAGE} | Sort-Object {{ [version]$_.Version }} -Descending | "
+        "Select-Object -First 1 InstallLocation, PackageFamilyName, Publisher | ConvertTo-Json -Compress",
         run,
     )
     if done is None or done.returncode != 0 or not (done.stdout or "").strip():
@@ -150,12 +157,22 @@ def _within(path: Path, folder: Path) -> bool:
     return path_s == folder_s or path_s.startswith(folder_s.rstrip("\\/") + os.sep)
 
 
-def check_paths(home: Path, user_data: Path, data: Path, person: Path, app_data: Path | None) -> None:
+def check_paths(
+    home: Path,
+    user_data: Path,
+    data: Path,
+    person: Path,
+    app_data: Path | None,
+    their_codex_home: str | None = None,
+) -> None:
     """Refuse (UnsafePaths) unless the copy's CODEX_HOME and profile are
-    inside UM-Codex's data folder and are neither the person's ~/.codex nor
-    the app's own profile (%APPDATA%\\Codex...), nor hold them."""
+    inside UM-Codex's data folder and are neither the person's ~/.codex (or
+    the CODEX_HOME they set themselves) nor the app's own profile
+    (%APPDATA%\\Codex...), nor hold them."""
     home, user_data, data = (Path(os.path.abspath(p)) for p in (home, user_data, data))
     theirs = [Path(os.path.abspath(person / ".codex"))]
+    if their_codex_home:
+        theirs.append(Path(os.path.abspath(their_codex_home)))
     if app_data is not None:
         theirs += [Path(os.path.abspath(p)) for p in Path(app_data).glob("Codex*")]
         theirs.append(Path(os.path.abspath(Path(app_data) / "Codex")))
@@ -170,8 +187,8 @@ def check_paths(home: Path, user_data: Path, data: Path, person: Path, app_data:
 # Variables that could lead the copy somewhere other than UM-Codex's own
 # folders and local responder: Codex's own, OpenAI's, and proxies (the copy
 # only talks to 127.0.0.1 and runs ssh, which doesn't use them).
-_LEFT_OUT = ("CODEX_", "OPENAI_")
-_PROXIES = {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "FTP_PROXY", "ELECTRON_RUN_AS_NODE"}
+_LEFT_OUT = ("CODEX_", "OPENAI_", "ELECTRON_")
+_PROXIES = {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "FTP_PROXY", "NODE_OPTIONS"}
 
 
 def _left_out(key: str) -> bool:
@@ -198,12 +215,13 @@ def open_command(
     return [str(app), f"--user-data-dir={user_data}", *([link] if link else [])], env
 
 
-def start(command: list[str], env: dict[str, str], popen: Callable[..., object]) -> None:
+def start(command: list[str], env: dict[str, str], popen: Callable[..., object]) -> object:
     """Started and left running (CreateProcess, detached: never the package's
-    activation). Raises OSError."""
+    activation). Returns the process (its pid is the copy's main process,
+    and while it's held that number can't go to another one). Raises OSError."""
     flags = getattr(subprocess, "DETACHED_PROCESS", 0x8)
     flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200)
-    popen(
+    return popen(
         command,
         env=env,
         stdin=subprocess.DEVNULL,
@@ -212,6 +230,12 @@ def start(command: list[str], env: dict[str, str], popen: Callable[..., object])
         creationflags=flags,
         close_fds=True,
     )
+
+
+def still_running(process: object) -> bool:
+    """Whether a process this launch started hasn't ended (False if unknown)."""
+    poll = getattr(process, "poll", None)
+    return callable(poll) and poll() is None
 
 
 # --- The running copy ------------------------------------------------------------------
@@ -303,10 +327,14 @@ def bring_forward(pid: int, run: Runner = subprocess.run) -> bool:
     return done is not None and done.returncode == 0 and done.stdout.strip() == "True"
 
 
-def stop(pid: int, user_data: Path, run: Runner = subprocess.run) -> bool:
+def stop(pid: int, user_data: Path, run: Runner = subprocess.run, process: object = None) -> bool:
     """End the copy (that process and its children) by its PID, only if that
-    PID is still the copy's main process right now (a number can be reused)."""
-    if find_copy(user_data, run, pid=pid) != pid:
+    PID is the copy's main process right now (a number can be reused): it
+    has the copy's profile, or it's the process this launch started and still
+    holds (`process`, when the lookup can't tell). True once it's gone."""
+    ours = find_copy(user_data, run, pid=pid) == pid
+    held = process is not None and getattr(process, "pid", None) == pid and still_running(process)
+    if not (ours or held):
         return False
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         run(
@@ -315,4 +343,77 @@ def stop(pid: int, user_data: Path, run: Runner = subprocess.run) -> bool:
         )  # fmt: skip
     # taskkill's own code isn't enough: with /T it reports a helper that was
     # already ending as a failure though the copy itself ended (live test).
+    if held:
+        with contextlib.suppress(Exception):
+            process.wait(timeout=10)  # type: ignore[attr-defined]
+        return not still_running(process)
     return find_copy(user_data, run, pid=pid) is None
+
+
+# --- The person's own ~/.ssh/config (the Include line) ---------------------------------
+
+
+def _quoted(path: Path) -> str:
+    """A path as a PowerShell single-quoted string."""
+    return "'" + str(path).replace("'", "''") + "'"
+
+
+def access_rules(path: Path, run: Runner = subprocess.run) -> str | None:
+    """A file's access rules (its DACL, as SDDL), to give a replacement the
+    same; None if they can't be read."""
+    done = _powershell(f"(Get-Acl -LiteralPath {_quoted(path)}).GetSecurityDescriptorSddlForm('Access')", run)
+    text = (done.stdout or "").strip() if done is not None and done.returncode == 0 else ""
+    return text if text.startswith("D:") else None
+
+
+def set_access_rules(path: Path, sddl: str, run: Runner = subprocess.run) -> bool:
+    """Give a file the access rules read by access_rules (inherited ones stay
+    inherited, from the folder it's in)."""
+    if not re.fullmatch(r"D:[A-Za-z0-9()_;:\-\s]*", sddl):
+        return False
+    done = _powershell(
+        f"$a = Get-Acl -LiteralPath {_quoted(path)}; $a.SetSecurityDescriptorSddlForm('{sddl}', 'Access'); "
+        f"Set-Acl -LiteralPath {_quoted(path)} -AclObject $a",
+        run,
+    )
+    return done is not None and done.returncode == 0
+
+
+def ssh_refuses_config(run: Runner = subprocess.run) -> str | None:
+    """What Windows' ssh says if it won't read the person's ~/.ssh/config
+    (and so any host) for its permissions; None when it reads it, or when
+    there's no Windows ssh to ask."""
+    ssh = system_dir() / "OpenSSH" / "ssh.exe"
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        done = run(
+            [str(ssh), "-G", "umcodex-permissions-check.invalid"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+            stdin=subprocess.DEVNULL, creationflags=hidden(),
+        )  # fmt: skip
+        said = (done.stderr or "").strip()
+        if done.returncode != 0 and ("Bad permissions" in said or "Bad owner" in said):
+            return said
+    return None
+
+
+def owner_rights_only(folder: Path, run: Runner = subprocess.run) -> bool:
+    """Whether a folder's permissions are exactly what Python 3.13's
+    mkdir(mode=0o700) gives on Windows (SYSTEM, Administrators, OWNER
+    RIGHTS, nothing inherited): an ~/.ssh an earlier UM-Codex made."""
+    sddl = access_rules(folder, run) or ""
+    if not sddl.startswith("D:P"):
+        return False
+    trustees = {ace.split(";")[-1].rstrip(")") for ace in re.findall(r"\([^)]*\)", sddl)}
+    return trustees == {"SY", "BA", "OW"} or trustees == {"S-1-5-18", "S-1-5-32-544", "S-1-3-4"}
+
+
+def openssh_installed() -> bool:
+    """Whether Windows' own ssh is there (the OpenSSH Client optional feature)."""
+    return Path(str(system_dir() / "OpenSSH" / "ssh.exe")).is_file()
+
+
+OPENSSH_MISSING = (
+    "The Codex app needs Windows' own ssh (OpenSSH Client), which isn't on this computer. In Settings, "
+    "search for \"Optional features\", add a feature, choose OpenSSH Client and install it (on a managed "
+    "computer, your IT may need to), then come back. Terminal works in the meantime."
+)

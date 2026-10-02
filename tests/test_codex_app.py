@@ -800,7 +800,12 @@ def test_the_app_is_found_by_its_bundle_id(tmp_path):
 
 
 def test_where_the_codex_app_can_be_used(monkeypatch):
+    monkeypatch.setattr(win, "openssh_installed", lambda: True)
     assert codex_app.unavailable_reason("win32", Path("C:/x/ChatGPT.exe")) is None  # on: experimental
+    monkeypatch.setattr(win, "openssh_installed", lambda: False)  # no OpenSSH Client feature
+    assert codex_app.unavailable_reason("win32", Path("C:/x/ChatGPT.exe")) == win.OPENSSH_MISSING
+    assert "OpenSSH Client" in win.OPENSSH_MISSING
+    monkeypatch.setattr(win, "openssh_installed", lambda: True)
     monkeypatch.setattr(codex_app, "WINDOWS_COPY", False)  # switched off again
     monkeypatch.delenv("UMCODEX_WINDOWS_CODEX_APP", raising=False)
     assert codex_app.unavailable_reason("darwin", Path("/Applications/ChatGPT.app")) is None
@@ -1160,8 +1165,10 @@ def _windows_hold(tmp_path, data_folder, docker, *, clock=lambda: 0.0, starts=Tr
     def run(command, **options):
         if command[0].lower().endswith("powershell.exe") and "Win32_Process" in command[-1]:
             calls.append(command)
+            killed = any(c[0].lower().endswith("taskkill.exe") for c in calls)
             line = f'4242 "{WINDOWS_PACKAGE}\\app\\ChatGPT.exe" --user-data-dir={user_data}'
-            return subprocess.CompletedProcess(command, 0, line if started and starts else "", "")
+            shown = started and starts and not killed
+            return subprocess.CompletedProcess(command, 0, line if shown else "", "")
         return plain(command, **options)
 
     hold = codex_app.AppHold(
@@ -1272,7 +1279,68 @@ def test_on_windows_a_copy_that_doesnt_start_ends_the_launch(tmp_path, data_fold
     hold, calls, started, said = _windows_hold(tmp_path, data_folder, docker, starts=False)
     assert hold(running) == 1 and len(started) == 1
     assert not any(c[0].lower().endswith("taskkill.exe") for c in calls)  # nothing of ours to stop
-    assert said[-1] == codex_app.WINDOWS_FALLBACK
+    assert said[-1] == codex_app.WINDOWS_FALLBACKS["not-started"]
+    info = json.loads((running.folder / "launch.json").read_text())
+    assert info["app"]["fallback"] == "terminal"
+    assert info["app"]["fallback_message"] == codex_app.WINDOWS_FALLBACKS["not-started"]
+
+
+class _Held:
+    """A process this launch started (subprocess.Popen's pid, poll, wait)."""
+
+    def __init__(self, pid: int) -> None:
+        self.pid, self.ended = pid, False
+
+    def poll(self):
+        return 0 if self.ended else None
+
+    def wait(self, timeout=None):  # after taskkill: it has ended
+        self.ended = True
+        return 0
+
+
+def test_on_windows_the_started_process_is_the_copy_when_the_lookup_cant_tell(tmp_path, data_folder):
+    """A profile path Win32_Process doesn't give back as written (an
+    encoding, a short name): the process this launch started and still holds
+    is the copy, and it's what the fallback stops."""
+    running = _running(tmp_path, data_folder)
+    times = iter([0.0, codex_app.WINDOWS_CONNECT_SECONDS + 1])
+    docker = FakeDocker(running_for=99, connects_after=None)
+    hold, calls, started, said = _windows_hold(
+        tmp_path, data_folder, docker, starts=False, clock=lambda: next(times)
+    )
+    held = _Held(5150)
+
+    def kill(command, **options):
+        if command[0].lower().endswith("taskkill.exe"):
+            held.ended = True
+        return calls.append(command) or subprocess.CompletedProcess(command, 0, "", "")
+
+    hold.popen = lambda command, **options: started.append((command, options)) or held
+    plain_run = hold.run
+    hold.run = lambda command, **options: (
+        kill(command) if command[0].lower().endswith("taskkill.exe") else plain_run(command, **options)
+    )
+    assert hold(running) == 1
+    assert [c[1:3] for c in calls if c[0].lower().endswith("taskkill.exe")] == [["/PID", "5150"]]
+    assert said[-1] == codex_app.WINDOWS_FALLBACKS["stopped"]
+
+
+def test_on_windows_a_copy_another_setup_uses_isnt_stopped(tmp_path, data_folder, monkeypatch):
+    running = _running(tmp_path, data_folder)
+    times = iter([0.0, codex_app.WINDOWS_CONNECT_SECONDS + 1])
+    docker = FakeDocker(running_for=99, connects_after=None)
+    hold, calls, _, said = _windows_hold(tmp_path, data_folder, docker, clock=lambda: next(times))
+    this = launch.RunningLaunch("ab12cd34", "thesis-a1", "Thesis", 100.0, app={"alias": "umcodex-thesis-a1"})
+    other = launch.RunningLaunch("ffff0000", "other-b2", "Other", 90.0, app={"alias": "umcodex-other-b2"})
+    in_terminal = launch.RunningLaunch("eeee0000", "t-c3", "T", 95.0, app=None)
+    monkeypatch.setattr(launch, "running_launches", lambda data: [other, in_terminal, this])
+    assert hold(running) == 1
+    assert not any(c[0].lower().endswith("taskkill.exe") for c in calls)
+    assert said[-1] == codex_app.WINDOWS_FALLBACKS["shared"]
+    # Only this launch, or another one in a terminal: the copy is ours to stop.
+    monkeypatch.setattr(launch, "running_launches", lambda data: [in_terminal, this])
+    assert not hold._copy_shared(running)
 
 
 def test_a_launch_without_the_app_still_prepares_everything(tmp_path, data_folder):
@@ -1520,7 +1588,9 @@ def test_ssh_folders_and_files_get_only_the_persons_permissions_on_windows(tmp_p
         return real(self, *args, **options)
 
     monkeypatch.setattr(Path, "mkdir", mkdir)
-    monkeypatch.setattr(codex_app, "_windows_owner_only", lambda path, folder: locked.append((path, folder)))
+    monkeypatch.setattr(
+        codex_app, "_windows_owner_only", lambda path, folder: locked.append((path, folder)) or True
+    )
     codex_app._ssh_mkdir(tmp_path / "w", platform="win32")
     codex_app._ssh_mkdir(tmp_path / "theirs", platform="win32", own=False)  # a ~/.ssh that was there
     codex_app._ssh_write(tmp_path / "w" / "config", "Host x\n", platform="win32")
@@ -1591,3 +1661,131 @@ def test_windows_openssh_accepts_umcodex_ssh_folders(tmp_path):
     codex_app._private_write(refused / "config", host)
     done = resolves(refused / "config")
     assert done.returncode != 0 and "Bad permissions" in done.stderr, done.stderr + _acls(refused)
+
+
+def test_windows_lookups_read_powershell_as_utf8_and_find_a_non_ascii_profile(tmp_path):
+    """Windows PowerShell 5.1 writes redirected output in the OEM code page,
+    so a profile under C:/Users/José came back as "Jos?" and never matched."""
+    user_data = tmp_path / "Jos\u00e9 N\u00fa\u00f1ez" / "UM-Codex" / "codex-app" / "user-data"
+    asked = []
+
+    def run(command, **options):
+        asked.append((command, options))
+        line = f'7311 "{WINDOWS_PACKAGE}\\app\\ChatGPT.exe" "--user-data-dir={user_data}"'
+        return subprocess.CompletedProcess(command, 0, line + "\r\n", "")
+
+    assert win.find_copy(user_data, run) == 7311
+    command, options = asked[0]
+    assert command[-1].startswith("[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); ")
+    assert options["encoding"] == "utf-8" and options["errors"] == "replace"
+
+
+def test_windows_stop_uses_the_held_process_when_the_lookup_cant_find_it(tmp_path):
+    calls = []
+
+    def nothing_found(command, **options):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    held = _Held(5150)
+    assert win.stop(5150, tmp_path, nothing_found, held) is True  # the process it holds: ours
+    assert [c[1:3] for c in calls if c[0].lower().endswith("taskkill.exe")] == [["/PID", "5150"]]
+    calls.clear()
+    ended = _Held(5150)
+    ended.ended = True  # it ended: the number may be someone else's now
+    assert win.stop(5150, tmp_path, nothing_found, ended) is False
+    assert win.stop(5150, tmp_path, nothing_found, _Held(9999)) is False  # not that process
+    assert not any(c[0].lower().endswith("taskkill.exe") for c in calls)
+
+
+def test_windows_ssh_files_that_cant_be_trusted_arent_left(tmp_path, monkeypatch):
+    """icacls failing: the file ssh would refuse (and with it every host) is
+    taken away, and the launch stops with a plain message."""
+    monkeypatch.setattr(codex_app, "_windows_owner_only", lambda path, folder: False)
+    with pytest.raises(codex_app.SshPermissionsError) as raised:
+        codex_app._ssh_write(tmp_path / "config", "Host x\n", platform="win32")
+    assert not (tmp_path / "config").exists()
+    assert "Terminal" in str(raised.value) and "weren't changed" in str(raised.value)
+    with pytest.raises(codex_app.SshPermissionsError):
+        codex_app._ssh_mkdir(tmp_path / "um-codex", platform="win32")
+    codex_app._ssh_mkdir(tmp_path / "theirs", platform="win32", own=False)  # theirs: not changed, no error
+
+
+def test_the_sid_lookup_isnt_kept_when_it_fails(monkeypatch):
+    monkeypatch.setattr(codex_app, "_sid", None)
+    answers = iter([subprocess.CompletedProcess([], 1, "", "no"), subprocess.CompletedProcess(
+        [], 0, '"umhs\\someone","S-1-5-21-1-2-3-1001"\r\n', ""
+    )])  # fmt: skip
+    asked = []
+
+    def run(command, **options):
+        asked.append(command)
+        return next(answers)
+
+    assert codex_app._windows_user_sid(run) is None
+    assert codex_app._windows_user_sid(run) == "S-1-5-21-1-2-3-1001"  # asked again
+    kept = codex_app._windows_user_sid(lambda *a, **o: pytest.fail("asked a third time"))
+    assert kept == "S-1-5-21-1-2-3-1001"
+    assert asked[0][0].lower().endswith(r"\system32\whoami.exe")
+
+
+def test_on_windows_the_include_keeps_the_files_access_rules(ssh_home, monkeypatch):
+    """The new ~/.ssh/config (a new file) and its backup get the original's
+    access rules; if Windows' ssh then refuses the file, it's put back."""
+    config = ssh_home / ".ssh" / "config"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("Host mine\n  HostName example.invalid\n")
+    rules = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;S-1-5-21-1-2-3-1001)"
+    given = []
+    monkeypatch.setattr(win, "access_rules", lambda path, run=None: rules)
+    monkeypatch.setattr(
+        win, "set_access_rules", lambda path, sddl, run=None: given.append((path.name, sddl)) or True
+    )
+    monkeypatch.setattr(codex_app, "repair_ssh_dir", lambda *a, **o: False)
+    monkeypatch.setattr(codex_app, "_is_the_persons_ssh", lambda home: True)
+    monkeypatch.setattr(win, "ssh_refuses_config", lambda run=None: None)
+    assert codex_app.add_include(platform="win32") == "added"
+    assert config.read_text().startswith(codex_app.INCLUDE_LINE)
+    assert given == [(codex_app.BACKUP_NAME, rules), ("config", rules)]
+    # ssh refuses it after all: the file is put back as it was, rules too.
+    config.write_text("Host mine\n  HostName example.invalid\n")
+    given.clear()
+    monkeypatch.setattr(win, "ssh_refuses_config", lambda run=None: "Bad permissions. Try removing ...")
+    with pytest.raises(codex_app.SshPermissionsError):
+        codex_app.add_include(platform="win32")
+    assert config.read_text() == "Host mine\n  HostName example.invalid\n"
+    assert given[-1] == ("config", rules)
+
+
+def test_an_ssh_folder_an_earlier_umcodex_made_is_repaired_on_windows(ssh_home, monkeypatch):
+    """Only one UM-Codex made (~/.ssh/um-codex there) with exactly Python
+    3.13's 0o700 rules: the person is given the rights, then OWNER RIGHTS goes."""
+    (ssh_home / ".ssh" / "um-codex").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(codex_app, "_sid", "S-1-5-21-1-2-3-1001")
+    ran = []
+
+    def run(command, **options):
+        ran.append(command[1:])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(win, "owner_rights_only", lambda folder, run=None: True)
+    assert codex_app.repair_ssh_dir(run=run, platform="win32")
+    ssh = str(ssh_home / ".ssh")
+    assert ran == [
+        [ssh, "/grant", "*S-1-5-21-1-2-3-1001:(OI)(CI)F", "/Q"],
+        [ssh, "/remove:g", "*S-1-3-4", "/T", "/Q"],
+    ]
+    ran.clear()
+    monkeypatch.setattr(win, "owner_rights_only", lambda folder, run=None: False)  # the person's own rules
+    assert not codex_app.repair_ssh_dir(run=run, platform="win32") and ran == []
+    assert not codex_app.repair_ssh_dir(run=run, platform="darwin")
+
+
+def test_python_313s_windows_0o700_rules_are_recognised(monkeypatch):
+    for sddl, expected in (
+        ("D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", True),  # mkdir(mode=0o700), live 2026-10-02
+        ("D:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;OW)", False),  # inherited, not made so
+        ("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-21-1-2-3-1001)", False),  # the person's
+    ):
+        monkeypatch.setattr(win, "access_rules", lambda folder, run=None, s=sddl: s)
+        assert win.owner_rights_only(Path("x")) is expected, sddl

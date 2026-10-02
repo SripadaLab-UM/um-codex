@@ -431,7 +431,14 @@ class Launcher:
         return {
             "version": __version__,
             "home": str(Path.home()),  # for showing paths as ~/…
-            "setups": [setup_json(s, own_data=self.own_data) for s in self.store.all()],
+            "setups": [
+                # Why its last launch in the Codex app fell back to Terminal (Windows), if it did.
+                {
+                    **setup_json(s, own_data=self.own_data),
+                    "app_fallback": codex_app.last_fallback(s.id, self.data),
+                }
+                for s in self.store.all()
+            ],
             "running": self.running(),
             "docker": {
                 "state": docker,
@@ -643,6 +650,7 @@ class Launcher:
             if self.updating():
                 raise Invalid("Updating… wait for it to finish, then start.", "update", status=409)
             self.store.save(setup, used=True)
+            codex_app.record_fallback(setup.id, None, self.data)  # a new start: the last one's note goes
             try:
                 opener.open(setup.id)
             except OpenFailed as why:
