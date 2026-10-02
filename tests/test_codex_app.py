@@ -8,6 +8,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 
@@ -888,13 +889,13 @@ def test_on_windows_a_runtime_download_puts_the_fallback_off(tmp_path, data_fold
 def test_a_runtime_download_is_seen_by_its_staging_folder(tmp_path):
     staging = tmp_path / ".cache" / "codex-runtimes" / "codex-runtime-install-SsKNSv"
     (staging / "payload").mkdir(parents=True)
-    part = staging / "node-runtime.tar.gz"
+    part = staging / "payload" / "node"
     part.write_bytes(b"x")
-    os.utime(part, (1000.0, 1000.0))
-    os.utime(staging, (1000.0, 1000.0))
-    assert win.runtime_update_running(tmp_path, now=1030.0) is True
-    assert win.runtime_update_running(tmp_path, now=1100.0) is False  # left over, not being written
-    assert win.runtime_update_running(tmp_path / "nobody", now=1030.0) is False
+    os.utime(part, (1000.0, 1000.0))  # extracted files keep the archive's old times
+    made = time.time()
+    assert win.runtime_update_running(tmp_path, now=made + 60) is True
+    assert win.runtime_update_running(tmp_path, now=made + 3600) is False  # left over long ago
+    assert win.runtime_update_running(tmp_path / "nobody", now=made + 60) is False
 
 
 def test_on_windows_only_our_copy_is_ever_stopped(data_folder):

@@ -275,18 +275,18 @@ def find_copy(user_data: Path, run: Runner = subprocess.run, *, pid: int | None 
 RUNTIME_STAGING = "codex-runtime-install-*"  # the app's own download of its runtime
 
 
-def runtime_update_running(home: Path, now: float, recent: float = 60.0) -> bool:
-    """Whether the app (ours or the person's) is downloading its runtime
-    into the shared ~/.cache/codex-runtimes now: a staging folder written to
-    within `recent` seconds. Stopping the copy then would leave a partial
-    download (about 1 GB) behind."""
+def runtime_update_running(home: Path, now: float, recent: float = 1800.0) -> bool:
+    """Whether the app (ours or the person's) is updating its runtime in the
+    shared ~/.cache/codex-runtimes now: a staging folder made within
+    `recent` seconds (the app removes it when it's done). Its files can't
+    tell: they're extracted with the archive's own old times (seen
+    2026-10-02: a 500 MB download, then about 20,000 files). Stopping the
+    copy then would leave a partial update (over 1 GB) behind."""
     with contextlib.suppress(OSError):
         for staging in (home / ".cache" / "codex-runtimes").glob(RUNTIME_STAGING):
-            newest = max(
-                (entry.stat().st_mtime for entry in staging.rglob("*") if entry.is_file()),
-                default=staging.stat().st_mtime,
-            )
-            if now - newest < recent:
+            info = staging.stat()
+            made = getattr(info, "st_birthtime", info.st_ctime)  # creation time on Windows
+            if now - made < recent:
                 return True
     return False
 
