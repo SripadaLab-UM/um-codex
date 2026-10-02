@@ -30,7 +30,7 @@ from pathlib import Path
 
 from umcodex import credentials
 from umcodex.containers import APP, APP_LABEL, images
-from umcodex.launch import launch_is_live, launches_dir
+from umcodex.launch import LaunchLock, launch_is_live, launches_dir
 from umcodex.paths import app_dir, data_dir
 
 Say = Callable[[str], None]
@@ -54,6 +54,12 @@ def uninstall(
     data = data_dir()
     if _running(data):
         say("UM-Codex is running (a launch is open). Quit Codex first, then run the uninstaller again.")
+        return 1
+    if _updating():
+        say(
+            "UM-Codex is updating (from its window or a terminal). Wait for it to finish, then run the "
+            "uninstaller again."
+        )
         return 1
 
     def confirm(question: str) -> bool:
@@ -123,6 +129,20 @@ def uninstall(
         _remove_listed(run, ["volume", "ls", "-q", "--filter", f"label={APP_LABEL}={APP}"], ["volume", "rm"])
     say("Your own folders were not touched.")
     return 0
+
+
+def _updating() -> bool:
+    """Whether an update (or rollback) holds its lock: the launcher's runs on
+    its own, and its files must not go from under it."""
+    from umcodex.update import Layout, install_root
+
+    lock = LaunchLock(Layout(install_root()).root / "update.lock")
+    if not lock.path.exists():
+        return False
+    if lock.acquire():
+        lock.release()
+        return False
+    return True
 
 
 def _running(data: Path) -> bool:

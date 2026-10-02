@@ -39,8 +39,11 @@
 #   6. Adds the UM-Codex app (it opens UM-Codex's launcher window, `um-codex
 #      ui`, in the browser) to
 #      /Applications, or to ~/Applications if you can't add to /Applications
-#      without sudo, and a shortcut to it on your Desktop. At the end it says
-#      where everything went and offers to show the app in Finder and open it.
+#      without sudo, and a shortcut to it on your Desktop. If the Codex app
+#      (ChatGPT's desktop app) is installed, it asks once whether to add the
+#      one line it needs at the top of ~/.ssh/config (`um-codex ssh-include`,
+#      [Y/n]). At the end it says where everything went and offers to show
+#      the app in Finder and open it.
 #
 # UMCODEX_SYSTEM_APPLICATIONS (for tests) stands in for /Applications.
 
@@ -1048,6 +1051,20 @@ if [ -d "$HOME/Desktop" ]; then
   fi
 fi
 
+# The Codex app's one line in ~/.ssh/config, asked here once so that
+# starting a setup in the Codex app needs no question later. `um-codex
+# ssh-include` asks only when the Codex app is installed and the line isn't
+# there yet, with the reason; Return is yes. It reads the terminal, never
+# this script. With no terminal nothing is added (consent must be the
+# person's): the launcher window asks, on the setup's card, when it's needed.
+if have_terminal; then
+  echo ""
+  "$UMCODEX" ssh-include < /dev/tty || true
+else
+  echo "The Codex app's line in ~/.ssh/config wasn't asked about (no terminal): UM-Codex"
+  echo "asks the first time you open a setup in the Codex app."
+fi
+
 step "Done"
 echo "$NAME is installed."
 echo "  The app:           $APP"
@@ -1055,9 +1072,9 @@ if [ -n "$DESKTOP_LINK" ]; then echo "  Desktop shortcut:  $DESKTOP_LINK"; fi
 if [ "$LINKED" = 1 ]; then echo "  The command:       $COMMAND_LINK"; fi
 echo "  Program files:     $ROOT"
 echo "Open it with the Desktop shortcut, from Applications in Finder, or with Spotlight"
-echo "(Cmd-Space, then type $NAME). It opens UM-Codex's window in your browser: make a"
-echo "setup there (which folders Codex may use, and whether it can reach the internet),"
-echo "then Start opens Codex in a Terminal window."
+echo "(Cmd-Space, then type $NAME). It opens UM-Codex's window in your browser: choose a"
+echo "folder to work in, and Codex starts there (in the Codex app if you have it, else in"
+echo "a Terminal window). Next time, one Start."
 echo "Or, in any Terminal window, in the folder you want to work in, run: $RUN_HOW"
 if [ "$LINKED" = 1 ] && [ "$ON_PATH" = 0 ]; then
   echo "(In a new Terminal window plain um-codex may work too: ~/.local/bin wasn't on"

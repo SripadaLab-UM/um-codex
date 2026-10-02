@@ -1305,6 +1305,78 @@ def ask_for_include(ask: Callable[[str], str], say: Say, home: Path | None = Non
     return True
 
 
+# The installers' question (`um-codex ssh-include`), short: the reason in plain words.
+INCLUDE_QUESTION_LINES = (
+    "The Codex app (in ChatGPT's desktop app) reaches UM-Codex's sandbox through your ssh",
+    "settings. That needs one line at the top of ~/.ssh/config: Include ~/.ssh/um-codex/config",
+    "(your file is backed up first, nothing else in it changes, and uninstalling takes it out).",
+)
+INCLUDE_LATER = "UM-Codex asks again the first time you open a setup in the Codex app."
+# A "no" at the installers' question, kept so another install doesn't ask
+# again (`um-codex ssh-include --ask-again` does).
+INCLUDE_DECLINED = "ssh-include-declined"
+
+
+def offer_include(
+    ask: Callable[[str], str],
+    say: Say,
+    *,
+    home: Path | None = None,
+    platform: str = sys.platform,
+    find: Callable[[], Path | None] | None = None,
+    data: Path | None = None,
+    ask_again: bool = False,
+) -> int:
+    """The installers' one question about the Include line, so the launcher
+    needn't ask it: asked only on a Mac with the Codex app installed and the
+    line not there yet, default yes. No answer (no terminal) adds nothing:
+    the consent must be the person's. A "no" is kept (in the data folder),
+    so it isn't asked at the next install unless `ask_again`. 0: the line is
+    there (or isn't needed here), 1: not added."""
+    if platform != "darwin":
+        return 0  # "Codex app" isn't offered here (unavailable_reason)
+    if include_present(home):
+        say("The Codex app's line in ~/.ssh/config is there already.")
+        return 0
+    found = (find or (lambda: find_app(platform=platform, home=home)))()
+    if found is None:
+        say(f"The Codex app isn't installed, so nothing was changed for it. {INCLUDE_LATER}")
+        return 0
+    declined = (data or data_dir()) / INCLUDE_DECLINED
+    if declined.exists() and not ask_again:
+        say(
+            "The Codex app's line in ~/.ssh/config: you said no before, so it wasn't asked again "
+            f"(um-codex ssh-include --ask-again asks). {INCLUDE_LATER}"
+        )
+        return 1
+    for line in INCLUDE_QUESTION_LINES:
+        say(line)
+    try:
+        answer = ask("Add that line now? [Y/n] ").strip().lower()
+    except EOFError:
+        say(f"No answer, so nothing was changed. {INCLUDE_LATER}")
+        return 1
+    if answer not in ("", "y", "yes"):
+        with contextlib.suppress(OSError):
+            declined.parent.mkdir(parents=True, exist_ok=True)
+            declined.write_text("no\n", encoding="utf-8")
+        say(f"Nothing was changed. {INCLUDE_LATER}")
+        return 1
+    declined.unlink(missing_ok=True)
+    try:
+        result = add_include(home)
+    except (OSError, UnicodeDecodeError):
+        say(
+            f"~/.ssh/config couldn't be changed (it may not be plain text), so it was left alone. "
+            f"{INCLUDE_LATER}"
+        )
+        return 1
+    done = {"created": "made, with that one line", "added": "the line was added"}
+    done = done.get(result, "the line is there")
+    say(f"~/.ssh/config: {done} (a backup, if it had anything in it: ~/.ssh/{BACKUP_NAME}).")
+    return 0
+
+
 def app_launch_running(docker: Docker, setup_id: str, data: Path | None = None) -> bool:
     """Whether this setup already runs in the Codex app (one at a time: the
     proxy must find exactly one sandbox for the host)."""

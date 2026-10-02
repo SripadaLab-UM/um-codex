@@ -636,3 +636,13 @@ def test_removing_never_follows_links_and_retries_read_only_files():
     entry = function(INSTALL, "Remove-Entry")
     assert "UnauthorizedAccessException" in entry and "ReadOnly" in entry
     assert "(Test-Link $item)" in entry  # a link's attributes are never changed
+
+
+def test_the_codex_apps_ssh_line_is_asked_by_um_codex_and_never_with_yes():
+    """`um-codex ssh-include` asks (and decides whether there's anything to
+    ask on this computer); -Yes never answers it for the person. Asked
+    before the end, so nothing is asked after "All done"."""
+    body = code(person_part(INSTALL))
+    at = body.index("& $UmCodex ssh-include")
+    assert body.rindex("if (-not $Yes) {", 0, at) > body.index("& $UmCodex launchers --write @Links")
+    assert at < body.index("$State.Finished = $true\nWrite-Host")

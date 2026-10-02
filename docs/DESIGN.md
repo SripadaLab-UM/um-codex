@@ -45,11 +45,13 @@ It follows ITS's "Codex Setup" articles for the model settings (the
    5. adds a **UM-Codex** app to Applications and the Desktop (Mac), or to
       Start and the Desktop (Windows), with the logo.
 2. **Launch:** the app (or its Desktop or Start menu shortcut) opens the
-   launcher window in the browser (`um-codex ui`, M5 below): saved setups
-   as cards, a form for a new one, the summary, then Start opens a terminal
-   with Codex in it (or, for a setup that opens in the Codex app, UM-Codex's
-   copy of the app: M6). Or the person types `um-codex` in any terminal, which
-   asks the questions below in the terminal.
+   launcher window in the browser (`um-codex ui`, M5 below). Usually one
+   click (M7): the first time, "Choose a folder and start…" and Codex
+   starts there with the defaults; after that, "Start <last setup>". Saved
+   setups are cards that always show what Codex can do with them; Start opens
+   UM-Codex's copy of the Codex app (M6) or a terminal with Codex in it. Or the
+   person types `um-codex` in any terminal, which asks the questions below in
+   the terminal.
    1. Docker check. If Docker Desktop is closed, it's opened and waited for.
       If Windows refuses its VM (the logon right), it offers DataLab's fix:
       one administrator prompt, then Docker Desktop is restarted.
@@ -106,6 +108,16 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      in the sandbox; the launcher window runs it in the background with no
      window. 1 when the app isn't installed, the ssh line isn't allowed (it
      asks in a terminal), or the setup already runs in the app.
+   - `um-codex ssh-include` (M7): the installers' one question about the
+     Codex app's line in `~/.ssh/config`. Asks only on a Mac with the Codex
+     app installed and the line missing ("Add that line now? [Y/n]", Return
+     is yes). No terminal: says so and exits 1, adding nothing. A "no" is
+     remembered in the data folder and not asked again unless
+     `--ask-again`. Exit 0 when the line is there or isn't needed here, 1
+     when it wasn't added.
+   - `um-codex update --from-launcher` (hidden, M7): the launcher window's
+     Update; as `um-codex update`, but it doesn't close the window that ran
+     it.
    - `um-codex ssh-proxy <setup> [--docker <path>] [--data-dir <path>]`:
      hidden, for ssh's ProxyCommand only (M6). Nothing on stdout but ssh's
      own bytes; 1 with a plain line on stderr when the setup isn't running.
@@ -773,7 +785,8 @@ modes, rigor, and the frontend.
        commands"; the model (the Toolkit's list, default `gpt-5.6-terra`);
        "Open in": Terminal, or Codex app (M6);
      - before a start, the terminal's own summary (`setups.summary`) with
-       Start and Back. If a saved folder now resolves somewhere else, the
+       Start and Back (M7 replaced this page: the facts are on the card).
+       If a saved folder now resolves somewhere else, the
        page shows both places and Start needs a tick in "Use them where they
        go now"; the setup is then saved with the folders as they resolve.
    - **Start** saves the setup as used and opens a new terminal window
@@ -951,10 +964,12 @@ modes, rigor, and the frontend.
      - **The one line in the person's own file:** `Include
        ~/.ssh/um-codex/config` at the very top of `~/.ssh/config` (the app
        follows only top-level Includes; an Include after a `Host` belongs to
-       it). Added **only with consent**: the launcher shows the explanation
-       (`codex_app.INCLUDE_EXPLAINED`) with Allow the first time an app setup
-       is started; the terminal asks the same with "[y/N]"; a launch with
-       no terminal and no line stops with a plain message. The file is read
+       it). Added **only with consent**: since M7 the installers ask once
+       (`um-codex ssh-include`, [Y/n]); if it's still missing, the setup's
+       card in the launcher explains it and its button says "Add the line
+       and start" (the click is the consent; M6 asked in a pop-up with
+       Allow); the terminal asks with "[y/N]"; a launch with no terminal
+       and no line stops with a plain message. The file is read
        as bytes (its line endings, CRLF too, are kept) and backed up first
        (`~/.ssh/config.um-codex-backup`; a backup that no longer matches the
        file is refreshed), then replaced atomically (a temporary file renamed
@@ -1190,7 +1205,199 @@ modes, rigor, and the frontend.
      the local-chats message inside the app's window after a restart, a
      second setup in the same copy, pop-ups after an app update, and
      Windows.
-8. **Acceptance, on a fresh Mac and a fresh Windows machine:**
+8. **M7, "One click" (asked for on 2026-10-02, after the maintainer tried
+   alpha.3: too many pop-ups, alerts and steps before Codex was running).**
+   Built on branch `m7-one-click`. Starting Codex is usually one click; every
+   safety fact stays on screen, as short lines instead of pop-ups and a page.
+   - **First run** (no setups): the page has one main action, "Choose a
+     folder and start…", with what it means right under it, before the
+     click: Codex starts in the Codex app (or Terminal) on that folder; it
+     can change and delete files there (real files, no undo); the internet
+     is on, so it could send what it reads anywhere (and reach this
+     computer, the local network and VPN). Then the native picker, and a
+     setup is made from the folder alone and started at once: no form, no
+     summary page, no confirmation. Notes about the folder (a network drive
+     on Windows) show on its card. "Choose options first…" opens the form
+     instead. "Choose another folder…" (returning) has the same short line
+     (`aria-describedby`).
+   - **Returning:** "Start <last setup>" at the top (the setup used last;
+     while it runs, its status line instead), and Start on every card,
+     which starts at once. "Choose another folder…" makes and starts a new
+     setup the first run's way; "New setup with options…" opens the form.
+   - **Defaults for a new setup** (the API fills in whatever the page
+     doesn't send; `server.setup_from`): **Open in: Codex app** when it's
+     installed and usable (a Mac), else Terminal (`Launcher.default_open_in`);
+     the model `gpt-5.6-terra`; commands without asking; the browser tool
+     off; **the internet on**. The internet was off by default until M7. It's
+     on now because the group wants full power (the Goal above: "Internet on
+     means the whole internet"), and a setup with it off can't install
+     packages or read documentation, which is much of what Codex is asked to
+     do; the risk is the one the summary always named (Codex could send what
+     it can read anywhere), so that line is on every card, under "Access",
+     and one switch in Edit turns it off. The terminal's own question still
+     defaults to off.
+   - **The name** is no longer in the main flow: a new setup is named after
+     its working folder, made unique among the setups (`setups.default_name`:
+     "thesis", "thesis 2", …, letter case aside; a duplicate of "thesis 2" is
+     "thesis 3"). It's the card's title and the Codex app's project name.
+     The card has Rename (inline: Enter saves, Escape cancels, the typed
+     name kept while the page redraws, focus back on Rename afterwards;
+     `POST /api/setups/<id>/rename`, which refuses a name another setup has,
+     letter case aside), and the form has it under More options (empty: the
+     folder's name; an edit without one keeps the name).
+   - **The cards** show, always: the folders (working folder and more, read
+     only or read & write) with "Codex can change and delete files there:
+     your real files, no undo."; under Access, "Internet on: Codex can reach
+     the whole internet, so it could send what it can read anywhere (also
+     programs on this computer and your local network or VPN)." or
+     "Internet off: Codex can reach only the model.", and the browser tool
+     ("a fresh browser in the sandbox, with none of your logins", and
+     whether it asks); under Codex, where it opens, the model, and whether
+     it asks before commands. The form shows the same block under "What
+     Codex gets", with "Your Toolkit key stays on this computer; the
+     sandbox never sees it."
+   - **One status line per card** replaces the notices ("Starting in the
+     Codex app…", "is running…", "Connected" banners): Starting… → Opening
+     Codex… → "Connected ✓ The Codex app is working in the sandbox
+     (<alias>)." (in Terminal: "Running in Terminal since 14:05"). Problems
+     go on that line too. Screen readers hear a line when it changes (one
+     polite live region), not every redraw of the page. The Codex app's first-time steps (only when its
+     copy couldn't be set up) and its notes ("Use chats that show Remote ·
+     <alias>; local chats are blocked.", folded) are under it.
+   - **No pop-ups on the way to Codex.** A question in a pop-up is kept only
+     before Stop and Delete (they can't be undone) and Windows' Fix it (an
+     administrator prompt follows). Inline instead:
+     - the key: a field under the status strip, shown when none is saved
+       (Replace shows it again); a Start that needed it goes on once it's
+       saved;
+     - Docker Desktop closed: Start opens it and starts once it's running
+       (up to 3 minutes; the card says "Opening Docker Desktop… Codex starts
+       as soon as it's running.");
+     - a saved folder that now leads somewhere else (a real risk): the card
+       shows both paths and why, and its button becomes "Use them where they
+       go now, and start". The request carries the places the card showed
+       (`confirm_moved`: each `now`), and the server refuses (`field:
+       "moved"`) unless they're exactly where the folders lead now, so a
+       folder that moved again since isn't confirmed by an older click. Saving
+       the setup (Edit → Save, "Open in Terminal instead") with a moved
+       folder's saved path needs the same confirmation (`Launcher.update`):
+       otherwise saving would store where it leads now and skip the
+       question; it's matched however the path is spelled (`link/`,
+       `link/.`, `a//link`, letter case), and the form then shows both
+       places with "Use them where they go now, and save". Choosing the
+       folder again in the picker is a new choice (it comes back as its real
+       path). Moved folders are found folder by folder (`setups.moved`): one
+       that's refused now (gone, say) is skipped, never hiding another that
+       moved, on the card or in a save. The big Start at the top waits for it;
+     - the Codex app's ssh line, when the installer didn't add it: the card
+       explains it and its button says "Add the line and start"
+       (`allow_ssh_include` in the start request: the line is added, backed
+       up, then the start goes on), with "Open in Terminal instead";
+     - a folder the picker or the folder rules refuse: under the button that
+       chose it.
+   - **The form**, for Edit and "New setup with options…", is in sections:
+     **Folder** (working folder; more folders, each Read only / Read &
+     write), **Access** (Internet; Browser tool; Approve each browser
+     action), **Codex** (Model; Open in; **More options**, folded: Ask
+     before commands, and the name). M4's "Where Codex runs: In the sandbox
+     / On this computer" will go under More options, with its caution. Then
+     "Save and start" (only Save while the setup runs), Save, Cancel.
+   - **Models newest first** (`toolkit.by_release`, used by the page and
+     the terminal's list): by the version in the slug, as numbers (6 before
+     5.10 before 5.6 before 5.5; 5.4.1 before 5.4), GPT before the o-series,
+     names without a version last; within a version, Codex's own catalog
+     order (`codex debug models --bundled`, 0.157.1: astra, sol, terra,
+     luna), then the plain version, then other variants by name. The
+     setup's model stays selected (`gpt-5.6-terra` for a new one).
+   - **The status strip** is one quiet line while all is well (Docker
+     running · Toolkit key saved · Replace · version · Check for updates);
+     anything that needs doing gets a line of its own (Docker not running,
+     with Open Docker Desktop or Fix it…; no key; an update; a newer
+     install, with Reopen).
+   - **Update from the launcher** (asked for during M7). When the daily
+     check, or **Check for updates** (`update.check_now`: GitHub now, the
+     same signature checks), finds a newer release, the strip says
+     "UM-Codex X is available · Update". Update runs this version's
+     `um-codex update --from-launcher` in the background (the same code path
+     and checks; the window isn't closed), and shows fixed words for its
+     progress (`UPDATE_STEPS`: Checking for a newer version…,
+     Downloading…, Installing…, Getting the new image…), each picked by a
+     line the update prints, never the line itself, so nothing it prints
+     reaches the page; its output goes to `um-codex.log`. Then "Updated to
+     UM-Codex X. Reopen to use it." (Reopen: the existing path that starts
+     the installed version's window), "UM-Codex X is the newest version.",
+     or "The update didn't finish, so this version is still the one in use.
+     What happened is in um-codex.log, in UM-Codex's data folder." (update.py
+     undoes a failed step itself). Refused while a setup runs: "Stop running
+     setups first: “thesis”." (checked under the same lock Start takes, and
+     Start is refused while it runs: "Updating… wait for it to finish, then
+     start."). The update runs in a session of its own (a new process group
+     with no window on Windows) with its output in `ui/update.log`, which the
+     window reads for the progress words, so it goes on whatever happens to
+     the window; while it runs the window doesn't end when idle, refuses to
+     be closed over its control link and to Reopen, and doesn't offer
+     Reopen for a newer install. Once it has updated, only Reopen is
+     offered (a second Update is refused), so the version in use is never
+     the one an update prunes. `um-codex uninstall` refuses while an update
+     holds its lock ("UM-Codex is updating…"). Rollback stays in the terminal.
+   - **The installers ask about the ssh line** (`um-codex ssh-include`,
+     above, and docs/INSTALLING.md), so a start in the Codex app needs no
+     question later. It needs a terminal (no terminal: a message, exit 1,
+     nothing added). A "no" is kept (`ssh-include-declined` in the data
+     folder), so installing again doesn't ask again; `um-codex ssh-include
+     --ask-again` does, and the card still offers "Add the line and start".
+   - **Clicks, from the launcher's page to a connected Codex app chat** (a
+     Mac with the Codex app installed, the key saved and Docker running;
+     the native folder picker counted apart):
+
+     | | alpha.3 | M7 |
+     |---|---|---|
+     | First run | 7 clicks + picker: New setup, Choose working folder…, (picker), Open in: Codex app, Save, Start, "Start in Codex app" on the summary page, Allow in the ssh pop-up | **1 click + picker**: Choose a folder and start…, (picker) |
+     | First run, the installer didn't add the ssh line | (as above) | 2 clicks + picker (+ "Add the line and start") |
+     | Returning | 2 clicks: Start, "Start in Codex app" | **1 click**: Start "<setup>" |
+     | Pop-up questions on the way | 1 (the ssh line) | 0 |
+     | Pages on the way | 3 (list, form, summary) | 1 |
+     | Notices shown | 3 (Saved, Starting in the Codex app, running/connected) | 0 (the card's status line) |
+
+     In Terminal, alpha.3's first run was 5 clicks + picker and M7's is 1 +
+     picker; returning, 2 and 1.
+   - **Live check** (this Mac, 2026-10-02; `uv run um-codex ui --no-browser`
+     with `UMCODEX_DATA_DIR` in a scratch folder, `um-codex-agent:dev` built
+     from this branch, a stub upstream on 127.0.0.1 and a stand-in key store
+     holding a fake key, so neither the real key nor the keychain was used;
+     the person's own ChatGPT app, UM-Codex's installed copy and `~/.codex`
+     were left alone):
+     - the first-run page with the key field inline; the fake key saved
+       there (checked against the stub);
+     - "Choose a folder and start…" (the native picker was stood in for in
+       the test browser, since it needs a person at the desktop; a picker
+       that failed showed its line under the button) made "thesis" with the
+       internet on and Open in: Codex app, and started it at once;
+       UM-Codex's own copy of the app opened on the project "thesis",
+       Remote · umcodex-thesis-…, connected, Full access, 5.6 Terra, and
+       the card went Starting… → Opening Codex… → Connected ✓ in about 20 s;
+       `codex exec` over its ssh host got the stub's answer through the
+       relay, with the fake key swapped in;
+     - Stop (its question), then "Start “thesis”": connected again in about
+       10 s, one click;
+     - the Edit form's sections and model order (gpt-6-astra … gpt-5.4,
+       gpt-5.6-terra selected); a setup whose folder was swapped for a link
+       showed both paths and "Use them where they go now, and start"; the
+       ssh-line card and the Update line were checked by setting the page's
+       state; Check for updates and Update through the API: refused while a
+       setup ran, then (a development copy) the plain failure line, with
+       the reason in `um-codex.log`; light mode and a phone-width window.
+   - **Found while checking:** installs with different data folders share
+     `~/.ssh/um-codex`, and each launch in the app rewrites its `config`
+     from its own setups, removing the others' keys and hosts (the scratch
+     launch removed the installed copy's; they were restored from a copy
+     taken first). Not changed here.
+   - **Not checked:** Windows; the real native picker (it needs a person);
+     a real update from the launcher (it needs two published releases);
+     the installers' question in a real install (the installer tests run
+     the real `um-codex ssh-include` in a terminal, with a stand-in Codex
+     app).
+9. **Acceptance, on a fresh Mac and a fresh Windows machine:**
    1. install from the README in under 20 minutes;
    2. launch with internet off: Codex answers, `curl https://example.com`
       fails, and it can write in the working folder but not in a read-only

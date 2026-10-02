@@ -77,6 +77,21 @@ Steps:
    launchers --write <app>` (`src/umcodex/launchers.py`, the same code `um-codex
    update` uses to bring it up to date: see "Keeping the app and shortcuts up
    to date" below). And a Desktop shortcut `~/Desktop/UM-Codex`.
+   Then, at a terminal (M7), the Codex app's one line: `um-codex
+   ssh-include < /dev/tty` asks, only when the Codex app is installed
+   (`codex_app.find_app`) and `~/.ssh/config` doesn't have the line yet,
+   with the reason in three plain lines (the line, the backup, uninstall
+   takes it out), then "Add that line now? [Y/n]": Return is yes, `n` adds
+   nothing. The question is asked by `um-codex` itself (`codex_app.
+   offer_include`), so the installer's shell never touches `~/.ssh/config`.
+   An answer of no is remembered (`ssh-include-declined` in the data
+   folder), so installing again doesn't ask again (`um-codex ssh-include
+   --ask-again` asks). `um-codex ssh-include` itself refuses to ask without a
+   terminal (exit 1, nothing added).
+   **No terminal adds nothing:** consent must be the person's, so it says
+   the line wasn't asked about, and the launcher window explains it on the
+   setup's card ("Add the line and start") when a setup in the Codex app is
+   first started. A failure never stops the install.
    Then "Done", where everything went, and the offer to show and open it.
 
 `installer/macos/uninstall.sh` runs `um-codex uninstall` (which first asks
@@ -361,7 +376,11 @@ window hidden (and the shortcut minimized, so it at most flashes), which runs
 `bin\um-codex.exe ui --detach`: the launcher window (DESIGN.md, M5) starts in the
 background with a console that's never shown (the Docker commands it runs
 share it) and opens in the browser. A setup started there opens Windows
-Terminal if it's installed, else Windows PowerShell. Then "All done!" with
+Terminal if it's installed, else Windows PowerShell. Then, unless `-Yes`,
+`um-codex ssh-include` (as on a Mac: it asks only where "Open in: Codex app"
+works and the line is missing; on Windows the Codex app isn't offered yet,
+so it says nothing). With `-Yes` it isn't run: the consent is the person's,
+not the one running the installer for them. Then "All done!" with
 a summary.
 
 `uninstall.ps1 [-DeleteData | -KeepData] [-Yes]` (both data options at once:

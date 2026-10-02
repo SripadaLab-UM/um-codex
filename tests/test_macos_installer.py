@@ -46,6 +46,10 @@ case "$*" in
     # Toolkit and the keychain stood in for (KEY_TOOL).
     env >> "$UMCODEX_TEST_ENVLOG"
     exec "$UMCODEX_TEST_PYTHON" "$UMCODEX_TEST_KEYTOOL" ;;
+  ssh-include)
+    # The real `um-codex ssh-include` (its question), with the Codex app
+    # stood in for (SSH_TOOL); ~/.ssh is the test's HOME.
+    exec "$UMCODEX_TEST_PYTHON" "$UMCODEX_TEST_SSHTOOL" ;;
   uninstall*)
     if [ -t 0 ]; then echo "uninstall read a terminal" >> "$UMCODEX_TEST_LOG"; fi
     exit "${UMCODEX_TEST_UNINSTALL:-0}" ;;
@@ -88,6 +92,21 @@ def check_key(key, timeout=15):
 cli.toolkit.check_key = check_key
 cli.credentials.save_api_key = lambda key: None
 sys.exit(cli._key_command())
+"""
+
+# `um-codex ssh-include` as installed: the Codex app is "installed" when
+# UMCODEX_TEST_HAS_APP is set, and the question reads the terminal.
+SSH_TOOL = """
+import os
+import sys
+from pathlib import Path
+
+from umcodex import cli, codex_app
+
+found = Path("/Applications/ChatGPT.app") if os.environ.get("UMCODEX_TEST_HAS_APP") else None
+codex_app.find_app = lambda **kw: found
+codex_app.user_home = lambda: Path(os.environ["HOME"])
+sys.exit(cli.main(["ssh-include"]))
 """
 
 FAKE_UV = """#!/bin/sh
@@ -159,6 +178,8 @@ def machine(tmp_path, system_bin) -> dict[str, Path]:
     executable(tools / "uv", FAKE_UV)
     keytool = tmp_path / "key_tool.py"
     keytool.write_text(KEY_TOOL)
+    sshtool = tmp_path / "ssh_tool.py"
+    sshtool.write_text(SSH_TOOL)
     fake = tmp_path / "fake-um-codex"
     fake.write_text(FAKE_UMCODEX)
     packages = tmp_path / "release"
@@ -179,6 +200,7 @@ def machine(tmp_path, system_bin) -> dict[str, Path]:
         "keys": tmp_path / "keys",
         "envlog": tmp_path / "envlog",
         "keytool": keytool,
+        "sshtool": sshtool,
         "securitylog": tmp_path / "securitylog",
     }
 
@@ -207,6 +229,7 @@ def environment(machine, version: str, **extra_env: str) -> dict[str, str]:
         "UMCODEX_TEST_SECURITYLOG": str(machine["securitylog"]),
         "UMCODEX_TEST_PYTHON": sys.executable,
         "UMCODEX_TEST_KEYTOOL": str(machine["keytool"]),
+        "UMCODEX_TEST_SSHTOOL": str(machine["sshtool"]),
         "UMCODEX_TEST_ENVLOG": str(machine["envlog"]),
         # Nothing a test runs reaches this computer's keychain.
         "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring",
@@ -836,6 +859,42 @@ def run_in_terminal(machine, command: str, tmp_path: Path) -> str:
     }
     subprocess.run(["sh", "-c", command], env=env, check=True)
     return who.read_text().strip()
+
+
+def test_with_the_codex_app_it_asks_once_for_the_ssh_line_and_return_adds_it(machine):
+    # Answers: skip the key, Return at the ssh question, then no to Finder and opening.
+    done = install(machine, "0.1.0a3", answers=["", "", "n", "n"], UMCODEX_TEST_HAS_APP="1")
+    assert done.returncode == 0, done.stdout
+    assert "Include ~/.ssh/um-codex/config" in done.stdout and "Add that line now? [Y/n]" in done.stdout
+    assert "backed up first" in done.stdout
+    config = machine["home"] / ".ssh" / "config"
+    assert config.read_text() == "Include ~/.ssh/um-codex/config\n"
+    assert "ssh-include" in asked(machine)
+    # Run again: it's there, so not asked again.
+    again = install(machine, "0.1.0a3", answers=["", "n", "n"], UMCODEX_TEST_HAS_APP="1")
+    assert "Add that line now?" not in again.stdout and "is there already" in again.stdout
+
+
+def test_n_at_the_ssh_question_leaves_ssh_config_alone(machine):
+    (machine["home"] / ".ssh").mkdir()
+    (machine["home"] / ".ssh" / "config").write_text("Host work\n  User me\n")
+    done = install(machine, "0.1.0a3", answers=["", "n", "n", "n"], UMCODEX_TEST_HAS_APP="1")
+    assert done.returncode == 0, done.stdout
+    assert "Nothing was changed" in done.stdout
+    assert (machine["home"] / ".ssh" / "config").read_text() == "Host work\n  User me\n"
+    assert not (machine["home"] / ".ssh" / "config.um-codex-backup").exists()
+
+
+def test_without_the_codex_app_or_a_terminal_the_ssh_line_isnt_added(machine):
+    done = install(machine, "0.1.0a3", answers=["", "n", "n"])  # no Codex app
+    assert done.returncode == 0, done.stdout
+    assert "Add that line now?" not in done.stdout and "isn't installed" in done.stdout
+    asked(machine)  # (clears the log)
+    quiet = install(machine, "0.1.0a3", UMCODEX_TEST_HAS_APP="1")  # no terminal
+    assert quiet.returncode == 0, quiet.stdout + quiet.stderr
+    assert "wasn't asked about (no terminal)" in quiet.stdout
+    assert "ssh-include" not in asked(machine)
+    assert not (machine["home"] / ".ssh" / "config").exists()
 
 
 def test_the_app_goes_in_applications_with_its_icon_and_a_desktop_shortcut(machine):
