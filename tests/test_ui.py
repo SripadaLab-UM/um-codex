@@ -843,6 +843,10 @@ def test_the_codex_app_opener_says_why_it_cant(tmp_path, monkeypatch):
     with pytest.raises(opening.OpenFailed):
         missing.open("thesis")
     windows = opening.CodexAppOpener(platform="win32", find=lambda: Path("C:/x"), folder=tmp_path)
+    assert windows.reason() is None  # on Windows too (experimental)
+    from umcodex import codex_app
+
+    monkeypatch.setattr(codex_app, "WINDOWS_COPY", False)  # switched off again
     assert "Mac only" in (windows.reason() or "")
     monkeypatch.setenv("UMCODEX_WINDOWS_CODEX_APP", "1")  # the hands-on test's switch
     assert windows.reason() is None

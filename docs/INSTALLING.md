@@ -378,10 +378,10 @@ background with a console that's never shown (the Docker commands it runs
 share it) and opens in the browser. A setup started there opens Windows
 Terminal if it's installed, else Windows PowerShell. Then, unless `-Yes`,
 `um-codex ssh-include` (as on a Mac: it asks only where "Open in: Codex app"
-works and the line is missing; on Windows the Codex app isn't offered yet,
-so it says nothing). With `-Yes` it isn't run: the consent is the person's,
-not the one running the installer for them. Then "All done!" with
-a summary.
+works, now Windows too (experimental), with the Codex app installed and the
+line missing; with no terminal it adds nothing). With `-Yes` it isn't run:
+the consent is the person's, not the one running the installer for them.
+Then "All done!" with a summary.
 
 `uninstall.ps1 [-DeleteData | -KeepData] [-Yes]` (both data options at once:
 refused, exit 2) runs `um-codex uninstall` (containers, networks, images, the

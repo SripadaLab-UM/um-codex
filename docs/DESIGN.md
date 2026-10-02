@@ -103,7 +103,7 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      in the terminal it opens: no questions; 1 when the setup isn't there,
      or a folder is refused or now leads somewhere else.
    - `um-codex launch [--setup <id or name>] --open app|terminal`: where
-     Codex opens (default: this terminal). `--open app` (M6, Mac only) runs
+     Codex opens (default: this terminal). `--open app` (M6; Windows experimental) runs
      the launch here, holding the relay, while the Codex desktop app works
      in the sandbox; the launcher window runs it in the background with no
      window. 1 when the app isn't installed, the ssh line isn't allowed (it
@@ -963,7 +963,7 @@ modes, rigor, and the frontend.
    front end of a launch, with every file, command and model call inside
    the container. From the spike (`docs/spikes/2026-10-01-codex-desktop-app.md`)
    and its hands-on results (`-test-results.md`); the test build on branch
-   `spike-codex-app` (21db539) was ported, not merged. **Mac only for now**
+   `spike-codex-app` (21db539) was ported, not merged. **On Windows, experimental**
    (see Windows below). `codex_app.py`.
    - **The route:** the app's SSH "Connections". Each setup is one stable
      ssh host, `umcodex-<setup id>` (the app keeps its switch, projects and
@@ -1270,10 +1270,13 @@ modes, rigor, and the frontend.
      as for any launch. The app's remote app-server lives in the container
      and goes with it.
    - **Windows** (branch `m6-windows-codex-app`; checked on a Windows 11
-     laptop, 2026-10-02, app 26.928.4866.0). **Experimental.** Written, and
-     still off (`codex_app.WINDOWS_COPY = False`: "works with UM-Codex on a
-     Mac only, for now"; `--open app` refuses) until a hands-on test passes;
-     `UMCODEX_WINDOWS_CODEX_APP=1` turns it on for that test.
+     laptop, 2026-10-02, app 26.928.4866.0). **On, experimental**
+     (`codex_app.WINDOWS_COPY = True`, after the hands-on test below passed;
+     False switches it off again, "works with UM-Codex on a Mac only, for
+     now", and `UMCODEX_WINDOWS_CODEX_APP=1` then turns it on for a test).
+     The installers' Include question (`um-codex ssh-include`) is asked on
+     Windows too, under the Mac's rules (only at a terminal, Return is yes,
+     a "no" is kept).
      - **The app:** the Microsoft Store (MSIX) package `OpenAI.Codex`
        (family `OpenAI.Codex_2p2nqsd0c76g0`, AUMID
        `OpenAI.Codex_2p2nqsd0c76g0!App`), in `C:\Program
@@ -1320,8 +1323,10 @@ modes, rigor, and the frontend.
          (`CODEX_ELECTRON_PRIMARY_RUNTIME_UPDATE_MODE`). The first test copy
          began that download, and being stopped half way left its 1 GB
          staging folder behind (removed by hand). So the fallback doesn't
-         stop the copy while a staging folder is being written (within the
-         last minute), for up to 20 more minutes
+         stop the copy while a staging folder made in the last 30 minutes is
+         there (the app removes it when it's done; its files can't tell,
+         since they're extracted with the archive's own old times: about
+         20,000 of them, a 500 MB download), for up to 20 more minutes
          (`WINDOWS_UPDATE_GRACE_SECONDS`), and the launcher's note says the
          window may download an update (about 1 GB) the first time. A
          separate `USERPROFILE` for the copy would isolate the cache but
@@ -1381,7 +1386,39 @@ modes, rigor, and the frontend.
          throwaway `CODEX_HOME`, `USERPROFILE`, and no console window).
      - **The ssh side:** Windows OpenSSH reads `%USERPROFILE%\.ssh\config`
        and runs a double-quoted ProxyCommand itself; `ssh-proxy` runs `docker
-       exec` as a child, since Windows has no exec.
+       exec` as a child, since Windows has no exec. The app runs the first
+       `ssh.exe` on its PATH; Git for Windows' (its `usr\bin`, OpenSSH 10.3,
+       MSYS) runs a ProxyCommand through `/bin/sh` (which drops the Windows
+       path's backslashes) or `$SHELL`, so the copy never connected when it
+       was first. The copy's PATH now starts with `System32\OpenSSH`, and
+       `SHELL` is left out of its environment. The ssh folders' Windows
+       permissions: see "This computer's ssh files".
+     - **Hands-on test** (Windows 11 laptop, 2026-10-02, app 26.928.4866.0,
+       alpha.3 installed, this branch's code run with its Python, the
+       person's own ChatGPT app open throughout):
+       - ssh, as the app runs it (Windows OpenSSH 9.5p2, `~/.ssh/config`
+         with the Include, the installed `um-codex.exe ssh-proxy` by its
+         path): `ssh -o BatchMode=yes umcodex-<setup> "codex --version"` →
+         `codex-cli 0.157.1` in about 1.6 s. The login shell has bash,
+         `CODEX_HOME=/codex-home`, codex on PATH, user `agent`; `nohup codex
+         … app-server --listen unix://` starts; `ssh -T … codex app-server
+         proxy` answers the WebSocket upgrade (101); sftp works.
+       - The app's own steps (its log): `codex_path_probe` 2.0 s,
+         `codex_version_probe` 2.7 s, `app_server_bootstrap` 2.2 s, all code
+         0. No "codex path probe timed out" (openai/codex#42995); no console
+         windows flashed (#47602).
+       - A launch through `AppHold`: the copy was seeded and opened on the
+         setup's project with Remote · `umcodex-<setup>` (the person's
+         screenshot), and the launch saw "Connected" in under 30 seconds. A
+         Remote chat ran in the sandbox (it listed `/work`, `whoami` said
+         `agent`); a local chat only answered the reminder (whose "on your
+         Mac" is now "on this computer").
+       - The fallback, before the PATH fix: no connection in 180 s, so the
+         copy was stopped by its PID, the sandbox ended and the launcher
+         said to use Terminal; the person's own app carried on.
+       - `taskkill /T /F` once reported a failure for a copy that did end
+         (a helper already ending), so `stop` checks the copy is gone
+         rather than taskkill's code.
    - **Live check** (this Mac, 2026-10-01; `um-codex-agent:m6` built from
      this branch, the launcher's API with a scratch data folder, the real
      key through the relay and the Include line already present, so the

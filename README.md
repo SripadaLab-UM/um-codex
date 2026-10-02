@@ -70,7 +70,9 @@ In Windows PowerShell (Start menu > Windows PowerShell), paste:
 
 It sets up Docker Desktop (with one administrator step and a restart, if
 needed), UM-Codex and your key, then adds UM-Codex to the Start menu and the
-Desktop. Details: [docs/INSTALLING.md](docs/INSTALLING.md).
+Desktop. If you have the Codex app (ChatGPT's desktop app), it also asks once
+about the line in your `~/.ssh/config`, as on a Mac. Details:
+[docs/INSTALLING.md](docs/INSTALLING.md).
 
 ## Opening UM-Codex
 
@@ -104,7 +106,7 @@ The window closes by itself a while after you close its page; opening the
 app again brings it back. In a terminal, `um-codex ui` opens it too, and
 plain `um-codex` still asks the setup questions in the terminal instead.
 
-### Opening a setup in the Codex app (Mac)
+### Opening a setup in the Codex app (Mac; Windows, experimental)
 
 Instead of a terminal, a setup can open in **Codex's desktop app** (part of
 OpenAI's ChatGPT desktop app; get it from https://chatgpt.com/download). In
@@ -150,7 +152,14 @@ is only the window you use. What to know:
   browsing inside the sandbox, turn on the setup's Browser tool.
 - The setup runs until you press **Stop** in the launcher; the app then says
   it can't reconnect, which is expected.
-- Windows: not yet (Terminal only).
+- **Windows (experimental):** the same, with the ChatGPT app from the
+  Microsoft Store and Windows' own ssh (OpenSSH Client, part of Windows 10
+  and 11). UM-Codex's copy is a second ChatGPT icon in the taskbar. It runs
+  without the app's own Windows sandbox and Computer Use (your work in
+  Remote chats runs in UM-Codex's sandbox instead). The first time, it may
+  download an update of an app component in the background (about 1 GB;
+  your own ChatGPT app shares it). If the copy doesn't connect within a few
+  minutes, UM-Codex closes it, stops the setup, and says to use Terminal.
 
 In a terminal: `um-codex launch --setup <name> --open app`.
 

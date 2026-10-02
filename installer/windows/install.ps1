@@ -1949,10 +1949,10 @@ Good "Added $LinkName to the Start menu$(if ($Desktop) { ' and the Desktop' }) (
 # The Codex app's one line in ~/.ssh/config, asked here once so that starting
 # a setup in the Codex app needs no question later (`um-codex ssh-include`:
 # the reason, then [Y/n], Return is yes). It asks only where "Open in: Codex
-# app" works, and the line isn't there yet: on Windows that's not yet (the
-# Codex app works with UM-Codex on a Mac only), so for now it says nothing
-# here. With -Yes it isn't asked: the consent must be the person's, and the
-# launcher window asks on the setup's card when it's needed.
+# app" works (on Windows too, experimental), with the Codex app installed and
+# the line not there yet; with no terminal to answer in it adds nothing. With
+# -Yes it isn't asked: the consent must be the person's, and the launcher
+# window asks on the setup's card when it's needed.
 if (-not $Yes) {
     $SavedUtf8 = $Env:PYTHONUTF8
     $Env:PYTHONUTF8 = "1"

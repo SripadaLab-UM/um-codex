@@ -36,11 +36,10 @@ its SSH "Connections":
   app-server inside the container and marks it "Connected". The app keeps
   the host switched on, so later launches of the setup need no steps.
 
-Windows: the ssh side is written for Windows OpenSSH, and the copy is
-started by running the Store package's ChatGPT.exe with its own CODEX_HOME
-and profile (`windows_open`, checked by hand on 2026-10-02). It stays off
-until the maintainer agrees and a hands-on test passes (`WINDOWS_COPY`), so
-"Codex app" is Mac only for now (`unavailable_reason`).
+Windows (experimental, codex_app_windows): the ssh side uses Windows
+OpenSSH, and the copy is the Store package's ChatGPT.exe started with its
+own CODEX_HOME and profile (`windows_open`). Checked hands-on on 2026-10-02;
+`WINDOWS_COPY` switches it.
 """
 
 from __future__ import annotations
@@ -87,10 +86,11 @@ APP_DOWNLOAD = "https://chatgpt.com/download"
 
 # Windows (codex_app_windows): the copy is the package's ChatGPT.exe run
 # directly, with its own CODEX_HOME and profile; experimental. The maintainer
-# agreed to that way of starting it (2026-10-02); it stays off until the
-# hands-on test on Windows passes. UMCODEX_WINDOWS_CODEX_APP=1 turns it on
-# for that test.
-WINDOWS_COPY = False
+# agreed to that way of starting it, and the hands-on test on a Windows 11
+# laptop passed (2026-10-02, app 26.928.4866.0), so it's on. False turns it
+# off again ("Mac only, for now"); UMCODEX_WINDOWS_CODEX_APP=1 then turns it
+# on for a test.
+WINDOWS_COPY = True
 # How long the launch waits for the Windows copy to connect to the sandbox
 # before it stops the copy and says to use Terminal: when the copy was set up
 # (seeded) or has connected before, and when the person has the first steps
@@ -1875,12 +1875,13 @@ def offer_include(
     ask_again: bool = False,
 ) -> int:
     """The installers' one question about the Include line, so the launcher
-    needn't ask it: asked only on a Mac with the Codex app installed and the
-    line not there yet, default yes. No answer (no terminal) adds nothing:
-    the consent must be the person's. A "no" is kept (in the data folder),
-    so it isn't asked at the next install unless `ask_again`. 0: the line is
-    there (or isn't needed here), 1: not added."""
-    if platform != "darwin":
+    needn't ask it: asked only where "Codex app" works (a Mac, or Windows
+    with `windows_enabled`) with the Codex app installed and the line not
+    there yet, default yes. No answer (no terminal) adds nothing: the
+    consent must be the person's. A "no" is kept (in the data folder), so it
+    isn't asked at the next install unless `ask_again`. 0: the line is there
+    (or isn't needed here), 1: not added."""
+    if platform != "darwin" and not (platform == "win32" and windows_enabled()):
         return 0  # "Codex app" isn't offered here (unavailable_reason)
     if include_present(home):
         say("The Codex app's line in ~/.ssh/config is there already.")

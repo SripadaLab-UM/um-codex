@@ -154,11 +154,18 @@ def test_the_terminal_asks_before_adding_the_line(ssh_home):
     assert codex_app.include_present()
 
 
-def test_the_installers_question_defaults_to_yes(ssh_home):
+# Where "Codex app" works, with the app installed: a Mac, and Windows (the Store package's exe).
+WITH_THE_APP = [
+    ("darwin", "/Applications/ChatGPT.app"),
+    ("win32", r"C:\Program Files\WindowsApps\OpenAI.Codex_26.928.4866.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe"),
+]
+
+
+@pytest.mark.parametrize(("platform", "app"), WITH_THE_APP)
+def test_the_installers_question_defaults_to_yes(ssh_home, platform, app):
     """`um-codex ssh-include`: Return adds the line; n, or no answer at all
-    (no terminal), adds nothing."""
-    app = Path("/Applications/ChatGPT.app")
-    mac = {"find": lambda: app, "platform": "darwin", "data": ssh_home}  # a Mac with the Codex app
+    (no terminal), adds nothing. The same on a Mac and on Windows."""
+    mac = {"find": lambda: Path(app), "platform": platform, "data": ssh_home}  # the Codex app is there
     said: list[str] = []
     assert codex_app.offer_include(lambda _: "n", said.append, **mac) == 1
     assert not (ssh_home / ".ssh" / "config").exists()
@@ -178,11 +185,15 @@ def test_the_installers_question_defaults_to_yes(ssh_home):
     assert codex_app.offer_include(lambda _: pytest.fail("asked again"), said.append, **mac) == 0
 
 
-def test_the_installers_question_isnt_asked_without_the_app_or_off_a_mac(ssh_home):
+def test_the_installers_question_isnt_asked_without_the_app_or_where_it_isnt_offered(ssh_home, monkeypatch):
     said: list[str] = []
     never = lambda _: pytest.fail("asked")  # noqa: E731
-    assert codex_app.offer_include(never, said.append, find=lambda: None, platform="darwin") == 0
-    assert "isn't installed" in said[-1]
+    for platform in ("darwin", "win32"):
+        assert codex_app.offer_include(never, said.append, find=lambda: None, platform=platform) == 0
+        assert "isn't installed" in said[-1]
+    assert codex_app.offer_include(never, said.append, platform="linux", find=lambda: Path("x")) == 0
+    monkeypatch.setattr(codex_app, "WINDOWS_COPY", False)  # Windows switched off again: not asked there
+    monkeypatch.delenv("UMCODEX_WINDOWS_CODEX_APP", raising=False)
     assert codex_app.offer_include(never, said.append, platform="win32", find=lambda: Path("x")) == 0
     assert not (ssh_home / ".ssh" / "config").exists()
 
@@ -203,9 +214,9 @@ def test_the_cli_runs_the_installers_question_only_at_a_terminal(monkeypatch, ca
     assert calls == [(input, print, False), (input, print, True)]
 
 
-def test_a_no_is_remembered_until_asked_again(ssh_home, tmp_path):
-    app = Path("/Applications/ChatGPT.app")
-    mac = {"find": lambda: app, "platform": "darwin", "data": tmp_path}
+@pytest.mark.parametrize(("platform", "app"), WITH_THE_APP)
+def test_a_no_is_remembered_until_asked_again(ssh_home, tmp_path, platform, app):
+    mac = {"find": lambda: Path(app), "platform": platform, "data": tmp_path}
     said: list[str] = []
     assert codex_app.offer_include(lambda _: "no", said.append, **mac) == 1
     assert (tmp_path / codex_app.INCLUDE_DECLINED).exists()
@@ -267,7 +278,7 @@ def test_proxy_command_words_are_safe_for_ssh():
 NASTY_PARTS = ["/tmp/a b/$HOME/`id`/it's;x&y|z", "100% sure", 'say "hi"', "*?[a]~"]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="the Codex app is Mac only for now")
+@pytest.mark.skipif(sys.platform == "win32", reason="the Mac's quoting, through a POSIX shell")
 @pytest.mark.parametrize("shell", ["/bin/sh", "/bin/zsh", "/bin/bash"])
 def test_ssh_runs_the_proxy_command_with_every_word_unchanged(tmp_path, shell):
     """The real ssh client runs the ProxyCommand (with the person's shell):
@@ -309,7 +320,7 @@ def shlex_quote(text: str) -> str:
     return shlex.quote(text)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="the Codex app is Mac only for now")
+@pytest.mark.skipif(sys.platform == "win32", reason="the Mac's quoting, through a POSIX shell")
 def test_ssh_reads_the_host_as_written(ssh_home, tmp_path):
     """The real ssh client's view of the block (`ssh -G`), when it's here."""
     if not (ssh := _which("ssh")):
@@ -789,6 +800,8 @@ def test_the_app_is_found_by_its_bundle_id(tmp_path):
 
 
 def test_where_the_codex_app_can_be_used(monkeypatch):
+    assert codex_app.unavailable_reason("win32", Path("C:/x/ChatGPT.exe")) is None  # on: experimental
+    monkeypatch.setattr(codex_app, "WINDOWS_COPY", False)  # switched off again
     monkeypatch.delenv("UMCODEX_WINDOWS_CODEX_APP", raising=False)
     assert codex_app.unavailable_reason("darwin", Path("/Applications/ChatGPT.app")) is None
     assert "chatgpt.com/download" in (codex_app.unavailable_reason("darwin", None) or "")
