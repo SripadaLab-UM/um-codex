@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -34,6 +35,10 @@ LAUNCH_LABEL = "umcodex.launch"
 # Which UM-Codex data folder owns it, so tests (or a second data folder)
 # never remove another's launches.
 INSTANCE_LABEL = "umcodex.instance"
+# The data folder itself (resolved), beside its instance: the instance is a
+# hash, so this lets a later version tell the objects of a data folder that's
+# gone from those of one still in use.
+DATA_LABEL = "umcodex.data"
 SETUP_LABEL = "umcodex.setup"
 # An unroutable address (TEST-NET-1): with the internet off, containers can
 # resolve only names Docker knows (the gateway), and nothing else.
@@ -131,6 +136,8 @@ class LaunchSpec:
     # Codex app has `umcodex.ssh=<setup>`, which `um-codex ssh-proxy` finds
     # its agent by (codex_app.py).
     extra_labels: tuple[tuple[str, str], ...] = ()
+    # The data folder that owns the launch (DATA_LABEL); empty: no label.
+    data_folder: str = ""
 
     @property
     def prefix(self) -> str:
@@ -169,9 +176,13 @@ class LaunchSpec:
         return [
             "--label", f"{APP_LABEL}={APP}",
             "--label", f"{INSTANCE_LABEL}={self.instance}",
+            *self._data_label(),
             "--label", f"{LAUNCH_LABEL}={self.launch_id}",
             *(arg for name, value in self.extra_labels for arg in ("--label", f"{name}={value}")),
         ]  # fmt: skip
+
+    def _data_label(self) -> list[str]:
+        return ["--label", f"{DATA_LABEL}={self.data_folder}"] if self.data_folder else []
 
     def network_commands(self) -> list[list[str]]:
         commands = [
@@ -189,6 +200,7 @@ class LaunchSpec:
             "volume", "create",
             "--label", f"{APP_LABEL}={APP}",
             "--label", f"{INSTANCE_LABEL}={self.instance}",
+            *self._data_label(),
             "--label", f"{SETUP_LABEL}={self.setup_id}",
             self.volume,
         ]  # fmt: skip
@@ -371,24 +383,51 @@ def remove_leftovers(docker: Docker, instance: str, live: Callable[[str], bool])
     return len(containers) + len(networks)
 
 
+def say_now(line: str) -> None:
+    """Print a line and flush it at once, so it comes before what a child
+    process (`docker pull`) writes after it, even when stdout is a file or a
+    pipe (the launcher's Update, Windows)."""
+    print(line, flush=True)
+
+
+# A failed `docker pull` is tried again after these waits (seconds): a
+# registry can answer "not found" or time out for a moment.
+PULL_RETRY_WAITS = (3.0, 10.0)
+
+
 def pull_images(
-    say: Callable[[str], None] = print,
+    say: Callable[[str], None] = say_now,
     docker: Docker | None = None,
     run: Runner = subprocess.run,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    quiet: bool | None = None,
 ) -> bool:
-    """`um-codex pull`: every image in images.json (the agent, the gateway).
+    """`um-codex pull` (the installers' and `um-codex update`'s too): every
+    image in images.json (the agent, the gateway).
 
-    Docker's own progress is shown. A local `:dev` image that's already here
-    is skipped; one that isn't can only be built, not pulled. False on any
-    failure, or when Docker isn't running."""
+    An image pinned by digest that's already here isn't pulled again (it
+    can't have changed). A failed pull is tried again twice, and if the
+    image turns out to be here after all, that's fine. In a terminal,
+    Docker's own progress is shown; otherwise (`quiet`, by default when
+    stdout isn't a terminal) one line per image. A local `:dev` image that's
+    already here is skipped; one that isn't can only be built, not pulled.
+    False on any failure, saying which kind: Docker not running, the
+    registry or the network, or the disk, with Docker's own words."""
     docker = docker or Docker(run)
+    if quiet is None:
+        quiet = not _is_terminal()
     try:
-        code, _, _ = docker.status("info", "--format", "{{.ServerVersion}}", timeout=30)
+        code, out, err = docker.status("info", "--format", "{{.ServerVersion}}", timeout=30)
     except DockerError as error:
         say(str(error))
         return False
     if code != 0:
-        say("Docker isn't running. Open Docker Desktop, wait until it says it's running, then try again.")
+        said = _docker_said(err or out)
+        say(
+            "Docker isn't running. Open Docker Desktop, wait until it says it's running, then try again."
+            + (f" (Docker said: {said})" if said else "")
+        )
         return False
     ok = True
     for role, image in images().items():
@@ -403,15 +442,111 @@ def pull_images(
                 )
                 ok = False
             continue
-        say(f"Pulling the {role} image ({image})...")
-        try:
-            done = run(["docker", "pull", image], timeout=3600)
-        except (OSError, subprocess.TimeoutExpired):
-            done = None
-        if done is None or done.returncode != 0:
-            say(
-                f"Couldn't pull the {role} image. Check your network and that Docker is running, "
-                "then try again."
-            )
-            ok = False
+        ok = pull_image(role, image, say=say, docker=docker, run=run, sleep=sleep, quiet=quiet) and ok
     return ok
+
+
+def pull_image(
+    role: str,
+    image: str,
+    *,
+    say: Callable[[str], None],
+    docker: Docker,
+    run: Runner,
+    sleep: Callable[[float], None] = time.sleep,
+    quiet: bool = False,
+) -> bool:
+    """Pull one image (see pull_images). True when it's here afterwards."""
+    pinned = "@sha256:" in image
+    if pinned and _image_here(docker, image):
+        say(f"The {role} image is already here ({image}).")
+        return True
+    say(f"Downloading the {role} image ({image})...")
+    said = ""
+    for attempt in range(len(PULL_RETRY_WAITS) + 1):
+        if attempt:
+            wait = PULL_RETRY_WAITS[attempt - 1]
+            say(f"  That didn't work (Docker said: {said}). Trying again in {wait:.0f} seconds...")
+            sleep(wait)
+        # Ours first, then Docker's: its progress goes straight to the terminal.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        command = ["docker", "pull", *(["--quiet"] if quiet else []), image]
+        timed_out = False
+        try:
+            done = run(
+                command,
+                stdout=subprocess.DEVNULL if quiet else None,
+                stderr=subprocess.PIPE,
+                encoding="utf-8",
+                errors="replace",
+                timeout=3600,
+            )
+        except FileNotFoundError:
+            say("Docker's `docker` command isn't installed or isn't on PATH.")
+            return False
+        except subprocess.TimeoutExpired:
+            said, timed_out = "it took more than an hour", True
+        except OSError as error:
+            said = f"{type(error).__name__}: {error}"
+        else:
+            if done.returncode == 0:
+                if quiet:
+                    say(f"  Downloaded the {role} image.")
+                return True
+            said = _docker_said(done.stderr) or f"docker pull ended with code {done.returncode}"
+        if pinned and _image_here(docker, image):
+            say(f"  The {role} image is here (that exact version), so the error doesn't matter.")
+            return True
+        if timed_out or not _docker_running(docker) or "no space left" in said.lower():
+            break  # trying again won't help (an hour gone, Docker stopped, the disk full)
+    say(_pull_failed(role, said, running=_docker_running(docker)))
+    return False
+
+
+def _pull_failed(role: str, said: str, *, running: bool) -> str:
+    """Why a pull failed, in plain words, with Docker's own line."""
+    quoted = f" Docker said: {said}" if said else ""
+    if not running:
+        return (
+            f"Couldn't download the {role} image: Docker stopped running.{quoted} Open Docker Desktop, "
+            "wait until it says it's running, then try again."
+        )
+    if "no space left" in said.lower():
+        return (
+            f"Couldn't download the {role} image: Docker is out of disk space.{quoted} Free some space "
+            "(Docker Desktop's settings show how much it uses), then try again."
+        )
+    return (
+        f"Couldn't download the {role} image from its registry (Docker is running; this is the "
+        f"network or the registry).{quoted} Check this computer is online, then try again in a few minutes."
+    )
+
+
+def _image_here(docker: Docker, image: str) -> bool:
+    try:
+        return docker.exists("image", image)
+    except DockerError:
+        return False
+
+
+def _docker_running(docker: Docker) -> bool:
+    try:
+        code, _, _ = docker.status("info", "--format", "{{.ServerVersion}}", timeout=30)
+    except DockerError:
+        return False
+    return code == 0
+
+
+def _docker_said(text: str | None) -> str:
+    """Docker's error, on one line: its last 3 non-empty lines, shortened."""
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    said = " / ".join(lines[-3:])
+    return said if len(said) <= 500 else said[:497] + "..."
+
+
+def _is_terminal() -> bool:
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False

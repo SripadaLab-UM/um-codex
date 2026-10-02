@@ -4,6 +4,16 @@
 its program files (the uninstaller scripts remove those after this returns)
 and the person's own folders, which are never touched.
 
+Its scope is its data folder (`UMCODEX_DATA_DIR`, or the default one).
+Containers, networks and volumes go by that data folder's instance label;
+another data folder's (a development or test copy's) are kept unless the
+installed copy's uninstall is told to remove them (asked; never with --yes).
+Only the installed copy's data folder (paths.default_data_dir) removes the
+Toolkit key (there's one, in the keychain), and the images go only when no
+other data folder's containers are here (and, from another data folder,
+only when the installed UM-Codex is gone). The installed program refuses to
+uninstall another data folder: the scripts remove it afterwards.
+
 It first asks "Uninstall UM-Codex? [y/N]" (not with --yes); nothing is
 removed before that's answered yes. Then, found by label only:
 - UM-Codex's containers and networks;
@@ -25,13 +35,14 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
 from umcodex import credentials
-from umcodex.containers import APP, APP_LABEL, images
+from umcodex.containers import APP, APP_LABEL, INSTANCE_LABEL, images, instance_of
 from umcodex.launch import LaunchLock, launch_is_live, launches_dir
-from umcodex.paths import app_dir, data_dir
+from umcodex.paths import app_dir, data_dir, default_data_dir
 
 Say = Callable[[str], None]
 Ask = Callable[[str], str]
@@ -61,6 +72,16 @@ def uninstall(
             "uninstaller again."
         )
         return 1
+    if not is_installed_copy(data) and _program_is_installed():
+        # The uninstaller scripts remove the installed program afterwards:
+        # that would orphan the installed data folder's things.
+        say(
+            f"This is the installed UM-Codex, but UMCODEX_DATA_DIR points it at another data folder "
+            f"({data}). Nothing was removed. To uninstall UM-Codex, run the uninstaller without "
+            "UMCODEX_DATA_DIR set; to remove that data folder's things, run `um-codex uninstall` from "
+            "the copy that uses it."
+        )
+        return 1
 
     def confirm(question: str) -> bool:
         if yes:
@@ -77,16 +98,27 @@ def uninstall(
     close_running(data)
 
     docker_ok = shutil.which("docker") is not None and _docker(run, "info", "--format", "x") is not None
+    installed = is_installed_copy(data)
+    if not installed:
+        say(
+            f"This uninstalls the UM-Codex data folder {data}, which isn't the installed one "
+            f"({default_data_dir()}): only its own containers, ssh entries and data go."
+        )
     if docker_ok:
         say("Removing UM-Codex's containers and networks...")
-        label = f"label={APP_LABEL}={APP}"
-        _remove_listed(run, ["ps", "-aq", "--filter", label], ["rm", "-f"])
-        _remove_listed(run, ["network", "ls", "-q", "--filter", label], ["network", "rm"])
+        listed = _remove_owned(run, ["ps", "-a"], ["rm", "-f"], data)
+        listed = _remove_owned(run, ["network", "ls"], ["network", "rm"], data) and listed
+        if not listed:
+            say("Docker couldn't list UM-Codex's containers or networks, so some may be left.")
+        _other_data_folders(run, say, ask, data, yes=yes, installed=installed)
     else:
         say("Docker isn't running, so UM-Codex's containers, volumes and images (if any) were left.")
 
-    say("Removing the Toolkit key from the keychain...")
-    credentials.delete_api_key()
+    if installed:
+        say("Removing the Toolkit key from the keychain...")
+        credentials.delete_api_key()
+    else:
+        say("Kept the Toolkit key in the keychain: there's one, and the installed UM-Codex uses it.")
 
     # The Codex app's ssh entries (M6): this data folder's in ~/.ssh/um-codex,
     # and the Include line in ~/.ssh/config with the folder itself unless
@@ -112,9 +144,7 @@ def uninstall(
             delete_data = (not yes) and confirm("Delete them? This can't be undone.")
         if delete_data:
             if docker_ok:
-                _remove_listed(
-                    run, ["volume", "ls", "-q", "--filter", f"label={APP_LABEL}={APP}"], ["volume", "rm"]
-                )
+                _remove_owned(run, ["volume", "ls"], ["volume", "rm"], data)
             for entry in entries:
                 remove_tree(entry)
             left = [e for e in entries if e.exists() or e.is_symlink()]
@@ -127,7 +157,7 @@ def uninstall(
         else:
             say("Kept. You can delete them yourself later.")
     elif delete_data and docker_ok:
-        _remove_listed(run, ["volume", "ls", "-q", "--filter", f"label={APP_LABEL}={APP}"], ["volume", "rm"])
+        _remove_owned(run, ["volume", "ls"], ["volume", "rm"], data)
     say("Your own folders were not touched.")
     return 0
 
@@ -153,7 +183,108 @@ def _running(data: Path) -> bool:
     return any(launch_is_live(data, entry.name) for entry in folder.iterdir() if entry.is_dir())
 
 
+def _program_is_installed() -> bool:
+    """Whether this program is the installed UM-Codex's (a version in
+    app_dir(), which the uninstaller scripts remove afterwards)."""
+    try:
+        Path(sys.prefix).resolve().relative_to(app_dir().resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def is_installed_copy(data: Path) -> bool:
+    """Whether `data` is the installed UM-Codex's data folder (the default
+    one), not a development or test copy's (`UMCODEX_DATA_DIR`)."""
+    return _key(data.resolve()) == _key(default_data_dir().resolve())
+
+
+def _owned(run: Run, kind: list[str], data: Path) -> tuple[list[str], list[str]] | None:
+    """UM-Codex's containers, networks or volumes (`kind`: ["ps", "-a"],
+    ["network", "ls"], ["volume", "ls"]): this data folder's, and other
+    data folders'. By label only. None: Docker couldn't list them."""
+    field = "{{.Name}}" if kind[0] == "volume" else "{{.ID}}"
+    shape = f'{field}|{{{{.Label "{INSTANCE_LABEL}"}}}}'
+    listing = _docker(run, *kind, "--filter", f"label={APP_LABEL}={APP}", "--format", shape)
+    if listing is None:
+        return None
+    instance = instance_of(data)
+    mine: list[str] = []
+    others: list[str] = []
+    for line in listing.splitlines():
+        name, owner = ([*line.split("|"), ""])[:2]
+        if name.strip():
+            (mine if owner.strip() == instance else others).append(name.strip())
+    return mine, others
+
+
+def _remove_owned(run: Run, kind: list[str], then: list[str], data: Path) -> bool:
+    """Remove this data folder's; False if Docker couldn't list them."""
+    owned = _owned(run, kind, data)
+    if owned is None:
+        return False
+    if owned[0]:
+        _docker(run, *then, *owned[0])
+    return True
+
+
+def _others(run: Run, data: Path) -> bool | None:
+    """Whether another data folder has containers here (running or not);
+    None: unknown (Docker couldn't list them)."""
+    owned = _owned(run, ["ps", "-a"], data)
+    return None if owned is None else bool(owned[1])
+
+
+_KINDS = (
+    (["ps", "-a"], ["rm", "-f"]),
+    (["network", "ls"], ["network", "rm"]),
+    (["volume", "ls"], ["volume", "rm"]),
+)
+
+
+def _other_data_folders(run: Run, say: Say, ask: Ask, data: Path, *, yes: bool, installed: bool) -> None:
+    """Other data folders' containers, networks and volumes (a development or
+    test copy's, or one whose folder is gone): kept, but the installed
+    copy's uninstall offers to remove them (never with --yes)."""
+    found: list[tuple[list[str], list[str]]] = []
+    for kind, then in _KINDS:
+        owned = _owned(run, kind, data)
+        found.append((then, owned[1] if owned is not None else []))
+    count = sum(len(ids) for _, ids in found)
+    if not count:
+        return
+    what = f"{count} UM-Codex containers, networks and volumes from other data folders on this computer"
+    if installed and not yes:
+        question = f"Also remove {what} (a development or test copy's; a launch of theirs stops)?"
+        if ask(f"{question} [y/N] ").strip().lower() in ("y", "yes"):
+            for then, ids in found:
+                if ids:
+                    _docker(run, *then, *ids)
+            say("Removed them.")
+            return
+    if installed:
+        how = "Docker Desktop can remove them (Containers, Volumes, Networks)"
+    else:
+        how = "the installed UM-Codex's uninstall offers to remove them"
+    say(f"Left {what} (a development or test copy's): {how}.")
+
+
 def _remove_images(run: Run, say: Say, confirm: Callable[[str], bool]) -> None:
+    # The images are shared by every data folder on this computer.
+    data = data_dir()
+    if not is_installed_copy(data) and (app_dir() / "current").exists():
+        say("Kept UM-Codex's Docker images: the installed UM-Codex uses them too.")
+        return
+    others = _others(run, data)
+    if others is None:
+        say(
+            "Kept UM-Codex's Docker images: Docker couldn't list UM-Codex's containers, so it couldn't "
+            "tell whether another UM-Codex data folder uses them."
+        )
+        return
+    if others:
+        say("Kept UM-Codex's Docker images: another UM-Codex data folder's containers use them.")
+        return
     agent_ids: list[str] = []
     for repository in AGENT_REPOSITORIES:
         listed = _docker(run, "images", "-q", repository)
@@ -186,13 +317,6 @@ def _docker(run: Run, *args: str) -> str | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     return done.stdout if done.returncode == 0 else None
-
-
-def _remove_listed(run: Run, query: list[str], then: list[str]) -> None:
-    listed = _docker(run, *query)
-    ids = (listed or "").split()
-    if ids:
-        _docker(run, *then, *ids)
 
 
 def _entries(folder: Path) -> list[Path]:

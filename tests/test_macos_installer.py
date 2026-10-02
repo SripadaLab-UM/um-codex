@@ -52,6 +52,7 @@ case "$*" in
     exec "$UMCODEX_TEST_PYTHON" "$UMCODEX_TEST_SSHTOOL" ;;
   uninstall*)
     if [ -t 0 ]; then echo "uninstall read a terminal" >> "$UMCODEX_TEST_LOG"; fi
+    if [ -n "${UMCODEX_DATA_DIR:-}" ]; then echo "uninstall had UMCODEX_DATA_DIR" >> "$UMCODEX_TEST_LOG"; fi
     exit "${UMCODEX_TEST_UNINSTALL:-0}" ;;
   launchers*)
     # The real `um-codex launchers` (umcodex/launchers.py): what the app
@@ -1126,6 +1127,16 @@ def test_uninstall_runs_um_codex_uninstall_then_removes_the_program_app_and_shor
     assert not (machine["home"] / ".local" / "bin" / "um-codex").exists()
     assert not cache.parent.exists()
     assert "UM-Codex has been removed." in done.stdout
+
+
+def test_uninstall_is_the_installed_data_folders_whatever_umcodex_data_dir_says(machine):
+    """The program files go afterwards: `um-codex uninstall` must be the
+    installed data folder's, not a development copy's (UMCODEX_DATA_DIR)."""
+    install(machine, "0.1.0a3")
+    machine["log"].unlink()
+    done = uninstall(machine, UMCODEX_DATA_DIR=str(machine["home"] / "dev-data"))
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert asked(machine) == ["uninstall"]
 
 
 def test_uninstall_stops_if_um_codex_uninstall_does(machine):
