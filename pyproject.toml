@@ -32,6 +32,9 @@ packages = ["src/umcodex"]
 
 [tool.ruff]
 line-length = 110
+# The video-making tools (docs/videos, narrate-video.py) are dev tooling adapted
+# from DataLab's, not part of the product: not linted here.
+extend-exclude = ["docs/videos", "scripts/narrate-video.py"]
 target-version = "py313"
 
 [tool.ruff.lint]
