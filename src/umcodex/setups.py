@@ -208,10 +208,16 @@ def moved(setup: Setup, *, own_data: Path | None = None) -> list[tuple[str, Path
 
     A folder the agent could write may have had a part of its path swapped for
     a link (by an earlier launch, a sync, or an unpacked archive), which would
-    point the next launch at a different folder."""
+    point the next launch at a different folder.
+
+    Folder by folder: one that's refused now (gone, say) is skipped, so it
+    never hides another that moved; check() reports the refused one."""
     changed = []
     for saved in (setup.working, *setup.writes, *setup.reads):
-        now = folders.check_folder(saved, own_data=own_data).path
+        try:
+            now = folders.check_folder(saved, own_data=own_data).path
+        except FolderRefused:
+            continue
         if not folders.same(Path(saved), now):
             changed.append((saved, now))
     return changed

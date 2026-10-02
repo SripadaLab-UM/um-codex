@@ -328,3 +328,5 @@ button.big { font-size: 15px; padding: 8px 16px; }
 button.danger-solid { background: var(--danger); border-color: var(--danger); color: var(--canvas); font-weight: 600; }
 .masked { -webkit-text-security: disc; font-family: var(--mono); }
 .status .stale { flex-basis: 100%; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+#quick-help p { margin: 0 0 4px; }

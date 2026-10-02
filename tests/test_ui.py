@@ -416,7 +416,13 @@ def test_a_folder_that_moved_needs_confirming_before_a_start(folders_here, tmp_p
         refused = await h.post(f"/api/setups/{setup.id}/start", {})
         assert refused.status == 409 and "confirm" in (await refused.json())["error"]
         assert h.launcher.openers["terminal"].opened == []  # type: ignore[attr-defined]
-        started = await h.post(f"/api/setups/{setup.id}/start", {"confirm_moved": True})
+        # A plain yes isn't enough: the places shown must be the places now.
+        vague = await h.post(f"/api/setups/{setup.id}/start", {"confirm_moved": True})
+        assert vague.status == 409 and (await vague.json())["field"] == "moved"
+        stale = await h.post(f"/api/setups/{setup.id}/start", {"confirm_moved": [str(tmp_path)]})
+        assert stale.status == 409
+        confirm = {"confirm_moved": [str(folders_here["thesis"])]}
+        started = await h.post(f"/api/setups/{setup.id}/start", confirm)
         assert started.status == 200
         saved = SetupStore().get(setup.id)
         assert saved is not None and saved.working == str(folders_here["thesis"])
@@ -1398,12 +1404,12 @@ class FakeUpdate:
 
     def __call__(self, command, **options):
         self.commands.append((command, options))
-        lines, code = self.lines, self.code
+        # It writes to the file it's given, as the real one does in its own session.
+        options["stdout"].write("".join(line + "\n" for line in self.lines).encode())
+        code = self.code
 
         class Child:
-            stdout = iter(line + "\n" for line in lines)
-
-            def wait(self) -> int:
+            def poll(self) -> int:
                 return code
 
         return Child()
@@ -1450,7 +1456,10 @@ def test_update_runs_the_update_command_and_shows_only_its_own_words(caplog):
         assert state["update"] == {"available": None, **done}
         ((command, options),) = fake.commands
         assert command[-2:] == ["update", "--from-launcher"] and command[1:3] == ["-m", "umcodex"]
-        assert options["stdin"] == subprocess.DEVNULL
+        assert options["stdin"] == subprocess.DEVNULL and options["stderr"] == subprocess.STDOUT
+        if sys.platform != "win32":
+            assert options["start_new_session"] is True  # it goes on if this window ends
+        assert (h.launcher.data / "ui" / "update.log").read_text().endswith("The next launch uses it.\n")
 
     with caplog.at_level(logging.INFO):
         with_server(test, spawn=fake)
@@ -1528,3 +1537,138 @@ def test_check_for_updates_asks_now_and_says_what_it_found():
         assert failed.status == 409 and "offline" in (await failed.json())["error"]
 
     with_server(test, check_updates_now=check)
+
+
+def test_saving_a_moved_folder_again_needs_the_same_confirmation(folders_here, tmp_path):
+    """Edit → Save (or "Open in Terminal instead") sends the saved paths;
+    saving them would store where they lead now and skip Start's question."""
+    credentials.save_api_key(FAKE_KEY)
+    link = tmp_path / "link"
+    link.symlink_to(folders_here["thesis"])
+    SetupStore().save(Setup(id="linked-a1", name="linked", working=str(link)))
+    body = setup_body(link, name="linked")
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        refused = await h.put("/api/setups/linked-a1", body)
+        assert refused.status == 409 and (await refused.json())["field"] == "moved"
+        terminal = await h.put("/api/setups/linked-a1", {**body, "open_in": "terminal"})
+        assert terminal.status == 409
+        stale = await h.put("/api/setups/linked-a1", {**body, "confirm_moved": [str(folders_here["data"])]})
+        assert stale.status == 409
+        saved = SetupStore().get("linked-a1")
+        assert saved is not None and saved.working == str(link)  # unchanged
+        assert (await h.post("/api/setups/linked-a1/start", {})).status == 409
+        assert h.launcher.openers["terminal"].opened == []  # type: ignore[attr-defined]
+        # Confirmed with the place shown, it's saved as it resolves.
+        shown = {"confirm_moved": [str(folders_here["thesis"])]}
+        confirmed = await h.put("/api/setups/linked-a1", {**body, **shown})
+        assert confirmed.status == 200 and (await confirmed.json())["moved"] == []
+
+    with_server(test)
+
+
+def test_choosing_the_folder_again_replaces_a_moved_one(folders_here, tmp_path):
+    link = tmp_path / "link"
+    link.symlink_to(folders_here["thesis"])
+    SetupStore().save(Setup(id="linked-a1", name="linked", working=str(link)))
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        chosen = await h.put("/api/setups/linked-a1", setup_body(folders_here["data"], name="linked"))
+        assert chosen.status == 200 and (await chosen.json())["moved"] == []
+
+    with_server(test)
+
+
+def test_rename_keeps_names_unique():
+    store = SetupStore()
+    store.save(Setup(id="a-1", name="Thesis", working="/x"))
+    store.save(Setup(id="b-1", name="data", working="/y"))
+    launcher = launcher_for_tests()
+    with pytest.raises(server.Invalid, match="has that name"):
+        launcher.rename("b-1", {"name": "thesis"})
+    assert launcher.rename("a-1", {"name": "THESIS"})["name"] == "THESIS"  # its own name, recased
+
+
+def test_while_an_update_runs_start_reopen_quit_and_reopen_offers_wait(folders_here, monkeypatch):
+    credentials.save_api_key(FAKE_KEY)
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        made = await (await h.post("/api/setups", setup_body(folders_here["thesis"]))).json()
+        h.launcher.update_job = server.UpdateJob("running", "Downloading…")
+        h.launcher.quit = lambda: pytest.fail("quit")
+        start = await h.post(f"/api/setups/{made['id']}/start", {})
+        assert start.status == 409 and "Updating" in (await start.json())["error"]
+        assert h.launcher.openers["terminal"].opened == []  # type: ignore[attr-defined]
+        assert (await h.post("/api/reopen")).status == 409
+        quit = await h.post("/_control/quit", {}, **{"X-UMCodex-Control": h.control})
+        assert quit.status == 409
+        assert h.launcher.installed_version() is None
+        again = await h.post("/api/update")
+        assert again.status == 409 and "under way" in (await again.json())["error"]
+        # Updated: only Reopen, never a second update that could prune the version in use.
+        h.launcher.update_job = server.UpdateJob("updated", "Updated to UM-Codex 0.1.0a5.", "0.1.0a5")
+        second = await h.post("/api/update")
+        assert second.status == 409 and "Reopen first" in (await second.json())["error"]
+
+    with_server(test)
+
+
+def test_the_window_stays_up_while_its_update_runs():
+    launcher = launcher_for_tests()
+    launcher.update_job = server.UpdateJob("running")
+    data_dir().mkdir(parents=True, exist_ok=True)
+
+    async def run() -> None:
+        stop = asyncio.Event()
+        quiet = {"say": lambda _: None, "ready": lambda *_: None}
+        serving = server.serve(launcher, data=data_dir(), idle_seconds=0.05, stop=stop, **quiet)
+        ended = asyncio.create_task(serving)
+        await asyncio.sleep(0.5)
+        assert not ended.done()  # idle, but its update is running
+        stop.set()
+        await ended
+
+    asyncio.run(run())
+
+
+def test_a_missing_folder_doesnt_hide_a_moved_one_on_the_card_or_in_a_save(folders_here, tmp_path):
+    """The re-review's case: the working folder is a link to thesis now, and
+    a read-only folder is gone. The card shows both; removing the missing
+    folder and saving still needs the moved one confirmed."""
+    credentials.save_api_key(FAKE_KEY)
+    link = tmp_path / "link"
+    link.symlink_to(folders_here["thesis"])
+    gone = tmp_path / "gone"
+    SetupStore().save(Setup(id="linked-a1", name="linked", working=str(link), reads=(str(gone),)))
+    thesis = str(folders_here["thesis"])
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        (card,) = (await (await h.client.get("/api/state")).json())["setups"]
+        assert "doesn't exist" in card["problem"]
+        assert card["moved"] == [{"saved": str(link), "now": thesis}]
+        body = setup_body(link, name="linked")  # the missing folder removed
+        refused = await h.put("/api/setups/linked-a1", body)
+        assert refused.status == 409 and (await refused.json())["field"] == "moved"
+        for spelled in (f"{link}/", f"{link}/.", str(link).replace("/link", "//link")):
+            again = await h.put("/api/setups/linked-a1", setup_body(Path(spelled), name="linked"))
+            assert again.status == 409, spelled
+        assert (await h.post("/api/setups/linked-a1/start", {})).status in (400, 409)
+        assert h.launcher.openers["terminal"].opened == []  # type: ignore[attr-defined]
+        saved = SetupStore().get("linked-a1")
+        assert saved is not None and saved.working == str(link)
+        confirmed = await h.put("/api/setups/linked-a1", {**body, "confirm_moved": [thesis]})
+        assert confirmed.status == 200
+        started = await h.post("/api/setups/linked-a1/start", {})
+        assert started.status == 200 and h.launcher.openers["terminal"].opened == ["linked-a1"]  # type: ignore[attr-defined]
+
+    with_server(test)
+
+
+def test_the_form_shows_a_moved_folder_and_can_confirm_it():
+    script = (REPO / "src" / "umcodex" / "ui" / "static" / "app.js").read_text()
+    assert "errors.moved ? movedInForm(draft, errors.moved) : null" in script
+    assert "confirm_moved: (draft.moved || []).map((m) => m.now)" in script

@@ -407,3 +407,20 @@ def test_launch_from_the_app_doesnt_offer_the_current_folder(monkeypatch):
     assert seen == {"args": ["--from-app"], "from_app": False}
     cli.main([])
     assert seen == {"args": [], "from_app": False}
+
+
+def test_uninstall_waits_for_a_running_update(data_folder, docker_here):
+    """The launcher's Update runs on its own (M7): its files must not go from under it."""
+    from umcodex.launch import LaunchLock
+    from umcodex.update import Layout, install_root
+
+    fill(data_folder)
+    lock = LaunchLock(Layout(install_root()).root / "update.lock")
+    assert lock.acquire()
+    said: list[str] = []
+    try:
+        code = uninstall.uninstall(delete_data=True, yes=True, say=said.append, run=UninstallDocker())
+    finally:
+        lock.release()
+    assert code == 1 and "updating" in said[-1]
+    assert (data_folder / "setups.toml").exists()

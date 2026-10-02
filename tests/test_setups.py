@@ -415,3 +415,14 @@ def test_a_default_name_is_the_folders_made_unique():
     long = "x" * 90
     assert unique_name(long, []) == "x" * 80
     assert unique_name(long, ["x" * 80]) == "x" * 78 + " 2"
+
+
+def test_a_refused_folder_doesnt_hide_one_that_moved(tmp_path):
+    from umcodex.setups import moved
+
+    real = tmp_path / "thesis"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    setup = Setup(id="s-1", name="s", working=str(link), reads=(str(tmp_path / "gone"),))
+    assert moved(setup) == [(str(link), Path(os.path.realpath(real)))]

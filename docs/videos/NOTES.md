@@ -29,7 +29,7 @@ plain; no product pitch. These are separate from DataLab's users.
    Toolkit key prompt, the UM-Codex app on the Desktop.
 4. **Your first launch** (about 2 min; M7 made it one button): open the
    UM-Codex app and its window opens in the browser (the quiet line at the
-   top: Docker running, key saved). Press **Choose a folder to work in…**,
+   top: Docker running, key saved). Press **Choose a folder and start…**,
    pick a demo folder in the computer's own folder picker, and that's all:
    Codex opens on it (in the Codex app on a Mac that has it, otherwise a
    terminal window). Back in the browser, the folder is now a card named
@@ -54,7 +54,7 @@ plain; no product pitch. These are separate from DataLab's users.
      line now? [Y/n]", with the reason), answered with Return (if it was
      skipped, the setup's card explains it and says "Add the line and
      start" instead);
-   - Start on the card (or "Choose a folder to work in…" the first time);
+   - Start on the card (or "Choose a folder and start…" the first time);
    - a second ChatGPT icon in the Dock: UM-Codex's own copy, which opens
      with no sign-in (say: your own ChatGPT app isn't touched);
    - the copy opening straight on a project named after the setup, with
@@ -82,7 +82,7 @@ Later, when built: "On this computer" mode (M4).
   a difference from ITS's setup articles, which put the key in a file.)
 - **The launcher window** (what the app opens): a page in your browser,
   served by UM-Codex on your own computer, not a website. Usually one click:
-  the first time "Choose a folder to work in…", after that "Start". A new
+  the first time "Choose a folder and start…", after that "Start". A new
   setup starts with: the folder you chose (Codex starts there; it can read,
   change and delete in it), named after it; the internet on; commands
   without asking; the model `gpt-5.6-terra`; and the Codex app (on a Mac
