@@ -943,8 +943,19 @@ modes, rigor, and the frontend.
        file and a rename) as all data folders' `hosts` together. Every change
        there is made under one lock (`~/.ssh/um-codex/.lock`, `locks.held`),
        so launches of different data folders at once can't lose each other's
-       hosts. A data folder never touches another's files, except removing
-       all of one whose `owner` folder no longer exists (logged). The
+       hosts. A data folder never deletes another's files on sight. When
+       another's data folder is **definitively** gone (the folder it was in
+       is there and readable, and it isn't), its Hosts leave `config` at
+       once and the time is noted (`missing.json`); its folder is removed
+       (logged) only after 30 days gone. Its keys open only its own
+       sandboxes and are made anew at its next launch, so removing them
+       loses nothing; the wait is for a folder put back, and keeps `~/.ssh`
+       from collecting private keys of throwaway development folders. A
+       data folder that can't be told about (on an unmounted volume, an
+       owner file or folder that can't be read, no owner file) keeps its
+       Hosts and keys. A data folder is never made where its parent isn't
+       (nothing under an unmounted volume's path on the boot disk), and
+       `~/.ssh` is made 0700 if it isn't there. The
        installed copy's hosts keep the plain alias `umcodex-<setup>`; another
        data folder's carry its install id, `umcodex-<setup>_<first 8 of the
        id>` (a setup id never has `_`), so two data folders' hosts never
@@ -953,9 +964,18 @@ modes, rigor, and the frontend.
        kept its keys straight in `~/.ssh/um-codex` and each launch rewrote
        `config` from its own setups, removing every other key and Host
        (another data folder's too: found in the M7 check). The first launch
-       now moves this data folder's flat keys into its own folder; any
-       other flat key is left alone, and the Hosts in `config` that use a
-       flat key still there (an older UM-Codex's) are kept after the others.
+       now moves this data folder's flat keys into its own folder (and
+       removes its flat keys of deleted setups); any other flat key is left
+       alone. A flat key's data folder is read from its Host's ProxyCommand
+       (`--data-dir`, else the installed copy's). The Hosts in `config` that
+       use a flat key still there are kept after the others, until that key
+       or its data folder is gone. A setup id has no `_` (a saved one with
+       it is left out, with the reason in the log).
+     - **Mixed versions:** a copy still on 0.1.0a3 knows none of this. Its
+       launch rewrites `config` with only its own Hosts (the others' come
+       back at their next launch) and removes flat keys it doesn't know (it
+       never looks in `installs/`), and its uninstall removes the line and
+       all of `~/.ssh/um-codex`. Update every copy on the computer.
        The app follows Includes in included files too (its bundle, 26.928:
        each file's top-level `Include`s, with globs), but one plain file
        doesn't rely on that. Each `Host` has `User agent`, its `IdentityFile`,
@@ -1001,9 +1021,12 @@ modes, rigor, and the frontend.
        onto the real path, so a `~/.ssh/config` that's a link stays one), with
        its permissions kept, or created 0600 if there was none. A file that
        isn't UTF-8 text is left alone, with a plain message.
-       `um-codex uninstall` removes its own data folder's ssh files; then,
-       when no other data folder has any there, the line, the backup when
-       the file is then the same as it, and `~/.ssh/um-codex`. Deleting a
+       `um-codex uninstall` removes its own data folder's ssh files (its
+       flat keys too, known by its saved setups or their Hosts); then, when
+       no other data folder that isn't definitively gone has any there (an
+       older copy's flat key counts only while its Host and data folder
+       are there), the line, the backup when the file is then the same as
+       it, and all of `~/.ssh/um-codex`, leftovers included. Deleting a
        setup removes its key and Host.
    - **The container:** a launch as any other (relay, gateway, token,
      folders, internet on or off), labelled `umcodex.ssh=<setup>`. Then, as

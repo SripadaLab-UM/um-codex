@@ -369,41 +369,53 @@ def _fake_key(folder: Path, setup_id: str) -> None:
     (folder / f"{setup_id}_ed25519.pub").write_text("ssh-ed25519 AAAA\n")
 
 
-def _legacy_block(setup_id: str) -> str:
+def _legacy_block(setup_id: str, data: Path | None = None) -> str:
+    """A Host as UM-Codex 0.1.0a3 wrote it: `--data-dir` only for a data
+    folder other than the installed copy's (the test's own data folder)."""
+    extra = f" --data-dir {shlex_quote(str(data))}" if data is not None else ""
     return (
         f"Host umcodex-{setup_id}\n  User agent\n"
         f"  IdentityFile ~/.ssh/um-codex/{setup_id}_ed25519\n"
-        f"  ProxyCommand /old/um-codex ssh-proxy {setup_id}\n"
+        f"  ProxyCommand /old/um-codex ssh-proxy {setup_id} --docker /usr/local/bin/docker{extra}\n"
     )
 
 
 PROXY_FOR = lambda s: ["/x/um-codex", "ssh-proxy", s]  # noqa: E731
 
 
-def test_the_flat_layout_moves_in_and_another_data_folders_flat_keys_stay(ssh_home, data_folder):
+def test_the_flat_layout_moves_in_and_another_data_folders_flat_keys_stay(ssh_home, data_folder, tmp_path):
     """Up to 0.1.0a3 each launch removed the keys and Hosts of every setup it
     didn't know: another data folder's. Now this data folder's keys move into
     its own folder; the others' keys and Hosts stay as they are."""
     from umcodex.setups import SetupStore
 
+    other, gone = tmp_path / "other-a3", tmp_path / "scratch-a3"
+    other.mkdir()
     folder = ssh_home / ".ssh" / "um-codex"
-    for name in ("app-test", "thesis-a1", "first-project-c3"):  # a spike's, ours, another data folder's
+    # A spike's key (no Host), ours, ours of a deleted setup, another data
+    # folder's, and one of a data folder that's gone.
+    for name in ("app-test", "thesis-a1", "deleted-b2", "first-project-c3", "orphan-d4"):
         _fake_key(folder, name)
     (folder / "config").write_text(
         "# Written by UM-Codex 0.1.0a3\n\n"
-        + "\n".join(_legacy_block(s) for s in ("thesis-a1", "first-project-c3"))
+        + _legacy_block("thesis-a1")
+        + _legacy_block("deleted-b2")
+        + _legacy_block("first-project-c3", other)
+        + _legacy_block("orphan-d4", gone)
     )
     SetupStore().save(Setup(id="thesis-a1", name="Thesis", working="/tmp"))
     text = codex_app.write_config(PROXY_FOR).read_text()
     mine = codex_app.install_ssh_dir()
     assert (mine / "thesis-a1_ed25519").read_text() == "private thesis-a1"  # moved, not made anew
     assert (mine / "thesis-a1_ed25519.pub").exists() and not (folder / "thesis-a1_ed25519").exists()
-    for name in ("app-test", "first-project-c3"):  # left alone
+    assert not (folder / "deleted-b2_ed25519").exists()  # ours (its Host says so), no saved setup
+    for name in ("app-test", "first-project-c3", "orphan-d4"):  # left alone
         assert (folder / f"{name}_ed25519").read_text() == f"private {name}"
     assert text.count("Host umcodex-thesis-a1\n") == 1
     assert f"installs/{codex_app.install_id()}/thesis-a1_ed25519" in text
-    assert _legacy_block("first-project-c3") in text  # the older UM-Codex's Host, as it was
-    assert "umcodex-app-test" not in text
+    assert _legacy_block("first-project-c3", other) in text  # the older UM-Codex's Host, as it was
+    assert "umcodex-app-test" not in text and "deleted-b2" not in text
+    assert "orphan-d4" not in text  # its data folder is gone: no Host, the key stays
     again = codex_app.write_config(PROXY_FOR).read_text()
     assert again == text  # stable
 
@@ -478,21 +490,92 @@ def test_aliases_are_unique_across_data_folders_and_ssh_resolves_each(ssh_home, 
         assert seen["identityfile"].endswith(f"/installs/{codex_app.install_id(data)}/same-a1_ed25519")
 
 
-def test_a_data_folder_thats_gone_is_pruned(ssh_home, data_folder, tmp_path, caplog):
+def _install_for(owner: Path, setup_id: str) -> Path:
+    """An install's ssh folder as its UM-Codex left it, for a data folder
+    that may not be reachable now."""
+    folder = codex_app.installs_dir() / codex_app.instance_of(owner)
+    _fake_key(folder, setup_id)
+    (folder / "owner").write_text(f"{owner}\n")
+    (folder / "hosts").write_text(codex_app.host_block(setup_id, PROXY_FOR(setup_id), owner))
+    return folder
+
+
+def _launch_mine(setup_id: str = "thesis-a1") -> str:
+    _fake_key(codex_app.install_ssh_dir(), setup_id)
+    return codex_app.write_config(PROXY_FOR, setup_ids=[setup_id]).read_text()
+
+
+def test_a_data_folder_thats_gone_loses_its_hosts_at_once_and_its_folder_after_30_days(
+    ssh_home, data_folder, tmp_path, monkeypatch, caplog
+):
     other = tmp_path / "scratch-data"
     other.mkdir()
-    _fake_key(codex_app.install_ssh_dir(data=other), "scratch-b2")
-    codex_app.write_config(PROXY_FOR, setup_ids=["scratch-b2"], data=other)
+    folder = _install_for(other, "scratch-b2")
+    name = codex_app.alias("scratch-b2", other)
+    clock = [1_000_000.0]
+    monkeypatch.setattr(codex_app, "_now", lambda: clock[0])
+    assert f"Host {name}\n" in _launch_mine()
+    other.rmdir()
+    with caplog.at_level("INFO", logger="umcodex.codex_app"):
+        text = _launch_mine()
+    assert f"Host {name}" not in text and "Host umcodex-thesis-a1\n" in text
+    assert (folder / "scratch-b2_ed25519").exists()  # kept for now
+    assert any("data folder is gone" in r.getMessage() for r in caplog.records)
+    missing = json.loads((ssh_home / ".ssh" / "um-codex" / "missing.json").read_text())
+    assert missing == {folder.name: 1_000_000.0}
+    # Back within the grace period: its Hosts are back, nothing was lost.
+    clock[0] += 29 * 86400
+    other.mkdir()
+    assert f"Host {name}\n" in _launch_mine()
+    assert not (ssh_home / ".ssh" / "um-codex" / "missing.json").exists()
+    # Gone again, and for 30 days: then its folder goes.
+    other.rmdir()
+    _launch_mine()
+    clock[0] += 29 * 86400
+    _launch_mine()
+    assert folder.exists()
+    clock[0] += 86400
+    _launch_mine()
+    assert not folder.exists()
+    assert not (ssh_home / ".ssh" / "um-codex" / "missing.json").exists()
+
+
+def test_a_data_folder_on_an_unmounted_volume_keeps_its_hosts_and_keys(ssh_home, data_folder, tmp_path):
+    volumes = tmp_path / "Volumes"
+    volumes.mkdir()
+    away = volumes / "Thesis-Drive" / "UM-Codex"  # the volume isn't mounted: its folder isn't there
+    folder = _install_for(away, "drive-e5")
+    text = _launch_mine()
+    assert f"Host {codex_app.alias('drive-e5', away)}\n" in text
+    assert (folder / "drive-e5_ed25519").exists()
+    assert not (ssh_home / ".ssh" / "um-codex" / "missing.json").exists()
+    # And nothing is ever made there, for this data folder either.
+    with pytest.raises(FileNotFoundError):
+        codex_app.write_config(PROXY_FOR, setup_ids=[], data=away)
+    assert not (volumes / "Thesis-Drive").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions, not root")
+def test_a_data_folder_that_cant_be_read_keeps_its_hosts_and_keys(ssh_home, data_folder, tmp_path):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    behind = _install_for(locked / "UM-Codex", "behind-f6")  # its parent can't be read
+    other = tmp_path / "other"
+    other.mkdir()
+    unreadable = _install_for(other, "unread-a7")
     unknown = codex_app.installs_dir() / ("f" * 16)  # no owner file: not one UM-Codex can tell about
     _fake_key(unknown, "x-1")
-    other.rmdir()
-    _fake_key(codex_app.install_ssh_dir(), "thesis-a1")
-    with caplog.at_level("INFO", logger="umcodex.codex_app"):
-        text = codex_app.write_config(PROXY_FOR, setup_ids=["thesis-a1"]).read_text()
-    assert not codex_app.install_ssh_dir(data=other).exists()
-    assert "scratch-b2" not in text and "Host umcodex-thesis-a1\n" in text
+    os.chmod(locked, 0)
+    os.chmod(unreadable / "owner", 0)
+    other.rmdir()  # gone, but its owner file can't be read to say so
+    try:
+        text = _launch_mine()
+    finally:
+        os.chmod(locked, 0o700)
+        os.chmod(unreadable / "owner", 0o600)
+    assert f"Host {codex_app.alias('behind-f6', locked / 'UM-Codex')}\n" in text
+    assert (behind / "behind-f6_ed25519").exists() and (unreadable / "unread-a7_ed25519").exists()
     assert unknown.exists()
-    assert any("data folder that's gone" in r.getMessage() for r in caplog.records)
 
 
 def _write_from_another_process(home: str, data: str, setup_id: str, rounds: int) -> None:
@@ -530,6 +613,51 @@ def test_data_folders_writing_at_once_all_end_up_in_the_config(ssh_home, tmp_pat
         done = subprocess.run([ssh, "-G", "-F", str(config), "anything"], capture_output=True, text=True)
         assert done.returncode == 0, done.stderr  # ssh reads the whole file
     assert not [p for p in (ssh_home / ".ssh" / "um-codex").iterdir() if ".um-codex-" in p.name]
+
+
+def test_the_proxy_command_names_the_data_folder_it_was_made_for(monkeypatch, tmp_path):
+    monkeypatch.delenv("UMCODEX_DATA_DIR")
+    monkeypatch.setattr(codex_app, "default_data_dir", lambda: tmp_path / "installed")
+    other = tmp_path / "dev"
+    command = codex_app.proxy_command("thesis-a1", other)
+    assert command[command.index("--data-dir") + 1] == str(other)
+    assert "--data-dir" not in codex_app.proxy_command("thesis-a1", tmp_path / "installed")
+
+
+def test_the_proxy_for_a_data_folders_hosts_is_its_own(ssh_home, data_folder, tmp_path):
+    other = tmp_path / "dev"
+    other.mkdir()
+    _fake_key(codex_app.install_ssh_dir(data=other), "dev-b2")
+    text = codex_app.write_config(setup_ids=["dev-b2"], data=other).read_text()
+    assert f"--data-dir {other}" in text and str(data_folder) not in text
+
+
+def test_ssh_is_made_private_when_it_isnt_there_and_left_as_it_is_otherwise(ssh_home, data_folder):
+    ssh = ssh_home / ".ssh"
+    assert not ssh.exists()
+    codex_app.write_config(PROXY_FOR, setup_ids=[])
+    if sys.platform != "win32":
+        assert stat.S_IMODE(ssh.stat().st_mode) == 0o700
+        os.chmod(ssh, 0o750)
+        _launch_mine()
+        assert stat.S_IMODE(ssh.stat().st_mode) == 0o750
+
+
+def test_a_copy_set_up_under_the_plain_alias_loses_that_host_and_project(tmp_path, monkeypatch):
+    """A development copy's state from before its hosts had the install id."""
+    monkeypatch.setattr(codex_app, "plain_alias_folder", lambda: tmp_path / "installed")
+    setup = Setup(id="other-c3", name="Other", working="/tmp")
+    state = codex_app.seeded_state(GUI_TEST_STATE, setup, data=tmp_path / "dev")
+    old = "remote-ssh-discovered:umcodex-other-c3"
+    assert not any(c["hostId"] == old for c in state["codex-managed-remote-connections"])
+    assert old not in state["remote-connection-auto-connect-by-host-id"]
+    assert not any(p["hostId"] == old for p in state["remote-projects"])
+    assert "3df46154" not in state["project-order"]
+    new = codex_app.host_id("other-c3", tmp_path / "dev")
+    assert state["remote-connection-auto-connect-by-host-id"] == {new: True}
+    # The installed copy's own state keeps its plain-alias host.
+    kept = codex_app.seeded_state(GUI_TEST_STATE, setup, data=tmp_path / "installed")
+    assert any(c["hostId"] == old for c in kept["codex-managed-remote-connections"])
 
 
 def test_the_tests_never_reach_this_computers_ssh_folder(ssh_home, data_folder):

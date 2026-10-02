@@ -65,7 +65,7 @@ import tomli_w
 from umcodex import locks
 from umcodex.containers import APP, APP_LABEL, INSTANCE_LABEL, Docker, DockerError, instance_of
 from umcodex.paths import data_dir, default_data_dir
-from umcodex.setups import Setup
+from umcodex.setups import SETUP_ID, Setup
 
 log = logging.getLogger(__name__)
 
@@ -346,7 +346,7 @@ def _ssh_arg(part: str, platform: str = sys.platform) -> str:
     return shlex.quote(part)
 
 
-def proxy_command(setup_id: str) -> list[str]:
+def proxy_command(setup_id: str, data: Path | None = None) -> list[str]:
     """The ProxyCommand: this UM-Codex's `ssh-proxy` with absolute paths (the
     app checks the command in its own PATH, which a Dock start keeps short).
     An installed UM-Codex uses its launcher command (`<app>/bin/um-codex`,
@@ -362,8 +362,11 @@ def proxy_command(setup_id: str) -> list[str]:
     ensure_docker_on_path()
     docker = shutil.which("docker") or "docker"
     command = [*program, "ssh-proxy", setup_id, "--docker", str(Path(docker).absolute())]
-    if os.environ.get("UMCODEX_DATA_DIR"):  # development and tests only
-        command += ["--data-dir", str(data_dir())]
+    # Development and tests only: the installed copy's data folder is the default.
+    if os.environ.get("UMCODEX_DATA_DIR") or (
+        data is not None and not _same_folder(data, default_data_dir())
+    ):
+        command += ["--data-dir", str(data or data_dir())]
     return command
 
 
@@ -405,11 +408,17 @@ def host_block(setup_id: str, proxy: Sequence[str], data: Path | None = None) ->
     )
 
 
-SETUP_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 INSTALL_ID = re.compile(r"[0-9a-f]{16}")
 OWNER = "owner"  # in an install's folder: its data folder's path
 HOSTS = "hosts"  # in an install's folder: its Host blocks
 LOCK = ".lock"  # in ~/.ssh/um-codex: held around every change there
+MISSING = "missing.json"  # in ~/.ssh/um-codex: since when each gone data folder has been gone
+# How long a data folder that's definitively gone keeps its ssh folder (its
+# Hosts leave the config at once). Its keys open only its own sandboxes and
+# are made anew at its next launch, so nothing is lost by removing them; the
+# wait is for a folder put back (restored from a backup, moved back), and
+# keeps ~/.ssh from collecting private keys of throwaway development folders.
+GRACE_SECONDS = 30 * 24 * 3600
 
 # Up to 0.1.0a3 every data folder kept its keys straight in ~/.ssh/um-codex
 # ("flat"), and each launch rewrote `config` with only its own hosts and
@@ -418,7 +427,12 @@ _BLOCK_LINE = re.compile(r"(?i)\s*(host|match)(\s*=|\s)")
 _FLAT_KEY = re.compile(
     r"(?im)^\s*IdentityFile[\s=]+~/\.ssh/um-codex/([A-Za-z0-9][A-Za-z0-9_.-]{0,127})_ed25519\s*$"
 )
+_PROXY_LINE = re.compile(r"(?im)^\s*ProxyCommand[\s=]+(.*)$")
 _HOST_NAMES = re.compile(r"(?i)\s*host(?:\s*=\s*|\s+)(.*)")
+
+
+def _now() -> float:
+    return time.time()
 
 
 def _keys_in(folder: Path) -> list[str]:
@@ -441,7 +455,8 @@ def _saved_setup_ids(data: Path | None = None) -> set[str]:
 
 
 def _private_dir(folder: Path) -> None:
-    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    """A folder only the person can open (its parent must be there)."""
+    folder.mkdir(mode=0o700, exist_ok=True)
     with contextlib.suppress(OSError):
         os.chmod(folder, 0o700)
 
@@ -449,7 +464,11 @@ def _private_dir(folder: Path) -> None:
 @contextlib.contextmanager
 def _locked(home: Path | None = None):
     """~/.ssh/um-codex's lock: every process of every data folder takes it
-    before changing anything there."""
+    before changing anything there. ~/.ssh is made (0700) if it isn't there;
+    one that is keeps its own permissions."""
+    ssh = ssh_dir(home)
+    if not ssh.is_dir():
+        _private_dir(ssh)
     _private_dir(own_ssh_dir(home))
     with locks.held(own_ssh_dir(home) / LOCK, timeout=30):
         yield
@@ -458,8 +477,9 @@ def _locked(home: Path | None = None):
 def _own_folder(home: Path | None, data: Path | None) -> Path:
     """This data folder's ssh folder, made (0700) with its `owner` file."""
     data = data or data_dir()
-    # It exists (another data folder's launch would take it for gone otherwise).
-    data.mkdir(parents=True, exist_ok=True)
+    # It's there, so no other data folder takes it for gone. Its parent must
+    # be: nothing is made under an unmounted volume's path on the boot disk.
+    data.mkdir(exist_ok=True)
     folder = install_ssh_dir(home, data)
     _private_dir(installs_dir(home))
     _private_dir(folder)
@@ -472,6 +492,96 @@ def _own_folder(home: Path | None, data: Path | None) -> Path:
     if current != text:
         _private_write(owner, text)
     return folder
+
+
+def _owner_state(owner: Path) -> str:
+    """ "present"; "gone", only when that's certain: the folder it was in is
+    there and readable, and it isn't; else "unknown" (an unmounted volume, a
+    folder that can't be read)."""
+    try:
+        os.lstat(owner)
+        return "present"
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return "unknown"
+    parent = owner.parent
+    if parent == owner or (sys.platform == "darwin" and parent == Path("/Volumes")):
+        return "unknown"  # a volume's own mount point
+    try:
+        if not stat.S_ISDIR(os.stat(parent).st_mode) or not os.access(parent, os.R_OK | os.X_OK):
+            return "unknown"
+    except OSError:
+        return "unknown"
+    return "gone"
+
+
+def _install_state(folder: Path) -> str:
+    """The state of the data folder an install's ssh folder belongs to."""
+    try:
+        owner = Path((folder / OWNER).read_text(encoding="utf-8").strip())
+        if not owner.is_absolute() or instance_of(owner) != folder.name:
+            return "unknown"
+        return _owner_state(owner)
+    except (OSError, UnicodeDecodeError, RuntimeError):
+        return "unknown"
+
+
+def _blocks(text: str) -> list[str]:
+    """A config's Host and Match blocks, each as written (comments in it too)."""
+    blocks: list[list[str]] = []
+    for line in text.splitlines():
+        if _BLOCK_LINE.match(line):
+            blocks.append([line])
+        elif blocks:
+            blocks[-1].append(line)
+    return ["\n".join(block).rstrip() + "\n" for block in blocks]
+
+
+def _host_names(block: str) -> set[str]:
+    found = _HOST_NAMES.match(block.splitlines()[0])
+    return set(found.group(1).split()) if found else set()
+
+
+def _flat_owner(block: str) -> Path | None:
+    """The data folder an older UM-Codex's Host belongs to, from its
+    ProxyCommand: its `--data-dir`, else the installed copy's. None when the
+    block doesn't say (it isn't UM-Codex's ssh-proxy)."""
+    found = _PROXY_LINE.search(block)
+    if not found:
+        return None
+    try:
+        words = [word.replace("%%", "%") for word in shlex.split(found.group(1))]
+    except ValueError:
+        return None
+    if "ssh-proxy" not in words:
+        return None
+    if "--data-dir" in words[:-1]:
+        given = Path(words[words.index("--data-dir") + 1])
+        return given if given.is_absolute() else None
+    return plain_alias_folder()
+
+
+def _flat_hosts(home: Path | None) -> list[tuple[str, str, Path | None]]:
+    """The Hosts in today's `config` that use a flat key still there, as
+    (setup id, block, its data folder or None)."""
+    try:
+        text = (own_ssh_dir(home) / "config").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    found = []
+    for block in _blocks(text):
+        key = _FLAT_KEY.search(block)
+        if key and (own_ssh_dir(home) / f"{key.group(1)}_ed25519").is_file():
+            found.append((key.group(1), block, _flat_owner(block)))
+    return found
+
+
+def _remove_flat_key(home: Path | None, setup_id: str) -> None:
+    if SETUP_ID.fullmatch(setup_id):
+        flat = own_ssh_dir(home) / f"{setup_id}_ed25519"
+        flat.unlink(missing_ok=True)
+        flat.with_name(flat.name + ".pub").unlink(missing_ok=True)
 
 
 def _move_flat_keys(setup_ids: Iterable[str], home: Path | None, data: Path | None) -> None:
@@ -493,64 +603,47 @@ def _move_flat_keys(setup_ids: Iterable[str], home: Path | None, data: Path | No
         log.info("moved the ssh key of %s into %s", setup_id, folder)
 
 
-def _prune(home: Path | None, keep: str | None = None) -> None:
-    """Remove the ssh folders of data folders that are gone (their `owner`
-    path no longer exists). Only with the lock held."""
-    for folder in sorted(installs_dir(home).glob("*")):
-        if not folder.is_dir() or folder.name == keep or not INSTALL_ID.fullmatch(folder.name):
-            continue
-        try:
-            owner = Path((folder / OWNER).read_text(encoding="utf-8").strip())
-        except (OSError, UnicodeDecodeError):
-            continue  # not one UM-Codex can tell about: left alone
-        if not owner.is_absolute() or owner.exists() or instance_of(owner) != folder.name:
-            continue
-        shutil.rmtree(folder, ignore_errors=True)
-        log.info("removed the ssh hosts and keys of %s, a UM-Codex data folder that's gone", owner)
-
-
-def _blocks(text: str) -> list[str]:
-    """A config's Host and Match blocks, each as written (comments in it too)."""
-    blocks: list[list[str]] = []
-    for line in text.splitlines():
-        if _BLOCK_LINE.match(line):
-            blocks.append([line])
-        elif blocks:
-            blocks[-1].append(line)
-    return ["\n".join(block).rstrip() + "\n" for block in blocks]
-
-
-def _host_names(block: str) -> set[str]:
-    found = _HOST_NAMES.match(block.splitlines()[0])
-    return set(found.group(1).split()) if found else set()
-
-
-def _flat_blocks(home: Path | None) -> list[str]:
-    """The Hosts in today's `config` that use a flat key still there: an
-    older UM-Codex's (another data folder's), kept as they are."""
+def _read_missing(home: Path | None) -> dict[str, float]:
     try:
-        text = (own_ssh_dir(home) / "config").read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+        value = json.loads((own_ssh_dir(home) / MISSING).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return {k: float(v) for k, v in value.items() if isinstance(v, int | float) and INSTALL_ID.fullmatch(k)}
+
+
+def _install_folders(home: Path | None) -> list[Path]:
+    try:
+        return sorted(p for p in installs_dir(home).glob("*") if INSTALL_ID.fullmatch(p.name) and p.is_dir())
+    except OSError:
         return []
-    kept = []
-    for block in _blocks(text):
-        found = _FLAT_KEY.search(block)
-        if found and (own_ssh_dir(home) / f"{found.group(1)}_ed25519").is_file():
-            kept.append(block)
-    return kept
 
 
-def _write_combined(home: Path | None) -> Path:
+def _write_combined(home: Path | None, keep: str | None = None) -> Path:
     """~/.ssh/um-codex/config: every data folder's `hosts` together (and an
     older UM-Codex's flat ones), written whole. Only with the lock held.
-    The app follows Includes inside included files too (its bundle, 26.928),
-    but one plain file doesn't depend on that, and `ssh -G` reads the same."""
+    A data folder that's definitively gone (`_owner_state`) loses its Hosts
+    here at once, and its ssh folder after GRACE_SECONDS; one that can't be
+    told about (an unmounted volume) keeps both. The app follows Includes
+    inside included files too (its bundle, 26.928), but one plain file
+    doesn't depend on that, and `ssh -G` reads the same."""
+    missing = _read_missing(home)
+    still_missing: dict[str, float] = {}
     seen: set[str] = set()
     parts: list[str] = []
-    for folder in sorted(installs_dir(home).glob("*")):
-        if not INSTALL_ID.fullmatch(folder.name):
-            continue
+    for folder in _install_folders(home):
         try:
+            state = "present" if folder.name == keep else _install_state(folder)
+            if state == "gone":
+                since = missing.get(folder.name, _now())
+                if _now() - since >= GRACE_SECONDS:
+                    shutil.rmtree(folder, ignore_errors=True)
+                    log.info("removed %s: its UM-Codex data folder has been gone for 30 days", folder)
+                else:
+                    still_missing[folder.name] = since
+                    log.info("left out the ssh Hosts of %s: its UM-Codex data folder is gone", folder)
+                continue
             text = (folder / HOSTS).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
@@ -564,7 +657,11 @@ def _write_combined(home: Path | None) -> Path:
             blocks.append(block)
         if blocks:
             parts.append(f"# installs/{folder.name}\n" + "\n".join(blocks))
-    flat = [block for block in _flat_blocks(home) if not (_host_names(block) & seen)]
+    flat = [
+        block
+        for _, block, owner in _flat_hosts(home)
+        if not (_host_names(block) & seen) and (owner is None or _owner_state(owner) != "gone")
+    ]
     if flat:
         parts.append("# From an older UM-Codex (its keys straight in ~/.ssh/um-codex)\n" + "\n".join(flat))
     header = [
@@ -575,13 +672,18 @@ def _write_combined(home: Path | None) -> Path:
         "",
         "",
     ]
+    if still_missing != missing:
+        if still_missing:
+            _private_write(own_ssh_dir(home) / MISSING, json.dumps(still_missing) + "\n")
+        else:
+            (own_ssh_dir(home) / MISSING).unlink(missing_ok=True)
     path = own_ssh_dir(home) / "config"
     _private_write(path, "\n".join(header) + "\n".join(parts))
     return path
 
 
 def write_config(
-    proxy_for: Callable[[str], Sequence[str]] = proxy_command,
+    proxy_for: Callable[[str], Sequence[str]] | None = None,
     home: Path | None = None,
     setup_ids: Iterable[str] | None = None,
     data: Path | None = None,
@@ -589,12 +691,18 @@ def write_config(
     """This data folder's Hosts (one per saved setup that has a key: in
     `setup_ids`, default the setup store) in its own `hosts`, then
     ~/.ssh/um-codex/config, all data folders' together. Its own keys that
-    belong to no saved setup are removed; another data folder's files are
-    never touched, except all of one whose data folder is gone."""
+    belong to no saved setup are removed (its flat ones too, known by the
+    older UM-Codex's Host for them); another data folder's files are never
+    touched, except, after GRACE_SECONDS, all of one whose data folder is gone."""
     data = data or data_dir()
+    proxy = proxy_for or (lambda setup_id: proxy_command(setup_id, data))
     saved = set(_saved_setup_ids(data) if setup_ids is None else setup_ids)
     with _locked(home):
         folder = _own_folder(home, data)
+        for setup_id, _, owner in _flat_hosts(home):
+            if owner is not None and setup_id not in saved and _same_folder(owner, data):
+                _remove_flat_key(home, setup_id)
+                log.info("removed the flat ssh key of %s, which is no saved setup", setup_id)
         _move_flat_keys(saved, home, data)
         hosts = []
         for setup_id in known_setups(home, data):
@@ -605,10 +713,9 @@ def write_config(
             key.unlink(missing_ok=True)
             key.with_name(key.name + ".pub").unlink(missing_ok=True)
             log.info("removed the ssh key of %s, which is no saved setup", setup_id)
-        blocks = [host_block(setup_id, proxy_for(setup_id), data) for setup_id in hosts]
+        blocks = [host_block(setup_id, proxy(setup_id), data) for setup_id in hosts]
         _private_write(folder / HOSTS, "\n".join(blocks))
-        _prune(home, keep=folder.name)
-        return _write_combined(home)
+        return _write_combined(home, keep=folder.name)
 
 
 def ensure_key(
@@ -657,11 +764,13 @@ def forget_setup(setup_id: str, home: Path | None = None, data: Path | None = No
 def remove_ssh_files(
     home: Path | None = None, data: Path | None = None, setup_ids: Iterable[str] | None = None
 ) -> tuple[list[str], bool]:
-    """Uninstall: this data folder's ssh files (its folder, and its setups'
-    flat keys). ~/.ssh/um-codex goes too when no other data folder uses it
-    (or an older UM-Codex's flat keys); else its config is rewritten without
-    this one's Hosts. Returns what was done, in plain words, and whether
-    others still use it (then the Include line must stay)."""
+    """Uninstall: this data folder's ssh files (its folder, and its flat
+    keys: its saved setups', and those whose older Host names this data
+    folder). ~/.ssh/um-codex goes too, with any leftover, unless another
+    data folder that isn't definitively gone still has a folder there, or
+    an older UM-Codex's flat key with its Host; then its config is
+    rewritten without this one's Hosts. Returns what was done, in plain
+    words, and whether others still use it (then the Include line must stay)."""
     data = data or data_dir()
     folder = own_ssh_dir(home)
     if not folder.exists():
@@ -670,7 +779,7 @@ def remove_ssh_files(
     try:
         saved = set(_saved_setup_ids(data) if setup_ids is None else setup_ids)
     except (OSError, ValueError):
-        saved = set()
+        saved = set()  # the flat keys' Hosts still tell which are this data folder's
     with _locked(home):
         mine = install_ssh_dir(home, data)
         if mine.exists():
@@ -678,12 +787,14 @@ def remove_ssh_files(
             gone = not mine.exists()
             done.append(f"Removed {mine}." if gone else f"Couldn't remove {mine}: delete it yourself.")
         for setup_id in saved:
-            if SETUP_ID.fullmatch(setup_id):
-                flat = folder / f"{setup_id}_ed25519"
-                flat.unlink(missing_ok=True)
-                flat.with_name(flat.name + ".pub").unlink(missing_ok=True)
-        _prune(home)
-        others = any(p.is_dir() for p in installs_dir(home).glob("*")) or bool(_keys_in(folder))
+            _remove_flat_key(home, setup_id)
+        others = False
+        for setup_id, _, owner in _flat_hosts(home):
+            if owner is not None and _same_folder(owner, data):
+                _remove_flat_key(home, setup_id)
+            elif owner is not None and _owner_state(owner) != "gone":
+                others = True  # an older UM-Codex's, still in use
+        others = others or any(f != mine and _install_state(f) != "gone" for f in _install_folders(home))
         if others:
             _write_combined(home)
             done.append(f"Kept {folder}: another UM-Codex data folder on this computer still uses it.")
@@ -1202,6 +1313,7 @@ def seeded_state(
         (ATOMS, dict),
     ):
         _expect(state.get(key), kind, key)
+    _forget_old_alias(state, setup, host)
     analytics = state.setdefault("remote-connection-analytics-id-by-host-id", {})
     analytics_id = analytics.setdefault(host, str(uuid.uuid4()))
     connections = state.setdefault("codex-managed-remote-connections", [])
@@ -1250,6 +1362,42 @@ def seeded_state(
     if isinstance(sidebar, list) and f"codex:project:{mine['id']}" not in sidebar:
         sidebar.insert(0, f"codex:project:{mine['id']}")
     return state
+
+
+def _forget_old_alias(state: dict, setup: Setup, host: str) -> None:
+    """This copy's host and project under the setup's plain alias, when its
+    alias now has the install id (a development copy's, set up before
+    0.1.0a4): that host no longer exists in the ssh config."""
+    old = f"remote-ssh-discovered:{ALIAS_PREFIX}{setup.id}"
+    if old == host:
+        return
+    if isinstance(state.get("codex-managed-remote-connections"), list):
+        state["codex-managed-remote-connections"] = [
+            c
+            for c in state["codex-managed-remote-connections"]
+            if not (isinstance(c, dict) and c.get("hostId") == old)
+        ]
+    for key in ("remote-connection-auto-connect-by-host-id", "remote-connection-analytics-id-by-host-id"):
+        if isinstance(state.get(key), dict):
+            state[key].pop(old, None)
+    gone = set()
+    if isinstance(state.get("remote-projects"), list):
+        gone = {
+            p.get("id") for p in state["remote-projects"] if isinstance(p, dict) and p.get("hostId") == old
+        }
+        state["remote-projects"] = [
+            p for p in state["remote-projects"] if not (isinstance(p, dict) and p.get("hostId") == old)
+        ]
+    if not gone:
+        return
+    if isinstance(state.get("project-order"), list):
+        state["project-order"] = [p for p in state["project-order"] if p not in gone]
+    atoms = state.get(ATOMS)
+    sidebar = atoms.get("unified-sidebar-project-order-v1") if isinstance(atoms, dict) else None
+    if isinstance(atoms, dict) and isinstance(sidebar, list):
+        atoms["unified-sidebar-project-order-v1"] = [
+            p for p in sidebar if p not in {f"codex:project:{g}" for g in gone}
+        ]
 
 
 def read_state(home: Path) -> dict:
@@ -1353,7 +1501,7 @@ class AppHold:
     run: Runner = subprocess.run
     poll_seconds: float = 2.0
     sleep: Callable[[float], None] = time.sleep
-    proxy_for: Callable[[str], Sequence[str]] = proxy_command
+    proxy_for: Callable[[str], Sequence[str]] | None = None  # None: proxy_command, for `data`
     local_chats: bool = LOCAL_CHATS
     labels: tuple[tuple[str, str], ...] = ()
 

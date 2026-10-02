@@ -223,6 +223,56 @@ def test_uninstall_keeps_another_data_folders_ssh_entries(data_folder, docker_he
     assert any("another UM-Codex data folder" in line for line in said)
 
 
+def _flat(ssh: Path, setup_id: str, data: Path | None = None) -> str:
+    (ssh / "um-codex").mkdir(exist_ok=True)
+    (ssh / "um-codex" / f"{setup_id}_ed25519").write_text("key")
+    extra = f" --data-dir {data}" if data else ""
+    return (
+        f"Host umcodex-{setup_id}\n  IdentityFile ~/.ssh/um-codex/{setup_id}_ed25519\n"
+        f"  ProxyCommand /old/um-codex ssh-proxy {setup_id}{extra}\n"
+    )
+
+
+def test_the_last_uninstall_takes_everything_out(data_folder, docker_here, ssh_home, tmp_path):
+    """Flat keys whose data folder can't be found, or is gone, or is this
+    one (with its setups file unreadable) don't keep the ssh entries."""
+    from umcodex import codex_app
+
+    ssh = ssh_home / ".ssh"
+    ssh.mkdir()
+    (ssh / "config").write_text("Host mine\n  User me\n")
+    codex_app.add_include()
+    (data_folder / "setups.toml").parent.mkdir(parents=True, exist_ok=True)
+    (data_folder / "setups.toml").write_text("not toml [")
+    config = _flat(ssh, "ours-a1") + _flat(ssh, "gone-b2", tmp_path / "gone")
+    _flat(ssh, "nohost-c3")  # no Host names its data folder
+    (ssh / "um-codex" / "config").write_text(config)
+    said: list[str] = []
+    assert uninstall.uninstall(delete_data=False, yes=True, say=said.append, run=UninstallDocker()) == 0
+    assert not (ssh / "um-codex").exists()
+    assert (ssh / "config").read_text() == "Host mine\n  User me\n"
+
+
+def test_uninstall_keeps_an_older_um_codexs_flat_keys_still_in_use(
+    data_folder, docker_here, ssh_home, tmp_path
+):
+    from umcodex import codex_app
+
+    ssh = ssh_home / ".ssh"
+    ssh.mkdir()
+    (ssh / "config").write_text("Host mine\n  User me\n")
+    codex_app.add_include()
+    installed = tmp_path / "installed-a3"
+    installed.mkdir()
+    (ssh / "um-codex" / "config").parent.mkdir()
+    (ssh / "um-codex" / "config").write_text(_flat(ssh, "first-project-c3", installed))
+    said: list[str] = []
+    assert uninstall.uninstall(delete_data=False, yes=True, say=said.append, run=UninstallDocker()) == 0
+    assert codex_app.include_present()
+    assert (ssh / "um-codex" / "first-project-c3_ed25519").exists()
+    assert "Host umcodex-first-project-c3" in (ssh / "um-codex" / "config").read_text()
+
+
 def test_uninstall_with_no_ssh_entries_says_nothing_about_them(data_folder, docker_here, ssh_home):
     said: list[str] = []
     uninstall.uninstall(delete_data=False, yes=True, say=said.append, run=UninstallDocker())
