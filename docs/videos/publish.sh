@@ -11,7 +11,7 @@ OUT=build/publish
 mkdir -p "$OUT"
 # On Windows (Git Bash), python3 is a Microsoft Store placeholder.
 PY=python3; "$PY" -c "" 2>/dev/null || PY=python
-for v in 02-installing-on-a-mac 04-first-launch 05-launcher-settings; do
+for v in 02-installing-on-a-mac 04-first-launch 05-launcher-settings 03-installing-on-windows 04-first-launch-windows; do
   src="build/$v/$v.mp4"
   # Each computer renders its own (the Windows video on Windows): skip the rest.
   [ -f "$src" ] || { echo "$v  not rendered here, skipped"; continue; }
