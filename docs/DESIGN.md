@@ -424,6 +424,7 @@ um-codex/
     codex_config.py         Codex's enforced settings and model catalog (from DataLab's config.toml)
     codex_app.py            "Open in: Codex app" (M6): ssh files, ssh-proxy, the container's ssh side,
                             the app copy, the launch held while the app uses it
+    this_computer.py        "On this computer" (M4 spike): the local app copy's config, state and relay
     credentials.py          (from DataLab)
     secret_prompt.py        (from DataLab)
     docker_path.py          (from DataLab)
@@ -708,6 +709,19 @@ modes, rigor, and the frontend.
      on this computer.
    - Docker becomes optional in the installer for people who use only this
      mode.
+   - **2026-10-02 spike** (`docs/spikes/2026-10-02-this-computer.md`, branch
+     `m4-this-computer`): the Codex app on the Mac as the front end. "On
+     this computer" is the secondary choice (under "More options"), behind a
+     caution dialog shown once when it's chosen (Cancel focused), with an
+     "On this computer" marker on the setup's card. A second UM-Codex copy
+     of the app (`<data>/codex-app-local/`), separate from the sandbox copy,
+     with the Toolkit through a relay on a fixed port, held by the launch
+     while the copy is open. Computer Use, the in-app browser and Chrome
+     control are bundled plugins behind remote flags (Statsig gates) and
+     the `node_repl` MCP server; whether the gates pass with no ChatGPT
+     account is the GUI test's first question. Image inputs through the
+     relay work. `this_computer.py` has the copy's config, state, relay and
+     tests; the live run of the copy is the GUI test's step 1.
 6. **M5, launcher window (asked for on 2026-10-01: the terminal's setup
    questions weren't friendly enough).** The UM-Codex app (Mac) and the
    Start menu and Desktop shortcuts (Windows) open a small page in the
