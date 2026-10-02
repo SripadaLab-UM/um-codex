@@ -749,7 +749,11 @@ class Launchers:
                 _real_folder(app / folder)
             for name, content in files.items():
                 write_file(app / name, content, 0o755 if name.startswith("Contents/MacOS/") else 0o644)
-            os.utime(app, follow_symlinks=False)  # so Finder and macOS read it afresh
+            # So Finder and macOS read it afresh (the app was checked not to be a link).
+            if os.utime in os.supports_follow_symlinks:
+                os.utime(app, follow_symlinks=False)
+            else:
+                os.utime(app)
         except OSError as error:
             log.warning("writing %s failed", app, exc_info=True)
             return f"{type(error).__name__}: {error}"
