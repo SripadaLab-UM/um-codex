@@ -383,6 +383,26 @@ def test_the_picker_reads_only_full_paths_from_its_json():
     assert "$env:UMCODEX_PICK_START" in script and "AttachThreadInput" in script
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows' own folder dialog")
+def test_the_windows_folder_dialog_compiles_and_picks_folders(tmp_path):
+    """Windows PowerShell 5.1 compiles the picker's dialog, and the dialog is
+    made for folders on disk only, starting in a folder given (not shown)."""
+    script = base64.b64decode(picker.windows_command()[-1]).decode("utf-16-le")
+    source = script.split("Add-Type -TypeDefinition @'\n", 1)[1].split("\n'@", 1)[0]
+    (tmp_path / "picker.cs").write_text(source, encoding="utf-8")
+    check = (
+        f"Add-Type -TypeDefinition (Get-Content -Raw -LiteralPath '{tmp_path / 'picker.cs'}'); "
+        f"[UmCodexPicker.Folder]::Check('{tmp_path}')"
+    )
+    done = subprocess.run(
+        ["powershell", "-NoProfile", "-STA", "-NonInteractive", "-Command", check],
+        capture_output=True, text=True, timeout=120,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    options = int(done.stdout.strip())
+    assert options & 0x20 and options & 0x40 and options & 0x800
+
+
 # --- Starting -------------------------------------------------------------------
 
 

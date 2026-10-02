@@ -622,7 +622,7 @@ def test_the_uninstaller_removes_only_what_the_installer_put_in_the_app_folder()
     body = code(UNINSTALL)
     # downloads: the updater's (DataLab 615cd0f).
     assert 'foreach ($name in "versions", "bin", "icons", "downloads")' in body
-    assert 'foreach ($name in "current", "previous", "launchers", "uv")' in body
+    assert 'foreach ($name in "current", "previous", "launchers", "uv", "update.lock")' in body
     assert "if ($inRoot.Count -eq 0) { Remove-Tree $Root }" in body
     installer = 'foreach ($name in "installer", "install", "uv") { Remove-Tree (Join-Path $StateDir $name) }'
     assert installer in body

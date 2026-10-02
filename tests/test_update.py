@@ -183,8 +183,9 @@ def test_windows_gets_a_copy_of_the_new_versions_launcher_in_bin(tmp_path, githu
     assert up.update() == 0, said
     new = root / "versions" / "0.1.0a3"
     venv, pip = tools.ran("uv")
-    # install.ps1's flags: no --python-preference there.
-    assert venv == ["uv", "venv", "-q", "--no-config", "--python", "3.13", str(new)]
+    # install.ps1's flags.
+    flags = ["-q", "--no-config", "--python", "3.13", "--python-preference", "only-managed"]
+    assert venv == ["uv", "venv", *flags, str(new)]
     assert str(new / "Scripts" / "python.exe") in pip
     assert (root / "bin" / "um-codex.exe").read_text() == "launcher of 0.1.0a3"
     [aside] = list((root / "bin").glob("um-codex.exe.old-*"))

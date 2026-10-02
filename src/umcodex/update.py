@@ -302,6 +302,20 @@ def _write_line(path: Path, text: str) -> None:
     with temporary.open("rb+") as file:
         os.fsync(file.fileno())
     os.replace(temporary, path)
+    fsync_folder(path.parent)
+
+
+def fsync_folder(folder: Path) -> None:
+    """Make a rename in `folder` durable (not possible, nor needed, on Windows).
+    From DataLab's updater.py."""
+    if sys.platform == "win32":
+        return
+    with contextlib.suppress(OSError):
+        handle = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(handle)
+        finally:
+            os.close(handle)
 
 
 # ------------------------------------------------------------------ checks
@@ -731,10 +745,8 @@ class Updater:
             shutil.rmtree(folder)
         uv = self._uv
         assert uv is not None
-        venv = [uv, "venv", "-q", "--no-config", "--python", "3.13"]
-        if not self.layout.windows:
-            # As install.sh: uv's own Python build, never one found on this Mac.
-            venv += ["--python-preference", "only-managed"]
+        # As the installers: uv's own Python build, never one found on this computer.
+        venv = [uv, "venv", "-q", "--no-config", "--python", "3.13", "--python-preference", "only-managed"]
         self._must([*venv, str(folder)], "making its Python environment", 600)
         self._must(
             [

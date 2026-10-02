@@ -306,7 +306,7 @@ foreach ($folder in @(Get-ChildItem -LiteralPath $StateDir -Directory -Filter "u
 # The program files: only what install.ps1 and the updater put there
 # (downloads: a release while it installs); anything else in the folder stays.
 foreach ($name in "versions", "bin", "icons", "downloads") { Remove-Tree (Join-Path $Root $name) }
-foreach ($name in "current", "previous", "launchers", "uv") {
+foreach ($name in "current", "previous", "launchers", "uv", "update.lock") {
     $file = Join-Path $Root $name
     $item = Get-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
     if ($item -and -not $item.PSIsContainer) { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
@@ -316,7 +316,7 @@ if (Test-Path -LiteralPath $Root) {
     $inRoot = @(Get-ChildItem -LiteralPath $Root -Force -ErrorAction SilentlyContinue)
     if ($inRoot.Count -eq 0) { Remove-Tree $Root }
     foreach ($entry in $inRoot) {
-        if ($entry.Name -in "versions", "bin", "icons", "downloads", "current", "previous", "launchers", "uv") {
+        if ($entry.Name -in "versions", "bin", "icons", "downloads", "current", "previous", "launchers", "uv", "update.lock") {
             $Left += "$($entry.FullName) (couldn't be removed: a file still in use? Delete it yourself)"
         } else {
             $Left += "$($entry.FullName) (not UM-Codex's, so it was left)"

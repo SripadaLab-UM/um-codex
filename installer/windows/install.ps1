@@ -1823,7 +1823,7 @@ if ((Test-Path -LiteralPath $Complete) -and ((Get-Content -LiteralPath $Complete
     if (Test-Path -LiteralPath $Target) { Remove-Tree $Target }
     if (Test-Path -LiteralPath $Target) { Stop-Install "The folder $Target couldn't be replaced. Quit UM-Codex, then run the installer again." }
     New-Item -ItemType Directory -Force -Path (Join-Path $Root "versions") | Out-Null
-    & $Uv venv -q --no-config --python 3.13 $Target
+    & $Uv venv -q --no-config --python 3.13 --python-preference only-managed $Target
     if ($LASTEXITCODE -ne 0) { Stop-Install "Making UM-Codex's Python environment didn't work (see the messages above)." }
     # Every file checked against requirements.txt's hashes, only wheels, and only from PyPI.
     Push-Location $Stage

@@ -353,7 +353,8 @@ def _remove_owner_rights(folder: Path, run: Runner, sid: str) -> bool:
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         done = run(
             [str(win.system_dir() / "icacls.exe"), str(folder), "/remove:g", "*S-1-3-4", "/Q"],
-            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=win.hidden(),
+            capture_output=True, encoding="utf-8", errors="replace",
+            timeout=30, stdin=subprocess.DEVNULL, creationflags=win.hidden(),
         )  # fmt: skip
         return done.returncode == 0
     return False
@@ -694,7 +695,8 @@ def _windows_user_sid(run: Runner = subprocess.run) -> str | None:
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         done = run(
             [str(win.system_dir() / "whoami.exe"), "/user", "/fo", "csv", "/nh"],
-            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=win.hidden(),
+            capture_output=True, encoding="utf-8", errors="replace",
+            timeout=30, stdin=subprocess.DEVNULL, creationflags=win.hidden(),
         )  # fmt: skip
         sid = done.stdout.strip().split(",")[-1].strip().strip('"')
         if done.returncode == 0 and sid.startswith("S-1-"):
@@ -719,7 +721,8 @@ def _windows_owner_only(
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         done = run(
             [str(win.system_dir() / "icacls.exe"), str(path), "/inheritance:r", *grants, "/Q"],
-            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=win.hidden(),
+            capture_output=True, encoding="utf-8", errors="replace",
+            timeout=30, stdin=subprocess.DEVNULL, creationflags=win.hidden(),
         )  # fmt: skip
         if done.returncode == 0:
             return True
@@ -1104,7 +1107,9 @@ def remove_ssh_files(
             _write_combined(home)
             done.append(f"Kept {folder}: another UM-Codex data folder on this computer still uses it.")
             return done, True
-        shutil.rmtree(folder, ignore_errors=True)
+    # After the lock is let go: its file is in the folder, and Windows can't
+    # delete a file that's open (found on a Windows laptop, 2026-10-02).
+    shutil.rmtree(folder, ignore_errors=True)
     if folder.exists():
         return [f"Couldn't remove {folder}: delete it yourself."], False
     return [f"Removed {folder}."], False
@@ -1238,7 +1243,8 @@ def find_app(
         done = run(
             ["/usr/bin/mdfind", f'kMDItemCFBundleIdentifier == "{APP_BUNDLE_ID}"'],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
         )
         for line in (done.stdout or "").splitlines():
@@ -1325,7 +1331,13 @@ def running_copy(
         return win.find_copy(user_data, run)
     marker = f"--user-data-dir={user_data}"
     with contextlib.suppress(OSError, subprocess.SubprocessError):
-        done = run(["/bin/ps", "-axww", "-o", "pid=,args="], capture_output=True, text=True, timeout=10)
+        done = run(
+            ["/bin/ps", "-axww", "-o", "pid=,args="],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
         for line in (done.stdout or "").splitlines():
             pid, _, args = line.strip().partition(" ")
             program = args.split(" --", 1)[0]
@@ -1354,7 +1366,8 @@ def bring_forward(pid: int, run: Runner = subprocess.run, platform: str = sys.pl
         done = run(
             ["/usr/bin/osascript", "-l", "JavaScript", "-e", _ACTIVATE, str(pid)],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
         )
         return done.returncode == 0 and done.stdout.strip() == "ok"
@@ -1803,7 +1816,7 @@ def bundled_catalog(
     try:
         done = run(
             [str(codex), "debug", "models", "--bundled"],
-            capture_output=True, text=True, timeout=60, check=False,
+            capture_output=True, encoding="utf-8", errors="replace", timeout=60, check=False,
             env=env, stdin=subprocess.DEVNULL, creationflags=win.hidden(),
         )  # fmt: skip
     except (OSError, subprocess.SubprocessError):

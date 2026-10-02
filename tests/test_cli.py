@@ -293,7 +293,7 @@ class UninstallDocker:
 
 @pytest.fixture
 def docker_here(monkeypatch):
-    monkeypatch.setattr(uninstall.shutil, "which", lambda name: "/usr/local/bin/docker")
+    monkeypatch.setattr(uninstall.shutil, "which", lambda name, **_: "/usr/local/bin/docker")
 
 
 @pytest.fixture
