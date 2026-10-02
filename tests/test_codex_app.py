@@ -8,12 +8,14 @@ import os
 import stat
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 
 import pytest
 
 from umcodex import codex_app, codex_config, launch
+from umcodex import codex_app_windows as win
 from umcodex.containers import Docker, LaunchSpec
 from umcodex.setups import Setup
 
@@ -152,11 +154,18 @@ def test_the_terminal_asks_before_adding_the_line(ssh_home):
     assert codex_app.include_present()
 
 
-def test_the_installers_question_defaults_to_yes(ssh_home):
+# Where "Codex app" works, with the app installed: a Mac, and Windows (the Store package's exe).
+WITH_THE_APP = [
+    ("darwin", "/Applications/ChatGPT.app"),
+    ("win32", r"C:\Program Files\WindowsApps\OpenAI.Codex_26.928.4866.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe"),
+]
+
+
+@pytest.mark.parametrize(("platform", "app"), WITH_THE_APP)
+def test_the_installers_question_defaults_to_yes(ssh_home, platform, app):
     """`um-codex ssh-include`: Return adds the line; n, or no answer at all
-    (no terminal), adds nothing."""
-    app = Path("/Applications/ChatGPT.app")
-    mac = {"find": lambda: app, "platform": "darwin", "data": ssh_home}  # a Mac with the Codex app
+    (no terminal), adds nothing. The same on a Mac and on Windows."""
+    mac = {"find": lambda: Path(app), "platform": platform, "data": ssh_home}  # the Codex app is there
     said: list[str] = []
     assert codex_app.offer_include(lambda _: "n", said.append, **mac) == 1
     assert not (ssh_home / ".ssh" / "config").exists()
@@ -176,11 +185,15 @@ def test_the_installers_question_defaults_to_yes(ssh_home):
     assert codex_app.offer_include(lambda _: pytest.fail("asked again"), said.append, **mac) == 0
 
 
-def test_the_installers_question_isnt_asked_without_the_app_or_off_a_mac(ssh_home):
+def test_the_installers_question_isnt_asked_without_the_app_or_where_it_isnt_offered(ssh_home, monkeypatch):
     said: list[str] = []
     never = lambda _: pytest.fail("asked")  # noqa: E731
-    assert codex_app.offer_include(never, said.append, find=lambda: None, platform="darwin") == 0
-    assert "isn't installed" in said[-1]
+    for platform in ("darwin", "win32"):
+        assert codex_app.offer_include(never, said.append, find=lambda: None, platform=platform) == 0
+        assert "isn't installed" in said[-1]
+    assert codex_app.offer_include(never, said.append, platform="linux", find=lambda: Path("x")) == 0
+    monkeypatch.setattr(codex_app, "WINDOWS_COPY", False)  # Windows switched off again: not asked there
+    monkeypatch.delenv("UMCODEX_WINDOWS_CODEX_APP", raising=False)
     assert codex_app.offer_include(never, said.append, platform="win32", find=lambda: Path("x")) == 0
     assert not (ssh_home / ".ssh" / "config").exists()
 
@@ -201,9 +214,9 @@ def test_the_cli_runs_the_installers_question_only_at_a_terminal(monkeypatch, ca
     assert calls == [(input, print, False), (input, print, True)]
 
 
-def test_a_no_is_remembered_until_asked_again(ssh_home, tmp_path):
-    app = Path("/Applications/ChatGPT.app")
-    mac = {"find": lambda: app, "platform": "darwin", "data": tmp_path}
+@pytest.mark.parametrize(("platform", "app"), WITH_THE_APP)
+def test_a_no_is_remembered_until_asked_again(ssh_home, tmp_path, platform, app):
+    mac = {"find": lambda: Path(app), "platform": platform, "data": tmp_path}
     said: list[str] = []
     assert codex_app.offer_include(lambda _: "no", said.append, **mac) == 1
     assert (tmp_path / codex_app.INCLUDE_DECLINED).exists()
@@ -265,7 +278,7 @@ def test_proxy_command_words_are_safe_for_ssh():
 NASTY_PARTS = ["/tmp/a b/$HOME/`id`/it's;x&y|z", "100% sure", 'say "hi"', "*?[a]~"]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="the Codex app is Mac only for now")
+@pytest.mark.skipif(sys.platform == "win32", reason="the Mac's quoting, through a POSIX shell")
 @pytest.mark.parametrize("shell", ["/bin/sh", "/bin/zsh", "/bin/bash"])
 def test_ssh_runs_the_proxy_command_with_every_word_unchanged(tmp_path, shell):
     """The real ssh client runs the ProxyCommand (with the person's shell):
@@ -307,7 +320,7 @@ def shlex_quote(text: str) -> str:
     return shlex.quote(text)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="the Codex app is Mac only for now")
+@pytest.mark.skipif(sys.platform == "win32", reason="the Mac's quoting, through a POSIX shell")
 def test_ssh_reads_the_host_as_written(ssh_home, tmp_path):
     """The real ssh client's view of the block (`ssh -G`), when it's here."""
     if not (ssh := _which("ssh")):
@@ -786,10 +799,138 @@ def test_the_app_is_found_by_its_bundle_id(tmp_path):
     assert codex_app.find_app(home=home, run=nothing, platform="win32") is None
 
 
-def test_where_the_codex_app_can_be_used():
+def test_where_the_codex_app_can_be_used(monkeypatch):
+    monkeypatch.setattr(win, "openssh_installed", lambda: True)
+    assert codex_app.unavailable_reason("win32", Path("C:/x/ChatGPT.exe")) is None  # on: experimental
+    monkeypatch.setattr(win, "openssh_installed", lambda: False)  # no OpenSSH Client feature
+    assert codex_app.unavailable_reason("win32", Path("C:/x/ChatGPT.exe")) == win.OPENSSH_MISSING
+    assert "OpenSSH Client" in win.OPENSSH_MISSING
+    monkeypatch.setattr(win, "openssh_installed", lambda: True)
+    monkeypatch.setattr(codex_app, "WINDOWS_COPY", False)  # switched off again
+    monkeypatch.delenv("UMCODEX_WINDOWS_CODEX_APP", raising=False)
     assert codex_app.unavailable_reason("darwin", Path("/Applications/ChatGPT.app")) is None
     assert "chatgpt.com/download" in (codex_app.unavailable_reason("darwin", None) or "")
     assert "Mac only" in (codex_app.unavailable_reason("win32", None) or "")
+    assert "Mac only" in (codex_app.unavailable_reason("win32", Path("C:/x/ChatGPT.exe")) or "")
+    monkeypatch.setenv("UMCODEX_WINDOWS_CODEX_APP", "1")  # the hands-on test's switch
+    assert codex_app.unavailable_reason("win32", Path("C:/x/ChatGPT.exe")) is None
+    assert "Microsoft Store" in (codex_app.unavailable_reason("win32", None) or "")
+
+
+# The Store package as this Windows laptop has it (2026-10-02).
+WINDOWS_PACKAGE = r"C:\Program Files\WindowsApps\OpenAI.Codex_26.928.4866.0_x64__2p2nqsd0c76g0"
+
+
+def _appx(folder: Path, family: str = win.FAMILY, publisher: str = win.PUBLISHER) -> str:
+    """Get-AppxPackage's answer, as ConvertTo-Json -Compress gave it on this laptop (2026-10-02)."""
+    return json.dumps(
+        {"InstallLocation": str(folder), "PackageFamilyName": family, "Publisher": publisher},
+        separators=(",", ":"),
+    )
+
+
+def test_the_windows_app_is_found_by_its_store_package(tmp_path):
+    package = tmp_path / "OpenAI.Codex_26.928.4866.0_x64__2p2nqsd0c76g0"
+    (package / "app").mkdir(parents=True)
+    (package / "app" / "ChatGPT.exe").write_bytes(b"")
+    asked = []
+
+    def answer(text):
+        def powershell(command, **options):
+            asked.append(command)
+            return subprocess.CompletedProcess(command, 0, text + "\r\n", "")
+
+        return powershell
+
+    found = codex_app.find_app(platform="win32", run=answer(_appx(package)))
+    assert found == package / "app" / "ChatGPT.exe"
+    assert asked[0][0].lower().endswith(r"\system32\windowspowershell\v1.0\powershell.exe")
+    assert "Get-AppxPackage -Name OpenAI.Codex" in asked[0][-1]
+    assert codex_app.app_version(found) == "26.928.4866.0"
+    assert codex_app.app_version(Path(WINDOWS_PACKAGE) / "app" / "ChatGPT.exe") == "26.928.4866.0"
+    assert codex_app.find_app(platform="win32", run=answer("")) is None  # not installed
+    assert codex_app.find_app(platform="win32", run=answer(_appx(tmp_path / "gone"))) is None
+    # Someone else's package with that name isn't run.
+    assert codex_app.find_app(platform="win32", run=answer(_appx(package, publisher="CN=Other"))) is None
+    other_family = _appx(package, family="OpenAI.Codex_0000000000000")
+    assert codex_app.find_app(platform="win32", run=answer(other_family)) is None
+    assert codex_app.find_app(platform="win32", run=answer("not json")) is None
+
+
+def test_the_windows_copy_never_uses_the_persons_own_folders(tmp_path):
+    data, person, app_data = tmp_path / "data" / "codex-app", tmp_path / "me", tmp_path / "me" / "Roaming"
+    win.check_paths(data / "codex-home", data / "user-data", data, person, app_data)  # fine
+    for home, user_data in (
+        (person / ".codex", data / "user-data"),  # the person's own Codex home
+        (data / "codex-home", app_data / "Codex"),  # the app's own profile
+        (tmp_path / "elsewhere", data / "user-data"),  # outside UM-Codex's folder
+        (data, data / "user-data"),
+    ):
+        with pytest.raises(win.UnsafePaths):
+            win.check_paths(home, user_data, data, person, app_data)
+    with pytest.raises(win.UnsafePaths):  # a data folder that holds the person's ~/.codex
+        win.check_paths(person / ".codex" / "x", data / "user-data", person, person, app_data)
+
+
+def test_the_windows_copy_is_the_exe_itself_with_its_own_home(data_folder):
+    app = Path(WINDOWS_PACKAGE) / "app" / "ChatGPT.exe"
+    person = {
+        "Path": r"C:\Git\usr\bin;C:\Windows", "CODEX_HOME": r"C:\Users\x\.codex",
+        "CODEX_APP_SERVER_WS_URL": "ws://x", "OPENAI_API_KEY": "sk-x", "OPENAI_BASE_URL": "https://x",
+        "HTTPS_PROXY": "http://p:1", "no_proxy": "*", "SHELL": "/usr/bin/bash",
+    }  # fmt: skip
+    command, env = codex_app.windows_open(app, link=codex_app.deep_link("thesis-a1"), environ=person)
+    home, user_data = codex_app.copy_paths()
+    assert command == [
+        str(app),
+        f"--user-data-dir={user_data}",
+        "codex://settings/connections/ssh/add?name=umcodex-thesis-a1",
+    ]
+    assert env["CODEX_HOME"] == str(home) and str(data_folder) in env["CODEX_HOME"]  # never ~/.codex
+    assert env["CODEX_ELECTRON_USER_DATA_PATH"] == str(user_data)
+    assert set(env) == {"PATH", "CODEX_HOME", "CODEX_ELECTRON_USER_DATA_PATH"}  # nothing leads it elsewhere
+    # Windows' own ssh first (Git's ssh runs a ProxyCommand through /bin/sh); the rest is kept.
+    assert env["PATH"].split(";")[0].lower().endswith(r"\system32\openssh")
+    assert env["PATH"].split(";")[1:] == [r"C:\Git\usr\bin", r"C:\Windows"]
+    assert codex_app.windows_open(app, environ={})[0] == [str(app), f"--user-data-dir={user_data}"]
+
+
+def test_the_running_windows_copy_is_found_by_its_profile_folder(data_folder):
+    _, user_data = codex_app.copy_paths()
+    exe = f'"{WINDOWS_PACKAGE}\\app\\ChatGPT.exe"'
+    # Win32_Process command lines, as this laptop showed them (2026-10-02).
+    listing = "\r\n".join(
+        [
+            f"7180 {exe} ",  # the person's own copy
+            f'4040 {exe} --type=renderer --user-data-dir="{user_data}" --app-user-model-id=x',
+            f'5050 {exe} --user-data-dir="{user_data}-2"',  # not ours: another folder beside it
+            f'19952 {exe} "--user-data-dir={str(user_data).upper()}"',
+        ]
+    )
+
+    def listed(text):
+        return lambda c, **o: subprocess.CompletedProcess(c, 0, text, "")
+
+    assert codex_app.running_copy(run=listed(listing), platform="win32") == 19952
+    assert codex_app.running_copy(run=listed(listing.split("\r\n")[0]), platform="win32") is None
+    other_spellings = [
+        f'31 {exe} --user-data-dir="{user_data}"',  # the value quoted
+        f'33 {exe} "--user-data-dir={user_data.parent}\\x\\..\\{user_data.name}" codex://x',
+    ]
+    if " " not in str(user_data):  # a bare value can't hold a space
+        other_spellings.append(f"32 {exe} --user-data-dir={str(user_data).replace(chr(92), '/')}")
+    for line in other_spellings:
+        assert codex_app.running_copy(run=listed(line), platform="win32") == int(line.split()[0]), line
+    assert win.profile_of(f"{exe} ") is None  # the person's own copy has none
+    assert win.profile_of(f"{exe} --type=gpu-process --user-data-dir=C:\\x") is None
+
+    def activate(command, **options):
+        assert command[-1].endswith("AppActivate(19952)")
+        return subprocess.CompletedProcess(command, 0, "True\r\n", "")
+
+    assert codex_app.bring_forward(19952, run=activate, platform="win32") is True
+    refused = lambda c, **o: subprocess.CompletedProcess(c, 0, "False\r\n", "")  # noqa: E731
+    assert codex_app.bring_forward(19952, run=refused, platform="win32") is False
 
 
 def test_the_copy_is_opened_separately_with_the_link_in_its_arguments(data_folder):
@@ -1013,6 +1154,195 @@ def test_a_later_launch_doesnt_pass_the_link_and_a_running_copy_isnt_doubled(tmp
     assert any(c[0] == "/usr/bin/osascript" and c[-1] == "77" for c in calls)
 
 
+def _windows_hold(tmp_path, data_folder, docker, *, clock=lambda: 0.0, starts=True, busy=lambda: False):
+    """An AppHold on Windows whose copy shows up in Win32_Process once started."""
+    calls: list[list[str]] = []
+    started: list[tuple[list[str], dict]] = []
+    said: list[str] = []
+    _, user_data = codex_app.copy_paths(data_folder)
+    plain = _ran(calls)
+
+    def run(command, **options):
+        if command[0].lower().endswith("powershell.exe") and "Win32_Process" in command[-1]:
+            calls.append(command)
+            killed = any(c[0].lower().endswith("taskkill.exe") for c in calls)
+            line = f'4242 "{WINDOWS_PACKAGE}\\app\\ChatGPT.exe" --user-data-dir={user_data}'
+            shown = started and starts and not killed
+            return subprocess.CompletedProcess(command, 0, line if shown else "", "")
+        return plain(command, **options)
+
+    hold = codex_app.AppHold(
+        "thesis-a1", say=said.append, data=data_folder, app=Path(WINDOWS_PACKAGE) / "app" / "ChatGPT.exe",
+        docker=docker, run=run, sleep=lambda _: None, clock=clock, runtime_busy=busy,
+        proxy_for=lambda s: ["C:/x/um-codex.exe", "ssh-proxy", s], platform="win32",
+        popen=lambda command, **options: started.append((command, options)),
+    )  # fmt: skip
+    return hold, calls, started, said
+
+
+def test_on_windows_the_copy_is_started_with_its_own_home(tmp_path, data_folder):
+    running = _running(tmp_path, data_folder)
+    docker = FakeDocker(running_for=3, connects_after=0)
+    hold, calls, started, said = _windows_hold(tmp_path, data_folder, docker)
+    assert hold(running) == 0  # connected, then the sandbox was stopped
+    assert not any(c[0] == "/usr/bin/open" for c in calls)
+    ((command, options),) = started
+    home, user_data = codex_app.copy_paths(data_folder)
+    assert command[0] == str(hold.app) and command[1] == f"--user-data-dir={user_data}"
+    assert options["env"]["CODEX_HOME"] == str(home)  # never the person's ~/.codex
+    assert options["env"]["CODEX_ELECTRON_USER_DATA_PATH"] == str(user_data)
+    assert options["stdin"] == subprocess.DEVNULL and options["creationflags"]
+    assert (home / ".codex-global-state.json").exists()  # seeded, as on a Mac
+    assert not any("Dock" in line for line in said)
+    assert all(note in said for note in codex_app.WINDOWS_NOTES)
+    assert any(line.startswith("Connected:") for line in said)
+    assert not any("taskkill" in c[0] for c in calls)
+
+
+def test_on_windows_a_copy_that_doesnt_connect_is_stopped(tmp_path, data_folder):
+    running = _running(tmp_path, data_folder)
+    times = iter([0.0, 10.0, codex_app.WINDOWS_CONNECT_SECONDS + 1])
+    docker = FakeDocker(running_for=99, connects_after=None)
+    hold, calls, _, said = _windows_hold(tmp_path, data_folder, docker, clock=lambda: next(times))
+    assert hold(running) == 1
+    assert [c[1:] for c in calls if c[0].lower().endswith("taskkill.exe")] == [["/PID", "4242", "/T", "/F"]]
+    assert said[-1] == codex_app.WINDOWS_FALLBACK
+    info = json.loads((running.folder / "launch.json").read_text())
+    assert info["app"]["fallback"] == "terminal" and info["app"]["connected"] is False
+
+
+def test_on_windows_a_runtime_download_puts_the_fallback_off(tmp_path, data_folder):
+    running = _running(tmp_path, data_folder)
+    late = codex_app.WINDOWS_CONNECT_SECONDS + 1
+    times = iter([0.0, late, late + 10, late + 20])
+    busy = iter([True, True, False])
+    docker = FakeDocker(running_for=99, connects_after=None)
+    hold, calls, _, said = _windows_hold(
+        tmp_path, data_folder, docker, clock=lambda: next(times), busy=lambda: next(busy)
+    )
+    assert hold(running) == 1  # stopped only once the download had ended
+    assert said[-1] == codex_app.WINDOWS_FALLBACK
+    assert next(busy, "all asked") == "all asked"
+    times = iter([0.0, late + codex_app.WINDOWS_UPDATE_GRACE_SECONDS + 1])  # not for ever
+    hold, _, _, _ = _windows_hold(
+        tmp_path, data_folder / "b", docker, clock=lambda: next(times), busy=lambda: True
+    )
+    assert hold(_running(tmp_path / "b", data_folder / "b")) == 1
+
+
+def test_a_runtime_download_is_seen_by_its_staging_folder(tmp_path):
+    staging = tmp_path / ".cache" / "codex-runtimes" / "codex-runtime-install-SsKNSv"
+    (staging / "payload").mkdir(parents=True)
+    part = staging / "payload" / "node"
+    part.write_bytes(b"x")
+    os.utime(part, (1000.0, 1000.0))  # extracted files keep the archive's old times
+    made = time.time()
+    assert win.runtime_update_running(tmp_path, now=made + 60) is True
+    assert win.runtime_update_running(tmp_path, now=made + 3600) is False  # left over long ago
+    assert win.runtime_update_running(tmp_path / "nobody", now=made + 60) is False
+
+
+def test_on_windows_only_our_copy_is_ever_stopped(data_folder):
+    _, user_data = codex_app.copy_paths(data_folder)
+    exe = f'"{WINDOWS_PACKAGE}\\app\\ChatGPT.exe"'
+    ours = f'4242 {exe} --user-data-dir="{user_data}"'
+    calls: list[list[str]] = []
+
+    def now_running(listing, *, after="", taskkill_code=0):
+        """Win32_Process shows `listing`, and `after` once taskkill has run."""
+
+        def run(command, **options):
+            calls.append(command)
+            if command[0].lower().endswith("taskkill.exe"):
+                return subprocess.CompletedProcess(command, taskkill_code, "", "")
+            killed = any(c[0].lower().endswith("taskkill.exe") for c in calls)
+            return subprocess.CompletedProcess(command, 0, after if killed else listing, "")
+
+        return run
+
+    # The number now belongs to another process (the person's own copy): nothing is stopped.
+    assert win.stop(4242, user_data, now_running(f"4242 {exe} ")) is False
+    assert win.stop(4242, user_data, now_running(f"999 {exe} --user-data-dir={user_data}")) is False
+    assert not any(c[0].lower().endswith("taskkill.exe") for c in calls)
+    assert win.stop(4242, user_data, now_running(ours)) is True
+    assert [c for c in calls if c[0].lower().endswith("taskkill.exe")][-1][1:] == ["/PID", "4242", "/T", "/F"]
+    # taskkill /T says 128 when a helper was already ending, but the copy is gone: stopped.
+    calls.clear()
+    assert win.stop(4242, user_data, now_running(ours, taskkill_code=128)) is True
+    calls.clear()
+    assert win.stop(4242, user_data, now_running(ours, after=ours, taskkill_code=1)) is False  # still there
+
+
+def test_on_windows_a_copy_that_doesnt_start_ends_the_launch(tmp_path, data_folder):
+    running = _running(tmp_path, data_folder)
+    docker = FakeDocker(running_for=99, connects_after=None)
+    hold, calls, started, said = _windows_hold(tmp_path, data_folder, docker, starts=False)
+    assert hold(running) == 1 and len(started) == 1
+    assert not any(c[0].lower().endswith("taskkill.exe") for c in calls)  # nothing of ours to stop
+    assert said[-1] == codex_app.WINDOWS_FALLBACKS["not-started"]
+    info = json.loads((running.folder / "launch.json").read_text())
+    assert info["app"]["fallback"] == "terminal"
+    assert info["app"]["fallback_message"] == codex_app.WINDOWS_FALLBACKS["not-started"]
+
+
+class _Held:
+    """A process this launch started (subprocess.Popen's pid, poll, wait)."""
+
+    def __init__(self, pid: int) -> None:
+        self.pid, self.ended = pid, False
+
+    def poll(self):
+        return 0 if self.ended else None
+
+    def wait(self, timeout=None):  # after taskkill: it has ended
+        self.ended = True
+        return 0
+
+
+def test_on_windows_the_started_process_is_the_copy_when_the_lookup_cant_tell(tmp_path, data_folder):
+    """A profile path Win32_Process doesn't give back as written (an
+    encoding, a short name): the process this launch started and still holds
+    is the copy, and it's what the fallback stops."""
+    running = _running(tmp_path, data_folder)
+    times = iter([0.0, codex_app.WINDOWS_CONNECT_SECONDS + 1])
+    docker = FakeDocker(running_for=99, connects_after=None)
+    hold, calls, started, said = _windows_hold(
+        tmp_path, data_folder, docker, starts=False, clock=lambda: next(times)
+    )
+    held = _Held(5150)
+
+    def kill(command, **options):
+        if command[0].lower().endswith("taskkill.exe"):
+            held.ended = True
+        return calls.append(command) or subprocess.CompletedProcess(command, 0, "", "")
+
+    hold.popen = lambda command, **options: started.append((command, options)) or held
+    plain_run = hold.run
+    hold.run = lambda command, **options: (
+        kill(command) if command[0].lower().endswith("taskkill.exe") else plain_run(command, **options)
+    )
+    assert hold(running) == 1
+    assert [c[1:3] for c in calls if c[0].lower().endswith("taskkill.exe")] == [["/PID", "5150"]]
+    assert said[-1] == codex_app.WINDOWS_FALLBACKS["stopped"]
+
+
+def test_on_windows_a_copy_another_setup_uses_isnt_stopped(tmp_path, data_folder, monkeypatch):
+    running = _running(tmp_path, data_folder)
+    times = iter([0.0, codex_app.WINDOWS_CONNECT_SECONDS + 1])
+    docker = FakeDocker(running_for=99, connects_after=None)
+    hold, calls, _, said = _windows_hold(tmp_path, data_folder, docker, clock=lambda: next(times))
+    this = launch.RunningLaunch("ab12cd34", "thesis-a1", "Thesis", 100.0, app={"alias": "umcodex-thesis-a1"})
+    other = launch.RunningLaunch("ffff0000", "other-b2", "Other", 90.0, app={"alias": "umcodex-other-b2"})
+    in_terminal = launch.RunningLaunch("eeee0000", "t-c3", "T", 95.0, app=None)
+    monkeypatch.setattr(launch, "running_launches", lambda data: [other, in_terminal, this])
+    assert hold(running) == 1
+    assert not any(c[0].lower().endswith("taskkill.exe") for c in calls)
+    assert said[-1] == codex_app.WINDOWS_FALLBACKS["shared"]
+    # Only this launch, or another one in a terminal: the copy is ours to stop.
+    monkeypatch.setattr(launch, "running_launches", lambda data: [in_terminal, this])
+    assert not hold._copy_shared(running)
+
+
 def test_a_launch_without_the_app_still_prepares_everything(tmp_path, data_folder):
     running = _running(tmp_path, data_folder)
     calls: list[list[str]] = []
@@ -1197,6 +1527,11 @@ def test_the_copys_catalog_has_no_announcements(tmp_path):
     assert all(m["availability_nux"] is None and m["upgrade"] is None for m in json.loads(catalog)["models"])
     failed = lambda c, **o: subprocess.CompletedProcess(c, 1, "", "")  # noqa: E731
     assert codex_app.bundled_catalog(Path("/A.app"), tmp_path, "m", run=failed) == (None, [])
+    calls.clear()
+    windows = Path(WINDOWS_PACKAGE) / "app" / "ChatGPT.exe"
+    assert codex_app.bundled_catalog(windows, tmp_path, "gpt-5.6-terra", run=run)[1] == announced
+    assert calls[0][0][0] == str(Path(WINDOWS_PACKAGE) / "app" / "resources" / "codex.exe")
+    assert calls[0][1]["env"]["CODEX_HOME"] == str(tmp_path) == calls[0][1]["env"]["USERPROFILE"]
 
 
 # --- The local-chats responder ------------------------------------------------------
@@ -1253,7 +1588,9 @@ def test_ssh_folders_and_files_get_only_the_persons_permissions_on_windows(tmp_p
         return real(self, *args, **options)
 
     monkeypatch.setattr(Path, "mkdir", mkdir)
-    monkeypatch.setattr(codex_app, "_windows_owner_only", lambda path, folder: locked.append((path, folder)))
+    monkeypatch.setattr(
+        codex_app, "_windows_owner_only", lambda path, folder: locked.append((path, folder)) or True
+    )
     codex_app._ssh_mkdir(tmp_path / "w", platform="win32")
     codex_app._ssh_mkdir(tmp_path / "theirs", platform="win32", own=False)  # a ~/.ssh that was there
     codex_app._ssh_write(tmp_path / "w" / "config", "Host x\n", platform="win32")
@@ -1324,3 +1661,220 @@ def test_windows_openssh_accepts_umcodex_ssh_folders(tmp_path):
     codex_app._private_write(refused / "config", host)
     done = resolves(refused / "config")
     assert done.returncode != 0 and "Bad permissions" in done.stderr, done.stderr + _acls(refused)
+
+
+def test_windows_lookups_read_powershell_as_utf8_and_find_a_non_ascii_profile(tmp_path):
+    """Windows PowerShell 5.1 writes redirected output in the OEM code page,
+    so a profile under C:/Users/José came back as "Jos?" and never matched."""
+    user_data = tmp_path / "Jos\u00e9 N\u00fa\u00f1ez" / "UM-Codex" / "codex-app" / "user-data"
+    asked = []
+
+    def run(command, **options):
+        asked.append((command, options))
+        line = f'7311 "{WINDOWS_PACKAGE}\\app\\ChatGPT.exe" "--user-data-dir={user_data}"'
+        return subprocess.CompletedProcess(command, 0, line + "\r\n", "")
+
+    assert win.find_copy(user_data, run) == 7311
+    command, options = asked[0]
+    assert command[-1].startswith("[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); ")
+    assert options["encoding"] == "utf-8" and options["errors"] == "replace"
+
+
+def test_windows_stop_uses_the_held_process_when_the_lookup_cant_find_it(tmp_path):
+    calls = []
+
+    def nothing_found(command, **options):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    held = _Held(5150)
+    assert win.stop(5150, tmp_path, nothing_found, held) is True  # the process it holds: ours
+    assert [c[1:3] for c in calls if c[0].lower().endswith("taskkill.exe")] == [["/PID", "5150"]]
+    calls.clear()
+    ended = _Held(5150)
+    ended.ended = True  # it ended: the number may be someone else's now
+    assert win.stop(5150, tmp_path, nothing_found, ended) is False
+    assert win.stop(5150, tmp_path, nothing_found, _Held(9999)) is False  # not that process
+    assert not any(c[0].lower().endswith("taskkill.exe") for c in calls)
+
+
+def test_windows_ssh_files_that_cant_be_trusted_arent_left(tmp_path, monkeypatch):
+    """icacls failing: the file ssh would refuse (and with it every host) is
+    taken away, and the launch stops with a plain message."""
+    monkeypatch.setattr(codex_app, "_windows_owner_only", lambda path, folder: False)
+    with pytest.raises(codex_app.SshPermissionsError) as raised:
+        codex_app._ssh_write(tmp_path / "config", "Host x\n", platform="win32")
+    assert not (tmp_path / "config").exists()
+    assert "Terminal" in str(raised.value) and "weren't changed" in str(raised.value)
+    with pytest.raises(codex_app.SshPermissionsError):
+        codex_app._ssh_mkdir(tmp_path / "um-codex", platform="win32")
+    codex_app._ssh_mkdir(tmp_path / "theirs", platform="win32", own=False)  # theirs: not changed, no error
+
+
+def test_the_sid_lookup_isnt_kept_when_it_fails(monkeypatch):
+    monkeypatch.setattr(codex_app, "_sid", None)
+    answers = iter([subprocess.CompletedProcess([], 1, "", "no"), subprocess.CompletedProcess(
+        [], 0, '"umhs\\someone","S-1-5-21-1-2-3-1001"\r\n', ""
+    )])  # fmt: skip
+    asked = []
+
+    def run(command, **options):
+        asked.append(command)
+        return next(answers)
+
+    assert codex_app._windows_user_sid(run) is None
+    assert codex_app._windows_user_sid(run) == "S-1-5-21-1-2-3-1001"  # asked again
+    kept = codex_app._windows_user_sid(lambda *a, **o: pytest.fail("asked a third time"))
+    assert kept == "S-1-5-21-1-2-3-1001"
+    assert asked[0][0].lower().endswith(r"\system32\whoami.exe")
+
+
+def test_on_windows_the_include_keeps_the_files_access_rules(ssh_home, monkeypatch):
+    """The new ~/.ssh/config (a new file) and its backup get the original's
+    access rules; if Windows' ssh then refuses the file, it's put back."""
+    config = ssh_home / ".ssh" / "config"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("Host mine\n  HostName example.invalid\n")
+    rules = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;S-1-5-21-1-2-3-1001)"
+    given = []
+    monkeypatch.setattr(win, "access_rules", lambda path, run=None: rules)
+    monkeypatch.setattr(
+        win, "set_access_rules", lambda path, sddl, run=None: given.append((path.name, sddl)) or True
+    )
+    monkeypatch.setattr(codex_app, "repair_ssh_dir", lambda *a, **o: False)
+    monkeypatch.setattr(codex_app, "_is_the_persons_ssh", lambda home: True)
+    monkeypatch.setattr(win, "ssh_refuses_config", lambda run=None: None)
+    assert codex_app.add_include(platform="win32") == "added"
+    assert config.read_text().startswith(codex_app.INCLUDE_LINE)
+    assert given == [(codex_app.BACKUP_NAME, rules), ("config", rules)]
+    # ssh refuses it after all: the file is put back as it was, rules too.
+    config.write_text("Host mine\n  HostName example.invalid\n")
+    given.clear()
+    monkeypatch.setattr(win, "ssh_refuses_config", lambda run=None: "Bad permissions. Try removing ...")
+    with pytest.raises(codex_app.SshPermissionsError):
+        codex_app.add_include(platform="win32")
+    assert config.read_text() == "Host mine\n  HostName example.invalid\n"
+    assert given[-1] == ("config", rules)
+
+
+def test_an_ssh_folder_an_earlier_umcodex_made_is_repaired_folder_by_folder_on_windows(ssh_home, monkeypatch):
+    """Only folders with exactly Python 3.13's 0o700 rules: ~/.ssh only with
+    UM-Codex's note, its own folders under ~/.ssh/um-codex wherever they
+    have them. One at a time, never /T, and the person is given full rights
+    before OWNER RIGHTS goes, so no folder is ever left without them."""
+    own = ssh_home / ".ssh" / "um-codex"
+    nested = own / "installs" / "1483d901e834a396"
+    nested.mkdir(parents=True, exist_ok=True)
+    (own / codex_app.SSH_DIR_MADE).write_text("yes\n")
+    monkeypatch.setattr(codex_app, "_sid", "S-1-5-21-1-2-3-1001")
+    python_0700 = {ssh_home / ".ssh", own, own / "installs", nested}
+    monkeypatch.setattr(win, "owner_rights_only", lambda folder, run=None: folder in python_0700)
+    ran = []
+
+    def run(command, **options):
+        ran.append([Path(command[1]).relative_to(ssh_home).as_posix(), *command[2:]])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    assert codex_app.repair_ssh_dir(run=run, platform="win32")
+    grant = [
+        "/inheritance:r", "/grant:r", "*S-1-5-21-1-2-3-1001:(OI)(CI)F", "/grant:r", "*S-1-5-18:(OI)(CI)F",
+        "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "/Q",
+    ]  # fmt: skip
+    expected = []
+    folders = (".ssh", ".ssh/um-codex", ".ssh/um-codex/installs", ".ssh/um-codex/installs/1483d901e834a396")
+    for folder in folders:
+        expected += [[folder, *grant], [folder, "/remove:g", "*S-1-3-4", "/Q"]]
+    assert ran == expected
+    assert not any("/T" in command for command in ran)
+    # Without UM-Codex's note, the person's own ~/.ssh isn't touched (only UM-Codex's folders).
+    (own / codex_app.SSH_DIR_MADE).unlink()
+    ran.clear()
+    assert codex_app.repair_ssh_dir(run=run, platform="win32")
+    assert ".ssh" not in [command[0] for command in ran]
+    # A grant that fails: OWNER RIGHTS stays (the person keeps their access through it).
+    ran.clear()
+
+    def refused(command, **options):
+        ran.append(command[2:4])
+        return subprocess.CompletedProcess(command, 5, "Access is denied.", "")
+
+    assert not codex_app.repair_ssh_dir(run=refused, platform="win32")
+    assert ["/remove:g", "*S-1-3-4"] not in ran
+    monkeypatch.setattr(win, "owner_rights_only", lambda folder, run=None: False)  # the person's own rules
+    assert not codex_app.repair_ssh_dir(run=run, platform="win32")
+    assert not codex_app.repair_ssh_dir(run=run, platform="darwin")
+
+
+def test_python_313s_windows_0o700_rules_are_recognised_exactly(monkeypatch):
+    for sddl, expected in (
+        ("D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", True),  # mkdir(mode=0o700), live 2026-10-02
+        ("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)", True),  # the same, in another order
+        ("D:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;OW)", False),  # inherited, not made so
+        ("D:PAI(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", False),  # other flags
+        ("D:P(A;OICI;0x1200a9;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", False),  # other rights
+        ("D:P(D;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", False),  # a deny
+        ("D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;WD)", False),  # one more
+        ("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-21-1-2-3-1001)", False),  # the person's
+    ):
+        monkeypatch.setattr(win, "saved_rules", lambda folder, run=None, s=sddl: s)
+        assert win.owner_rights_only(Path("x")) is expected, sddl
+
+
+def test_folder_rules_come_from_icacls_save(tmp_path):
+    """icacls /save, as it wrote on a Windows 11 laptop (UTF-16, the name then the SDDL)."""
+    asked = []
+
+    def run(command, **options):
+        asked.append(command)
+        Path(command[3]).write_bytes("with-mode\r\nD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)\r\n".encode("utf-16-le"))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    assert win.saved_rules(tmp_path, run) == "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)"
+    assert asked[0][0].lower().endswith(r"\system32\icacls.exe") and asked[0][1:3] == [str(tmp_path), "/save"]
+    assert not Path(asked[0][3]).exists()  # its own file goes again
+    failed = lambda c, **o: subprocess.CompletedProcess(c, 5, "", "denied")  # noqa: E731
+    assert win.saved_rules(tmp_path, failed) is None
+
+
+def test_powershell_gets_paths_through_the_environment():
+    """A path is never written into the command: PowerShell takes U+2018 to
+    U+201B for a single quote too, so O\u2019Brien would end the string."""
+    path = Path("C:/Users/O\u2019Brien's") / "it\u2018s \u201b" / "config"
+    asked = []
+
+    def run(command, **options):
+        asked.append((command, options))
+        return subprocess.CompletedProcess(command, 0, "D:(A;ID;FA;;;SY)\r\n", "")
+
+    assert win.access_rules(path, run) == "D:(A;ID;FA;;;SY)"
+    assert win.set_access_rules(path, "D:P(A;;FA;;;SY)", run)
+    for command, options in asked:
+        assert str(path) not in command[-1] and "O\u2019Brien" not in command[-1]
+        assert options["env"]["UMCODEX_PS_PATH"] == str(path)
+    assert asked[1][1]["env"]["UMCODEX_PS_SDDL"] == "D:P(A;;FA;;;SY)"
+    assert "$env:UMCODEX_PS_SDDL" in asked[1][0][-1]
+    assert not win.set_access_rules(path, "not sddl", run)
+
+
+def test_on_a_mac_the_include_leaves_no_windows_note(ssh_home):
+    assert codex_app.add_include(platform="darwin") == "created"
+    assert not (ssh_home / ".ssh" / "um-codex").exists()
+
+
+def test_a_rollback_whose_permissions_cant_be_put_back_says_so(ssh_home, monkeypatch):
+    config = ssh_home / ".ssh" / "config"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("Host mine\n")
+    monkeypatch.setattr(win, "access_rules", lambda path, run=None: "D:P(A;;FA;;;SY)")
+    calls = []
+    monkeypatch.setattr(
+        win, "set_access_rules", lambda path, sddl, run=None: calls.append(path.name) or len(calls) < 3
+    )
+    monkeypatch.setattr(codex_app, "repair_ssh_dir", lambda *a, **o: False)
+    monkeypatch.setattr(codex_app, "_is_the_persons_ssh", lambda home: True)
+    monkeypatch.setattr(win, "ssh_refuses_config", lambda run=None: "Bad permissions")
+    with pytest.raises(codex_app.SshPermissionsError) as raised:
+        codex_app.add_include(platform="win32")
+    assert config.read_text() == "Host mine\n"
+    assert calls == [codex_app.BACKUP_NAME, "config", "config"]  # the third, the rollback's, failed
+    assert "not its permissions" in str(raised.value) and "Bad permissions" in str(raised.value)

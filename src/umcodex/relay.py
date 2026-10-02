@@ -123,12 +123,12 @@ def local_chats_message(aliases: list[str] | str) -> str:
         return (
             "This UM-Codex window only works in Remote chats, and no UM-Codex setup is running in the "
             "Codex app right now. Start one in UM-Codex, then use its Remote chat. Local chats would "
-            "run on your Mac, outside the sandbox."
+            "run on this computer, outside the sandbox."
         )
     remote = " or ".join(f"Remote · {name}" for name in names)
     return (
         f"This UM-Codex window only works in Remote chats. Start a chat on {remote} "
-        "(its project in the sidebar). Local chats would run on your Mac, outside the sandbox."
+        "(its project in the sidebar). Local chats would run on this computer, outside the sandbox."
     )
 
 

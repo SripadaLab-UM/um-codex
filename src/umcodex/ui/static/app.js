@@ -448,12 +448,17 @@ function statusOf(s, run) {
     const app = run.app;
     if (!app && s.open_in === "codex-app") return { text: "Opening Codex… preparing the sandbox for the Codex app.", live: true };
     if (!app) return { text: `Running in Terminal since ${run.since}. Quit Codex there, or Stop here.`, live: true };
+    if (app.fallback_message) return { text: app.fallback_message, bad: true, terminal: true };
     if (app.copy === "failed") return { text: "UM-Codex's Codex window couldn't be opened. Stop, then Start again.", bad: true, live: true };
+    if (app.copy === "refused")
+      return { text: "UM-Codex didn't open its Codex window: its folders would have been your own app's. Use Terminal.", bad: true, terminal: true };
     if (app.connected) return { text: `Connected ✓ The Codex app is working in the sandbox (${app.alias}).`, ok: true, live: true };
     if (app.copy === "already-open")
-      return { text: "Opening Codex… UM-Codex's Codex window was already open: switch to it (a second ChatGPT icon in the Dock).", live: true };
+      return { text: `Opening Codex… UM-Codex's Codex window was already open: switch to it (${app.icon || "a second ChatGPT icon in the Dock"}).`, live: true };
     return { text: app.seeded || !app.first_time ? "Opening Codex… waiting for the Codex app to connect." : "Opening Codex… the first time needs a few steps (below).", live: true };
   }
+  // The last launch in the Codex app fell back (Windows): why, until the next Start.
+  if (!mine && s.app_fallback && s.open_in === "codex-app") return { text: s.app_fallback, bad: true, terminal: true };
   if (!mine) return null;
   if (mine.phase === "starting") return { text: "Starting…", busy: true };
   if (mine.phase === "docker") return { text: "Opening Docker Desktop… Codex starts as soon as it's running.", busy: true };
@@ -685,6 +690,9 @@ function card(s) {
           { class: `status-line${status.bad ? " bad" : ""}${status.ok ? " ok" : ""}` },
           status.live ? el("span", { class: "pulse", "aria-hidden": "true" }) : null,
           status.text,
+          status.terminal && s.open_in === "codex-app"
+            ? el("button", { class: "link small", key: `fallback-terminal-${s.id}`, onclick: () => useTerminal(s), text: "Open in Terminal instead" })
+            : null,
         )
       : null,
     run?.app ? appDetails(run) : null,
