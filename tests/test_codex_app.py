@@ -1757,35 +1757,124 @@ def test_on_windows_the_include_keeps_the_files_access_rules(ssh_home, monkeypat
     assert given[-1] == ("config", rules)
 
 
-def test_an_ssh_folder_an_earlier_umcodex_made_is_repaired_on_windows(ssh_home, monkeypatch):
-    """Only one UM-Codex made (~/.ssh/um-codex there) with exactly Python
-    3.13's 0o700 rules: the person is given the rights, then OWNER RIGHTS goes."""
-    (ssh_home / ".ssh" / "um-codex").mkdir(parents=True, exist_ok=True)
+def test_an_ssh_folder_an_earlier_umcodex_made_is_repaired_folder_by_folder_on_windows(ssh_home, monkeypatch):
+    """Only folders with exactly Python 3.13's 0o700 rules: ~/.ssh only with
+    UM-Codex's note, its own folders under ~/.ssh/um-codex wherever they
+    have them. One at a time, never /T, and the person is given full rights
+    before OWNER RIGHTS goes, so no folder is ever left without them."""
+    own = ssh_home / ".ssh" / "um-codex"
+    nested = own / "installs" / "1483d901e834a396"
+    nested.mkdir(parents=True, exist_ok=True)
+    (own / codex_app.SSH_DIR_MADE).write_text("yes\n")
     monkeypatch.setattr(codex_app, "_sid", "S-1-5-21-1-2-3-1001")
+    python_0700 = {ssh_home / ".ssh", own, own / "installs", nested}
+    monkeypatch.setattr(win, "owner_rights_only", lambda folder, run=None: folder in python_0700)
     ran = []
 
     def run(command, **options):
-        ran.append(command[1:])
+        ran.append([Path(command[1]).relative_to(ssh_home).as_posix(), *command[2:]])
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    monkeypatch.setattr(win, "owner_rights_only", lambda folder, run=None: True)
     assert codex_app.repair_ssh_dir(run=run, platform="win32")
-    ssh = str(ssh_home / ".ssh")
-    assert ran == [
-        [ssh, "/grant", "*S-1-5-21-1-2-3-1001:(OI)(CI)F", "/Q"],
-        [ssh, "/remove:g", "*S-1-3-4", "/T", "/Q"],
-    ]
+    grant = [
+        "/inheritance:r", "/grant:r", "*S-1-5-21-1-2-3-1001:(OI)(CI)F", "/grant:r", "*S-1-5-18:(OI)(CI)F",
+        "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "/Q",
+    ]  # fmt: skip
+    expected = []
+    folders = (".ssh", ".ssh/um-codex", ".ssh/um-codex/installs", ".ssh/um-codex/installs/1483d901e834a396")
+    for folder in folders:
+        expected += [[folder, *grant], [folder, "/remove:g", "*S-1-3-4", "/Q"]]
+    assert ran == expected
+    assert not any("/T" in command for command in ran)
+    # Without UM-Codex's note, the person's own ~/.ssh isn't touched (only UM-Codex's folders).
+    (own / codex_app.SSH_DIR_MADE).unlink()
     ran.clear()
+    assert codex_app.repair_ssh_dir(run=run, platform="win32")
+    assert ".ssh" not in [command[0] for command in ran]
+    # A grant that fails: OWNER RIGHTS stays (the person keeps their access through it).
+    ran.clear()
+
+    def refused(command, **options):
+        ran.append(command[2:4])
+        return subprocess.CompletedProcess(command, 5, "Access is denied.", "")
+
+    assert not codex_app.repair_ssh_dir(run=refused, platform="win32")
+    assert ["/remove:g", "*S-1-3-4"] not in ran
     monkeypatch.setattr(win, "owner_rights_only", lambda folder, run=None: False)  # the person's own rules
-    assert not codex_app.repair_ssh_dir(run=run, platform="win32") and ran == []
+    assert not codex_app.repair_ssh_dir(run=run, platform="win32")
     assert not codex_app.repair_ssh_dir(run=run, platform="darwin")
 
 
-def test_python_313s_windows_0o700_rules_are_recognised(monkeypatch):
+def test_python_313s_windows_0o700_rules_are_recognised_exactly(monkeypatch):
     for sddl, expected in (
         ("D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", True),  # mkdir(mode=0o700), live 2026-10-02
+        ("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)", True),  # the same, in another order
         ("D:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;OW)", False),  # inherited, not made so
+        ("D:PAI(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", False),  # other flags
+        ("D:P(A;OICI;0x1200a9;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", False),  # other rights
+        ("D:P(D;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", False),  # a deny
+        ("D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;WD)", False),  # one more
         ("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-21-1-2-3-1001)", False),  # the person's
     ):
-        monkeypatch.setattr(win, "access_rules", lambda folder, run=None, s=sddl: s)
+        monkeypatch.setattr(win, "saved_rules", lambda folder, run=None, s=sddl: s)
         assert win.owner_rights_only(Path("x")) is expected, sddl
+
+
+def test_folder_rules_come_from_icacls_save(tmp_path):
+    """icacls /save, as it wrote on a Windows 11 laptop (UTF-16, the name then the SDDL)."""
+    asked = []
+
+    def run(command, **options):
+        asked.append(command)
+        Path(command[3]).write_bytes("with-mode\r\nD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)\r\n".encode("utf-16-le"))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    assert win.saved_rules(tmp_path, run) == "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)"
+    assert asked[0][0].lower().endswith(r"\system32\icacls.exe") and asked[0][1:3] == [str(tmp_path), "/save"]
+    assert not Path(asked[0][3]).exists()  # its own file goes again
+    failed = lambda c, **o: subprocess.CompletedProcess(c, 5, "", "denied")  # noqa: E731
+    assert win.saved_rules(tmp_path, failed) is None
+
+
+def test_powershell_gets_paths_through_the_environment():
+    """A path is never written into the command: PowerShell takes U+2018 to
+    U+201B for a single quote too, so O\u2019Brien would end the string."""
+    path = Path("C:/Users/O\u2019Brien's") / "it\u2018s \u201b" / "config"
+    asked = []
+
+    def run(command, **options):
+        asked.append((command, options))
+        return subprocess.CompletedProcess(command, 0, "D:(A;ID;FA;;;SY)\r\n", "")
+
+    assert win.access_rules(path, run) == "D:(A;ID;FA;;;SY)"
+    assert win.set_access_rules(path, "D:P(A;;FA;;;SY)", run)
+    for command, options in asked:
+        assert str(path) not in command[-1] and "O\u2019Brien" not in command[-1]
+        assert options["env"]["UMCODEX_PS_PATH"] == str(path)
+    assert asked[1][1]["env"]["UMCODEX_PS_SDDL"] == "D:P(A;;FA;;;SY)"
+    assert "$env:UMCODEX_PS_SDDL" in asked[1][0][-1]
+    assert not win.set_access_rules(path, "not sddl", run)
+
+
+def test_on_a_mac_the_include_leaves_no_windows_note(ssh_home):
+    assert codex_app.add_include(platform="darwin") == "created"
+    assert not (ssh_home / ".ssh" / "um-codex").exists()
+
+
+def test_a_rollback_whose_permissions_cant_be_put_back_says_so(ssh_home, monkeypatch):
+    config = ssh_home / ".ssh" / "config"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("Host mine\n")
+    monkeypatch.setattr(win, "access_rules", lambda path, run=None: "D:P(A;;FA;;;SY)")
+    calls = []
+    monkeypatch.setattr(
+        win, "set_access_rules", lambda path, sddl, run=None: calls.append(path.name) or len(calls) < 3
+    )
+    monkeypatch.setattr(codex_app, "repair_ssh_dir", lambda *a, **o: False)
+    monkeypatch.setattr(codex_app, "_is_the_persons_ssh", lambda home: True)
+    monkeypatch.setattr(win, "ssh_refuses_config", lambda run=None: "Bad permissions")
+    with pytest.raises(codex_app.SshPermissionsError) as raised:
+        codex_app.add_include(platform="win32")
+    assert config.read_text() == "Host mine\n"
+    assert calls == [codex_app.BACKUP_NAME, "config", "config"]  # the third, the rollback's, failed
+    assert "not its permissions" in str(raised.value) and "Bad permissions" in str(raised.value)

@@ -340,36 +340,66 @@ def _made_ssh_dir(home: Path | None) -> None:
         (own_ssh_dir(home) / SSH_DIR_MADE).write_text("yes\n", encoding="utf-8")
 
 
+def _remove_owner_rights(folder: Path, run: Runner, sid: str) -> bool:
+    """One folder with PYTHON_0700's rules: the person, SYSTEM and
+    Administrators given full rights first (nothing inherited, as before),
+    then OWNER RIGHTS taken out; never the other way round, so the person
+    always keeps their access. True if both went through."""
+    if not _windows_owner_only(folder, folder=True, run=run, sid=sid):
+        return False
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        done = run(
+            [str(win.system_dir() / "icacls.exe"), str(folder), "/remove:g", "*S-1-3-4", "/Q"],
+            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=win.hidden(),
+        )  # fmt: skip
+        return done.returncode == 0
+    return False
+
+
+_repair_checked = False  # repair_ssh_dir runs once per process from _locked (it's only for old folders)
+
+
+def _check_repair(home: Path | None) -> None:
+    global _repair_checked
+    _repair_checked = True
+    repair_ssh_dir(home)
+
+
 def repair_ssh_dir(
     home: Path | None = None, run: Runner = subprocess.run, platform: str = sys.platform
 ) -> bool:
-    """Windows: an ~/.ssh an earlier UM-Codex made with Python 3.13's
-    mkdir(mode=0o700) (SYSTEM, Administrators, OWNER RIGHTS, nothing
-    inherited; see _ssh_mkdir) makes ssh refuse what's in it. Only such a
-    folder, and only one UM-Codex made (its note, or ~/.ssh/um-codex there),
-    is changed, and only so: the person given the rights OWNER RIGHTS gave,
-    then OWNER RIGHTS taken away. True if it was repaired."""
-    ssh = ssh_dir(home)
-    if platform != "win32" or not ssh.is_dir():
+    """Windows: folders an earlier UM-Codex made with Python 3.13's
+    mkdir(mode=0o700) (win.PYTHON_0700: SYSTEM, Administrators and OWNER
+    RIGHTS only, protected) make ssh refuse what's in them. Repaired, one
+    folder at a time (never /T: a protected folder below would be left
+    without the person): ~/.ssh only if UM-Codex's note says it made it
+    (SSH_DIR_MADE), and UM-Codex's own folders under ~/.ssh/um-codex
+    (it, installs, each install's) wherever they have exactly those rules.
+    Each gets the person, SYSTEM and Administrators first, then loses OWNER
+    RIGHTS. True if anything was repaired."""
+    if platform != "win32" or not ssh_dir(home).is_dir():
         return False
-    ours = (own_ssh_dir(home) / SSH_DIR_MADE).is_file() or own_ssh_dir(home).is_dir()
-    if not ours or not win.owner_rights_only(ssh, run):
+    own = own_ssh_dir(home)
+    folders = [ssh_dir(home)] if (own / SSH_DIR_MADE).is_file() else []
+    if own.is_dir():
+        folders.append(own)
+        with contextlib.suppress(OSError):
+            folders.extend(sorted(p for p in own.rglob("*") if p.is_dir() and not p.is_symlink()))
+    folders = [folder for folder in folders if win.owner_rights_only(folder, run)]
+    if not folders:
         return False
     sid = _windows_user_sid()
     if sid is None:
+        log.warning("couldn't find this account's SID, so %s wasn't repaired", folders[0])
         return False
-    icacls = str(win.system_dir() / "icacls.exe")
-    options = {"capture_output": True, "text": True, "timeout": 30, "stdin": subprocess.DEVNULL,
-               "creationflags": win.hidden()}  # fmt: skip
-    with contextlib.suppress(OSError, subprocess.SubprocessError):
-        granted = run([icacls, str(ssh), "/grant", f"*{sid}:(OI)(CI)F", "/Q"], **options)
-        if granted.returncode == 0:
-            removed = run([icacls, str(ssh), "/remove:g", "*S-1-3-4", "/T", "/Q"], **options)
-            if removed.returncode == 0:
-                log.info("repaired %s's permissions (OWNER RIGHTS taken out)", ssh)
-                return True
-    log.warning("couldn't repair %s's permissions", ssh)
-    return False
+    repaired = False
+    for folder in folders:  # the top first: the person can then reach what's below
+        if _remove_owner_rights(folder, run, sid):
+            log.info("repaired %s's permissions (OWNER RIGHTS taken out)", folder)
+            repaired = True
+        else:
+            log.warning("couldn't repair %s's permissions", folder)
+    return repaired
 
 
 def add_include(
@@ -394,7 +424,7 @@ def add_include(
         # ~/.ssh keeps the permissions it has if it's there; made here, it's set as ssh wants.
         made = not folder.is_dir()
         _ssh_mkdir(folder, parents=True, platform=platform, own=made)
-        if made:
+        if made and platform == "win32":  # what repair_ssh_dir may change; not needed on a Mac
             _made_ssh_dir(home)
         _ssh_write(config, INCLUDE_LINE + "\n", platform=platform)
         return "created"
@@ -414,10 +444,11 @@ def add_include(
         win.set_access_rules(config, rules, run)
     if platform == "win32" and _is_the_persons_ssh(home) and (said := win.ssh_refuses_config(run)):
         _replace(config, data, mode=_mode(config))
-        if rules:
-            win.set_access_rules(config, rules, run)
+        restored = not rules or win.set_access_rules(config, rules, run)
         log.warning("ssh refused ~/.ssh/config after the Include line went in (%s); put back as it was", said)
-        raise SshPermissionsError(config)
+        if not restored:
+            log.error("~/.ssh/config was put back, but its permissions couldn't be")
+        raise SshPermissionsError(config, restored=restored)
     return "added"
 
 
@@ -600,11 +631,20 @@ class SshPermissionsError(OSError):
     """Windows: a file or folder ssh reads couldn't be given the permissions
     OpenSSH accepts. Nothing is left that would break the person's ssh."""
 
-    def __init__(self, path: Path) -> None:
-        super().__init__(
-            f"UM-Codex couldn't set the permissions Windows' ssh needs on {path}, so it stopped there "
-            "(your own ssh settings weren't changed). Use Open in: Terminal for now."
-        )
+    def __init__(self, path: Path, *, restored: bool = True) -> None:
+        if restored:
+            said = (
+                f"UM-Codex couldn't set the permissions Windows' ssh needs on {path}, so it stopped there "
+                "(your own ssh settings weren't changed). Use Open in: Terminal for now."
+            )
+        else:
+            said = (
+                f"UM-Codex couldn't set the permissions Windows' ssh needs on {path}. It put the file's "
+                "contents back as they were, but not its permissions: if ssh now says \"Bad permissions\", "
+                f"restore them from {path.name}.um-codex-backup's or ask for help. "
+                "Use Open in: Terminal for now."
+            )
+        super().__init__(said)
         self.path = path
 
 
@@ -694,8 +734,8 @@ def _locked(home: Path | None = None):
         _private_dir(ssh)
         if sys.platform == "win32":
             _made_ssh_dir(home)
-    elif sys.platform == "win32":
-        repair_ssh_dir(home)
+    elif sys.platform == "win32" and not _repair_checked:
+        _check_repair(home)
     _private_dir(own_ssh_dir(home))
     with locks.held(own_ssh_dir(home) / LOCK, timeout=30):
         yield
@@ -968,8 +1008,9 @@ def ensure_key(
         )
     with contextlib.suppress(OSError):
         os.chmod(key, 0o600)
-    if sys.platform == "win32":  # ssh-keygen's own permissions can vary by account: set ours
-        _windows_owner_only(key, folder=False)
+    # ssh-keygen's own permissions can vary by account: set ours, or stop (ssh would refuse the key).
+    if sys.platform == "win32" and not _windows_owner_only(key, folder=False):
+        raise SshPermissionsError(key)
     return public
 
 

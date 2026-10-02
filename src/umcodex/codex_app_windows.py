@@ -68,12 +68,21 @@ def hidden() -> int:
 _UTF8 = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); "
 
 
-def _powershell(command: str, run: Runner, timeout: float = 30) -> subprocess.CompletedProcess | None:
+def _powershell(
+    command: str, run: Runner, timeout: float = 30, values: dict[str, str] | None = None
+) -> subprocess.CompletedProcess | None:
+    """Run a PowerShell command. Paths and other values go in `values`, read
+    there as $env:UMCODEX_PS_<NAME>, never written into the command: no
+    quoting to get wrong (PowerShell also takes U+2018 to U+201B, as in
+    O’Brien, for a single quote)."""
+    env = None
+    if values:
+        env = {**os.environ, **{f"UMCODEX_PS_{name}": value for name, value in values.items()}}
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         return run(
             [powershell(), "-NoProfile", "-NonInteractive", "-Command", _UTF8 + command],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
-            stdin=subprocess.DEVNULL, creationflags=hidden(),
+            stdin=subprocess.DEVNULL, creationflags=hidden(), env=env,
         )  # fmt: skip
     return None
 
@@ -353,40 +362,43 @@ def stop(pid: int, user_data: Path, run: Runner = subprocess.run, process: objec
 # --- The person's own ~/.ssh/config (the Include line) ---------------------------------
 
 
-def _quoted(path: Path) -> str:
-    """A path as a PowerShell single-quoted string."""
-    return "'" + str(path).replace("'", "''") + "'"
-
-
 def access_rules(path: Path, run: Runner = subprocess.run) -> str | None:
-    """A file's access rules (its DACL, as SDDL), to give a replacement the
-    same; None if they can't be read."""
-    done = _powershell(f"(Get-Acl -LiteralPath {_quoted(path)}).GetSecurityDescriptorSddlForm('Access')", run)
+    """A file's or folder's access rules (its DACL, as SDDL), to give a
+    replacement the same; None if they can't be read."""
+    done = _powershell(
+        "(Get-Acl -LiteralPath $env:UMCODEX_PS_PATH).GetSecurityDescriptorSddlForm('Access')",
+        run,
+        values={"PATH": str(path)},
+    )
     text = (done.stdout or "").strip() if done is not None and done.returncode == 0 else ""
     return text if text.startswith("D:") else None
 
 
 def set_access_rules(path: Path, sddl: str, run: Runner = subprocess.run) -> bool:
     """Give a file the access rules read by access_rules (inherited ones stay
-    inherited, from the folder it's in)."""
-    if not re.fullmatch(r"D:[A-Za-z0-9()_;:\-\s]*", sddl):
+    inherited, from the folder it's in). True only once they read back so."""
+    if not sddl.startswith("D:"):
         return False
     done = _powershell(
-        f"$a = Get-Acl -LiteralPath {_quoted(path)}; $a.SetSecurityDescriptorSddlForm('{sddl}', 'Access'); "
-        f"Set-Acl -LiteralPath {_quoted(path)} -AclObject $a",
+        "$a = Get-Acl -LiteralPath $env:UMCODEX_PS_PATH; "
+        "$a.SetSecurityDescriptorSddlForm($env:UMCODEX_PS_SDDL, 'Access'); "
+        "Set-Acl -LiteralPath $env:UMCODEX_PS_PATH -AclObject $a",
         run,
+        values={"PATH": str(path), "SDDL": sddl},
     )
     return done is not None and done.returncode == 0
 
 
-def ssh_refuses_config(run: Runner = subprocess.run) -> str | None:
+def ssh_refuses_config(run: Runner = subprocess.run, config: Path | None = None) -> str | None:
     """What Windows' ssh says if it won't read the person's ~/.ssh/config
     (and so any host) for its permissions; None when it reads it, or when
-    there's no Windows ssh to ask."""
+    there's no Windows ssh to ask. `config` (tests, and the live check):
+    read that file with -F instead, whose Included files ssh checks too."""
     ssh = system_dir() / "OpenSSH" / "ssh.exe"
+    options = ["-F", str(config)] if config is not None else []
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         done = run(
-            [str(ssh), "-G", "umcodex-permissions-check.invalid"],
+            [str(ssh), *options, "-G", "umcodex-permissions-check.invalid"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
             stdin=subprocess.DEVNULL, creationflags=hidden(),
         )  # fmt: skip
@@ -396,15 +408,45 @@ def ssh_refuses_config(run: Runner = subprocess.run) -> str | None:
     return None
 
 
+def saved_rules(folder: Path, run: Runner = subprocess.run) -> str | None:
+    """A folder's access rules as SDDL, from `icacls <folder> /save` (fast,
+    and the same in every language, unlike icacls' listing; it writes UTF-16:
+    the name, then the SDDL). None if they can't be read."""
+    import tempfile
+
+    handle, name = tempfile.mkstemp(prefix="umcodex-acl-", suffix=".txt")
+    os.close(handle)
+    saved = Path(name)
+    try:
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            done = run(
+                [str(system_dir() / "icacls.exe"), str(folder), "/save", str(saved), "/Q"],
+                capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=hidden(),
+            )  # fmt: skip
+            if done.returncode == 0:
+                lines = saved.read_bytes().decode("utf-16", errors="replace").splitlines()
+                return next((line.strip() for line in lines if line.strip().startswith("D:")), None)
+        return None
+    finally:
+        saved.unlink(missing_ok=True)
+
+
+# What Python 3.13's mkdir(mode=0o700) gives a folder on Windows, exactly
+# (measured on a Windows 11 laptop, 2026-10-02): protected, full control with
+# object and container inherit for OWNER RIGHTS, SYSTEM and Administrators.
+PYTHON_0700 = frozenset({"(A;OICI;FA;;;OW)", "(A;OICI;FA;;;SY)", "(A;OICI;FA;;;BA)"})
+
+
 def owner_rights_only(folder: Path, run: Runner = subprocess.run) -> bool:
-    """Whether a folder's permissions are exactly what Python 3.13's
-    mkdir(mode=0o700) gives on Windows (SYSTEM, Administrators, OWNER
-    RIGHTS, nothing inherited): an ~/.ssh an earlier UM-Codex made."""
-    sddl = access_rules(folder, run) or ""
-    if not sddl.startswith("D:P"):
+    """Whether a folder's access rules are exactly PYTHON_0700: protected
+    ("D:P", nothing inherited, no other flags) and those three entries,
+    rights and flags included, nothing else (a folder Python 3.13 made with
+    mode 0o700; its own rules aren't the person's choice)."""
+    sddl = saved_rules(folder, run) or ""
+    match = re.fullmatch(r"D:P((?:\([^()]*\))+)", sddl)
+    if match is None:
         return False
-    trustees = {ace.split(";")[-1].rstrip(")") for ace in re.findall(r"\([^)]*\)", sddl)}
-    return trustees == {"SY", "BA", "OW"} or trustees == {"S-1-5-18", "S-1-5-32-544", "S-1-3-4"}
+    return frozenset(re.findall(r"\([^()]*\)", match.group(1))) == PYTHON_0700
 
 
 def openssh_installed() -> bool:
