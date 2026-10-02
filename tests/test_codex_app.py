@@ -1241,11 +1241,11 @@ def test_a_port_held_by_another_program_is_replaced(data_folder):
         taken.close()
 
 
-def test_ssh_folders_keep_inherited_permissions_on_windows(tmp_path, monkeypatch):
-    """Python 3.13's mkdir(mode=0o700) gives a Windows folder an OWNER RIGHTS
-    entry, which Windows OpenSSH refuses for the config in it (live test,
-    2026-10-02): so no mode there."""
-    modes = []
+def test_ssh_folders_and_files_get_only_the_persons_permissions_on_windows(tmp_path, monkeypatch):
+    """Windows: no mkdir mode (Python 3.13's 0o700 means OWNER RIGHTS there,
+    which OpenSSH refuses), and UM-Codex's own ssh folders and files set to
+    the person, SYSTEM and Administrators with icacls; elsewhere, 0o700."""
+    modes, locked = [], []
     real = Path.mkdir
 
     def mkdir(self, *args, **options):
@@ -1253,51 +1253,74 @@ def test_ssh_folders_keep_inherited_permissions_on_windows(tmp_path, monkeypatch
         return real(self, *args, **options)
 
     monkeypatch.setattr(Path, "mkdir", mkdir)
+    monkeypatch.setattr(codex_app, "_windows_owner_only", lambda path, folder: locked.append((path, folder)))
     codex_app._ssh_mkdir(tmp_path / "w", platform="win32")
+    codex_app._ssh_mkdir(tmp_path / "theirs", platform="win32", own=False)  # a ~/.ssh that was there
+    codex_app._ssh_write(tmp_path / "w" / "config", "Host x\n", platform="win32")
     codex_app._ssh_mkdir(tmp_path / "m" / "n", parents=True, platform="darwin")
-    assert modes[0] is None and 0o700 in modes[1:]
-    assert (tmp_path / "w").is_dir() and (tmp_path / "m" / "n").is_dir()
+    codex_app._ssh_write(tmp_path / "m" / "n" / "config", "Host x\n", platform="darwin")
+    assert modes[:2] == [None, None] and 0o700 in modes[2:]
+    assert locked == [(tmp_path / "w", True), (tmp_path / "w" / "config", False)]
+    assert (tmp_path / "m" / "n" / "config").read_text() == "Host x\n"
+
+
+def test_windows_permissions_are_set_with_icacls(tmp_path):
+    calls = []
+
+    def run(command, **options):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    assert codex_app._windows_owner_only(tmp_path, folder=True, run=run, sid="S-1-5-21-1-2-3-1001")
+    assert calls[-1][0].lower().endswith(r"\system32\icacls.exe")
+    assert calls[-1][1:] == [
+        str(tmp_path), "/inheritance:r",
+        "/grant:r", "*S-1-5-21-1-2-3-1001:(OI)(CI)F",
+        "/grant:r", "*S-1-5-18:(OI)(CI)F",
+        "/grant:r", "*S-1-5-32-544:(OI)(CI)F",
+        "/Q",
+    ]  # fmt: skip
+    assert codex_app._windows_owner_only(tmp_path / "f", folder=False, run=run, sid="S-1-5-21-9")
+    assert calls[-1][3:5] == ["/grant:r", "*S-1-5-21-9:F"]
+    failed = lambda c, **o: subprocess.CompletedProcess(c, 5, "Access is denied.", "")  # noqa: E731
+    assert not codex_app._windows_owner_only(tmp_path, folder=True, run=failed, sid="S-1-5-21-9")
 
 
 WINDOWS_SSH = Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32" / "OpenSSH" / "ssh.exe"
 
 
+def _acls(*paths: Path) -> str:
+    return "\n".join(subprocess.run(["icacls", str(p)], capture_output=True, text=True).stdout for p in paths)
+
+
 @pytest.mark.skipif(sys.platform != "win32" or not WINDOWS_SSH.is_file(), reason="needs Windows OpenSSH")
 def test_windows_openssh_accepts_umcodex_ssh_folders(tmp_path):
     """The real check, with Windows' own ssh.exe: a config UM-Codex writes in
-    a folder it made is accepted when reached through an Include (ssh checks
-    included files' permissions; a file given with -F it doesn't). The same
-    file in a folder made with mode 0o700 is refused, so the check runs."""
+    folders it made is accepted when reached through an Include (ssh checks
+    included files' permissions; a file given with -F it doesn't), whatever
+    the folder above hands down (pytest's tmp_path, made with 0o700, hands
+    down OWNER RIGHTS) and whatever the account. The same file written in a
+    folder made with mkdir(mode=0o700) is refused, so the check runs."""
     host = "Host umcodex-x\n  HostName umcodex-x.invalid\n"
 
-    def resolves(folder: Path) -> subprocess.CompletedProcess:
-        codex_app._private_write(folder / "config", host)
-        top = tmp_path / f"top-{folder.name}"
-        top.write_text(f"Include {(folder / 'config').as_posix()}\n", encoding="utf-8")
+    def resolves(config: Path) -> subprocess.CompletedProcess:
+        top = tmp_path / f"top-{config.parent.name}"
+        top.write_text(f"Include {config.as_posix()}\n", encoding="utf-8")
         return subprocess.run(
             [str(WINDOWS_SSH), "-G", "-F", str(top), "umcodex-x"],
             capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
         )  # fmt: skip
 
-    # A home like a real profile's (the person, SYSTEM, Administrators,
-    # inherited by what's made in it): pytest's own tmp_path is made with
-    # mkdir(mode=0o700), so on 3.13 it hands OWNER RIGHTS down itself.
-    home = tmp_path / "home"
-    home.mkdir()
-    sid = subprocess.run(
-        ["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True, check=True
-    ).stdout.strip().split(",")[-1].strip('"')
-    grants = [f"*{who}:(OI)(CI)F" for who in (sid, "S-1-5-18", "S-1-5-32-544")]
-    icacls = ["icacls", str(home), "/inheritance:r", *[x for g in grants for x in ("/grant:r", g)]]
-    subprocess.run(icacls, capture_output=True, check=True)
-    ours = home / ".ssh"
+    ours = tmp_path / ".ssh"
     codex_app._private_dir(ours)
     codex_app._private_dir(ours / "um-codex")
-    done = resolves(ours / "um-codex")
-    assert done.returncode == 0 and "Bad permissions" not in done.stderr, done.stderr
+    config = ours / "um-codex" / "config"
+    codex_app._ssh_write(config, host)
+    done = resolves(config)
+    assert done.returncode == 0 and "Bad permissions" not in done.stderr, done.stderr + _acls(ours, config)
     assert "hostname umcodex-x.invalid" in done.stdout.splitlines()
-    refused = home / "with-mode"
+    refused = tmp_path / "with-mode"
     os.mkdir(refused, 0o700)
-    done = resolves(refused)
-    if sys.version_info >= (3, 13):  # mkdir's Windows ACL is new in 3.13
-        assert done.returncode != 0 and "Bad permissions" in done.stderr, done.stderr
+    codex_app._private_write(refused / "config", host)
+    done = resolves(refused / "config")
+    assert done.returncode != 0 and "Bad permissions" in done.stderr, done.stderr + _acls(refused)
