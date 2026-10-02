@@ -17,10 +17,18 @@ Embedding resources does not supply missing fonts or math libraries; check
 equations and resource loading in an offline browser. Render with
 `quarto render report.qmd --to html` or `--to docx`; execute code
 from a clean session. Jupyter kernels must point to the chosen environment.
-PDF via LaTeX needs a separately installed TeX distribution; do not run
-`quarto install tinytex` with internet off. For ordinary HTML-to-PDF,
-bundled Chromium can print local HTML; test pagination and fonts. Pandoc,
-poppler, qpdf and Ghostscript support conversion and inspection.
+
+For PDF use Typst, bundled with Quarto, offline and with no TeX:
+`quarto render report.qmd --to typst` (or `format: typst` in the header)
+writes `report.pdf`; add `keep-typ: true` to keep the `.typ` source. Plain
+Markdown: `pandoc notes.md --pdf-engine=typst -o notes.pdf`. Typst has its
+own fonts (Libertinus, New Computer Modern, DejaVu Sans Mono) and finds the
+installed DejaVu/Liberation ones. Raw LaTeX in a document is ignored by
+Typst; a template that needs LaTeX needs a separately installed TeX
+distribution (`format: pdf`; do not run `quarto install tinytex` with
+internet off). Bundled Chromium can also print local HTML to PDF. Test
+pagination and fonts either way. Pandoc, poppler, qpdf and Ghostscript
+support conversion and inspection.
 
 Office tools already available: python-docx/officer/flextable for Word,
 python-pptx for PowerPoint, openpyxl/xlsxwriter for XLSX, pypdf/pdfplumber

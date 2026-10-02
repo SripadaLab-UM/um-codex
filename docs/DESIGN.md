@@ -320,80 +320,58 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
   setup's name, `/work` and each `/mnt/write/*` and `/mnt/read/*` with its
   folder on the computer, internet on or off, the browser tool (on or off,
   and whether each action is approved), and the approval policy.
-- **Shipped capability bundle** (`images/agent/skills/`, branch
-  `agent-skills`): eight focused, offline-readable workflows for persistent
-  Python/R environments, data analysis, research handoffs, scientific
-  figures, documents/reports, notebooks, dashboards and development. Copied
-  to `/home/agent/.agents/skills`, Codex's standard user discovery location,
-  and requested enabled in managed config. The pinned Codex merges skill
-  overrides across layers: an existing user per-skill disable remains
-  effective. These are shipped defaults, not a security enforcement rule.
-  `/etc/codex/skills` cannot hold
-  image files here: the read-only launch mount hides that image directory.
-  No credentials, host configuration, extra MCP server or model selection
-  are added. Feature defaults and the browser namespace/approvals stay as
-  they were; future MCP additions must join `direct_only_tool_namespaces`.
-  - The existing universal Python lock gains uv 0.12.22, Jupyter 1.1.1,
-    ipykernel 7.4.0, nbconvert 7.17.1, Streamlit 1.64.0 and Dash 4.4.1.
-    Existing package pins are retained; `pip check` runs during the build.
-    R's existing dated snapshot supplies renv 1.2.4 and Shiny 1.14.0 with
-    build-time version assertions. Quarto 1.10.18 has SHA256 checks for
-    amd64/arm64 release assets. TypeScript 7.0.2 and esbuild 0.28.2 are
-    installed at build time. apt tools remain bounded by the existing base
-    image/repositories, not independently exact-version locked.
-  - `um-codex-env` creates an offline `/work/.venv` without replacing an
-    existing environment. Its optional image-package `.pth` fallback is
-    explicit and records the image package inventory; it is not a complete
-    project lock or a portable host venv. Isolated offline environments need
-    a prepared wheelhouse. R uses a project renv library with caching off
-    or `renv::isolate()` so ephemeral cache links do not break persistence.
-    Capture the image library paths before `renv::init()` changes them;
-    hydrate from those paths rather than a newly sandboxed `.Library`.
-  - `um-codex-dashboard` runs Shiny 3838, Streamlit 8501 or Dash 8050 on
-    `0.0.0.0`, with debug/reload/browser launch off, and refuses busy ports.
-    It changes no Docker port mappings. M6's existing local SSH forwards
-    allow host loopback previews; terminal-only launches do not promise
-    host access. The skill distinguishes container health/UI checks from
-    host reachability and production deployment.
-  - Quarto HTML/DOCX execution, notebook execution, a fresh image-backed
-    Python environment, copied renv library and all three dashboard HTTP
-    endpoints plus rendered button/callback interactions in mobile-width
-    Chromium run in the image smoke test. Actual app-server `skills/list`
-    checks discovery, not just the file layout. Running it with `--network none`
-    verifies that these checks download nothing. No TeX/GPU stack or
-    LibreOffice is bundled; optional-task guidance explains installation,
-    persistence and what remains unverified without a renderer.
-  - **Live check, 2026-10-02:** the arm64 image built with smoke networking
-    disabled. Notebook execution, executable Quarto HTML/DOCX, uv fallback,
-    copied renv packages, TypeScript compilation, esbuild bundling and all
-    three rendered dashboard button/callback checks passed. Separate fresh
-    `--network none` runs passed; Python/R project environments were reused
-    from a bind mount after the original container was removed. Real
-    app-server `skills/list` found all eight skills with an empty user config;
-    a user-disable fixture confirmed the override caveat above. Browser
-    MCP `tools/list` still matched all 25 shipped tool names/annotations.
-    Ruff/Pyright passed; full pytest: 743 passed, 13 skipped, with the
-    existing macOS installer forkpty warnings. Final targeted checks: 43
-    passed, including existing-environment, dangling-symlink and busy-port
-    regressions. The full run predates the added symlink test.
-  - The measured arm64 local image is about **6.83 GB**, versus 5.57 GB for
-    the installed image (about +1.26 GB / 23%). This is Docker's local
-    logical image size, not a measured download size. Quarto adds roughly
-    462 MB; the rest mainly comes from the notebook/dashboard Python stack.
-    Software layers precede instruction/skill copies so Markdown updates
-    do not reinstall the tool stack.
-  - **Intel/AMD release gate remains open:** an amd64 runtime diagnostic
-    image built (about 6.94 GB), and its offline uv/R environment, static
-    Quarto HTML/DOCX and all three rendered dashboard interactions passed.
-    Full amd64 validation failed at the notebook kernel under this Mac's
-    emulation: `Kernel didn't respond in 60 seconds`. A small ZeroMQ-socket
-    followed by subprocess probe also hung; TCP/IPC and older kernel/ZMQ
-    probes did not resolve it. This is consistent with the upstream
-    [Rosetta subprocess report](https://github.com/apple/container/issues/966),
-    but native amd64 behavior is unverified. The default `validated` stage
-    keeps the full offline smoke gate; do not publish the diagnostic
-    `runtime` target. Existing release CI has native amd64 and arm64 runners
-    and must pass both before shipping. No release was published.
+- **Research and development tools and skills** (`images/agent/skills/`):
+  the image adds uv, ipykernel/nbconvert (notebooks run headless; no
+  Jupyter server), Streamlit and Dash (Python), renv and Shiny (R), Quarto
+  1.10.18 (SHA256-checked for amd64 and arm64), TypeScript and esbuild.
+  Quarto's own Pandoc and Typst are the image's `pandoc` (R Markdown uses it
+  too) and `typst`, so HTML, Word and PDF (Typst, no TeX) reports work
+  offline. Python packages are installed from `requirements.txt` with
+  hashes (`--require-hashes`, compiled for Linux on both architectures).
+  - Eight skills (environments, analysis, research handoffs, figures,
+    reports, notebooks, dashboards, development) are short offline
+    instructions. They're user skills: Codex 0.157.1 finds them in
+    `$HOME/.agents/skills` (HOME=/home/agent; `ext/skills/src/host_roots.rs`)
+    and they're on by default, in the terminal and over ssh. Not
+    `/etc/codex/skills`: the launch's `/etc/codex` mount hides the image's.
+    No `[[skills.config]]` entries: Codex reads those only from the person's
+    `config.toml` and `-c` flags (`config/src/skills_config.rs`), so a
+    person can still turn one off. `~/.agents` belongs to agent, so a
+    session can add skills there, for that launch; a project's
+    `.agents/skills` under `/work` is kept.
+  - Codex's own bundled skills (skill-installer, imagegen, openai-docs, …)
+    reach GitHub or OpenAI, so managed_config.toml turns them off
+    (`[skills.bundled] enabled = false`; `bundled_skills_enabled_from_stack`
+    reads the effective config, which includes that layer): Codex neither
+    installs them in `$CODEX_HOME/skills/.system` nor lists them.
+  - Helpers: `um-codex-env` makes a project `.venv` without downloads (with
+    `--image-packages`, a `.pth` fallback to `/opt/venv`, recorded; it never
+    replaces an existing one). R projects use renv with its cache off, so the
+    library is copied into the project. `um-codex-dashboard` runs Shiny
+    (3838), Streamlit (8501) or Dash (8050) on the container's 127.0.0.1
+    (`--host` to change), with debug/reload/browser launch off, and refuses
+    a port in use. UM-Codex publishes no ports: the Codex app's ssh
+    connection can forward one (sshd allows local forwarding to loopback);
+    a terminal launch has no host preview.
+  - The build's smoke test (run with `--network=none`) executes all of this:
+    a notebook (and its HTML export), Quarto HTML/DOCX/Typst PDF, R Markdown
+    HTML/DOCX, Pandoc's Typst PDF, an image-backed venv, a copied renv
+    library, TypeScript and esbuild builds, each dashboard's button and
+    callback in headless Chromium (and that it listens only on loopback),
+    and Codex's app-server `skills/list` (the eight skills enabled; Codex's
+    bundled ones listed by default and absent with them off).
+  - **/codex-home stays empty in the image.** Docker copies it into every new
+    setup's volume (`containers.py` mounts the volume without `nocopy`), so
+    anything Codex writes there at build time (installation id, sqlite
+    databases, bundled skills) would be shared by every setup. Every Codex
+    run in the checks uses a throwaway `CODEX_HOME`, and the last build stage
+    fails if `/codex-home` holds anything but alpha.3's `tmp/arg0`. It also
+    removes the smoke test's caches and temp folders.
+  - The arm64 image is 6.40 GB (alpha.3: 5.57 GB), mostly Quarto (about
+    440 MB) and the Streamlit/Dash Python stack. amd64 is first
+    smoke-tested by release CI's native amd64 runner, which must pass before
+    a release: under emulation on an Apple silicon Mac the notebook kernel
+    check times out (as ZeroMQ subprocesses do under Rosetta).
 - **The launch's files** (`codex/` with the three files above, `launch.md`,
   `gateway.conf`, and the env file with the token, deleted once the agent
   has started) are in
@@ -515,6 +493,8 @@ um-codex/
     images.json             pinned image digests (stamped by the release)
   images/agent/             Dockerfile, AGENTS.md (from DataLab's image: Codex, Node, Python, R; DataLab skills removed; build tools added),
                             smoke.sh, browser-check.js (the browser tool's MCP check),
+                            skills/ (UM-Codex's skills), project-env.py, dashboard.py and their checks
+                            (capability-check.py, dashboard-check.js, skills-check.py),
                             sshd_config, profile.sh, umcodex-token (the Codex app's ssh entry, M6)
   installer/macos/          install.sh, uninstall.sh (from DataLab, trimmed)
   installer/windows/        install.ps1, uninstall.ps1 (from DataLab, trimmed)

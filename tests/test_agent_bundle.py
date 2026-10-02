@@ -59,6 +59,51 @@ def test_dashboard_busy_port_leaves_existing_service_alone(tmp_path, monkeypatch
         assert service.getsockname()[1] == port
 
 
+def free_port():
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+@pytest.mark.parametrize(("options", "host"), [([], "127.0.0.1"), (["--host", "0.0.0.0"], "0.0.0.0")])
+def test_dashboard_listens_on_the_containers_loopback_unless_asked(tmp_path, monkeypatch, options, host):
+    app = tmp_path / "app.py"
+    app.write_text("")
+    module = load("dashboard.py")
+    monkeypatch.setitem(module.PORTS, "streamlit", free_port())
+    started = []
+
+    def execvp(file, args):
+        started.append(args)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(module.os, "execvp", execvp)
+    monkeypatch.setattr(sys, "argv", ["um-codex-dashboard", "streamlit", str(app), *options])
+    with pytest.raises(SystemExit):
+        module.main()
+    assert f"--server.address={host}" in started[0]
+
+
+def test_dashboard_port_left_in_time_wait_is_free(tmp_path, monkeypatch):
+    """A server stopped a moment ago leaves its port in TIME_WAIT: not busy."""
+    port = free_port()
+    with socket.socket() as server:
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", port))
+        server.listen()
+        client = socket.create_connection(("127.0.0.1", port))
+        accepted, _ = server.accept()
+        accepted.close()  # the server side closes first: its end waits
+        client.close()
+    module = load("dashboard.py")
+    monkeypatch.setitem(module.PORTS, "streamlit", port)
+    monkeypatch.setattr(module.os, "execvp", lambda file, args: (_ for _ in ()).throw(SystemExit(0)))
+    monkeypatch.setattr(sys, "argv", ["um-codex-dashboard", "streamlit", str(tmp_path)])
+    with pytest.raises(SystemExit) as done:
+        module.main()
+    assert done.value.code == 0
+
+
 def test_skill_catalog_is_valid_and_references_exist():
     names = []
     for path in (ROOT / "skills").glob("*/SKILL.md"):

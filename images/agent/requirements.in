@@ -1,7 +1,10 @@
 # Python packages in the agent image, adapted from IHS DataLab's
 # images/agent/requirements.in at 6b6fdca (same packages).
-# Pinned versions are in requirements.txt:
-#   uv pip compile requirements.in --universal --python-version 3.12 -o requirements.txt
+# Pinned versions, with hashes, are in requirements.txt (the Dockerfile
+# installs it with --require-hashes). From the repository root:
+#   uv pip compile images/agent/requirements.in --universal --python-version 3.12 \
+#     --generate-hashes -o images/agent/requirements.txt
+# The existing pins are kept as preferences; add --upgrade-package to move one.
 altair
 duckdb
 matplotlib
@@ -35,10 +38,17 @@ requests
 pytest
 ruff
 
-# Reproducible environments, notebooks and dashboards (build-time only).
+# Reproducible environments, notebooks and dashboards. Notebooks: the
+# kernel and headless execution only (Quarto and `jupyter nbconvert` use
+# these); no Jupyter server, JupyterLab or Notebook.
 uv==0.12.22
-jupyter==1.1.1
 ipykernel==7.4.0
+jupyter-client==8.10.0
+jupyter-core==5.9.1
+nbclient==0.11.0
 nbconvert==7.17.1
+nbformat==5.11.1
+# Quarto's Jupyter engine imports yaml.
+pyyaml
 streamlit==1.64.0
 dash==4.4.1

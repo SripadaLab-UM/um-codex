@@ -39,7 +39,7 @@ setting can change what the container reaches: the container and the relay
 decide that.
 
 Unlike DataLab, Codex's features stay at Codex's defaults (full power): only
-analytics, feedback and update checks are off.
+analytics, feedback, update checks and Codex's own bundled skills are off.
 """
 
 from __future__ import annotations
@@ -63,22 +63,6 @@ CODEX_ETC = "/etc/codex"
 REQUIREMENTS_FILE = "requirements.toml"
 MANAGED_CONFIG_FILE = "managed_config.toml"
 CATALOG_FILE = "models.json"
-
-# Standard user discovery path: /etc/codex is hidden by the launch mount.
-# Keep the shipped catalog small; all instructions and helpers are offline.
-# Skill enablement is a default, not a security constraint: Codex merges
-# per-skill overrides across layers and respects a user disabling a path.
-SHIPPED_SKILLS = (
-    "project-environments",
-    "data-analysis",
-    "research-handoff",
-    "scientific-figures",
-    "documents-and-reports",
-    "notebooks",
-    "dashboards",
-    "software-development",
-)
-SKILLS_ROOT = "/home/agent/.agents/skills"
 
 Approvals = Literal["never", "on-request"]
 
@@ -174,14 +158,17 @@ def render(
         "",
         '[projects."/work"]',
         'trust_level = "trusted"',
+        "",
+        # Codex's bundled skills (skill-installer, imagegen, openai-docs and
+        # the like) fetch from GitHub, call OpenAI's image API or read OpenAI's
+        # docs: not this setup. Off, Codex 0.157.1 neither installs them in
+        # $CODEX_HOME/skills/.system nor lists them (ext/skills host_service.rs;
+        # bundled_skills_enabled_from_stack reads the effective config, which
+        # includes this layer). UM-Codex's own skills are user skills in the
+        # image's ~/.agents/skills (Dockerfile), found and on by default.
+        "[skills.bundled]",
+        "enabled = false",
     ]
-    for skill in SHIPPED_SKILLS:
-        lines += [
-            "",
-            "[[skills.config]]",
-            f'path = "{SKILLS_ROOT}/{skill}/SKILL.md"',
-            "enabled = true",
-        ]
     if browser:
         lines += [
             "",

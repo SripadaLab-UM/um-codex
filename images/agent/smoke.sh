@@ -28,11 +28,16 @@ check "/codex-home writable" sh -c 'f=/codex-home/.um-codex-smoke.$$ && touch "$
 check "mount points exist" test -d /mnt/write -a -d /mnt/read
 check "base AGENTS.md" test -s /etc/um-codex/AGENTS.md
 
-check "codex" codex --version
-check "shipped skill discovery" timeout 60 um-codex-skills-check
+# Every Codex run here gets a throwaway CODEX_HOME: Codex writes an
+# installation id, databases and its bundled skills into its home, and the
+# image's /codex-home is copied into every new setup's volume (the
+# Dockerfile's last stage checks it stayed empty).
+check "codex" sh -c 'h=$(mktemp -d) && CODEX_HOME="$h" codex --version; s=$?; rm -rf "$h"; exit $s'
+check "shipped skills found, Codex's bundled skills seen" timeout 60 um-codex-skills-check
+check "shipped skills found, bundled skills off" timeout 60 um-codex-skills-check --no-bundled -c skills.bundled.enabled=false
 check "node" node --version
 check "npm" npm --version
-for tool in git ssh curl wget jq rg fd tree less ps make gcc g++ vi nano unzip pandoc sqlite3; do
+for tool in git ssh curl wget jq rg fd tree less ps make gcc g++ vi nano unzip pandoc typst sqlite3; do
     check "$tool on PATH" command -v "$tool"
 done
 
@@ -62,11 +67,14 @@ check "python headers" sh -c 'test -f "$(python -c "import sysconfig; print(sysc
 check "pip dependency consistency" python -m pip check
 check "uv" uv --version
 check "Quarto" quarto --version
+check "pandoc is Quarto's" test "$(readlink -f "$(command -v pandoc)")" = "/opt/quarto/bin/tools/$(uname -m)/pandoc"
+check "typst is Quarto's" test "$(readlink -f "$(command -v typst)")" = "/opt/quarto/bin/tools/$(uname -m)/typst"
+check "R finds pandoc" Rscript -e 'stopifnot(rmarkdown::pandoc_available("3.0"))'
 check "TypeScript" tsc --version
 check "esbuild" esbuild --version
 check "research execution and dashboards" um-codex-capability-check
 
-check "python packages" python -c "import duckdb, pandas, polars, numpy, scipy, statsmodels, sklearn, matplotlib, seaborn, altair, plotnine, pyarrow, pdfplumber, pypdf, docx, pptx, openpyxl, xlsxwriter, vl_convert, bs4, httpx, lxml, requests, pytest"
+check "python packages" python -c "import yaml, duckdb, pandas, polars, numpy, scipy, statsmodels, sklearn, matplotlib, seaborn, altair, plotnine, pyarrow, pdfplumber, pypdf, docx, pptx, openpyxl, xlsxwriter, vl_convert, bs4, httpx, lxml, requests, pytest"
 check "R packages" Rscript -e "suppressMessages({library(tidyverse); library(data.table); library(lubridate); library(ggplot2); library(lme4); library(lmerTest); library(survival); library(mgcv); library(arrow); library(rmarkdown); library(flextable); library(testthat)})"
 check "R user library writable" test -w "$R_LIBS_USER"
 

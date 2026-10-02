@@ -1,6 +1,7 @@
 #!/opt/venv/bin/python
 """Offline execution checks for the bundled authoring and dashboard stack."""
 
+import ipaddress
 import json
 import os
 import subprocess
@@ -8,6 +9,31 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
+
+
+def listening_addresses(port):
+    """The IPv4/IPv6 addresses listening on a TCP port (/proc/net/tcp*)."""
+    found = set()
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        for line in Path(table).read_text().splitlines()[1:]:
+            local, state = line.split()[1], line.split()[3]
+            address, hex_port = local.split(":")
+            if state == "0A" and int(hex_port, 16) == port:  # 0A: LISTEN
+                raw = bytes.fromhex(address)
+                # The kernel prints each 32-bit word in host (little-endian) order.
+                words = b"".join(raw[i : i + 4][::-1] for i in range(0, len(raw), 4))
+                found.add(str(ipaddress.ip_address(words)))
+    return found
+
+
+def assert_pdf(path, *texts):
+    # poppler warns about Typst's PDF structure tags on stderr; harmless.
+    info = subprocess.check_output(["pdfinfo", str(path)], text=True, stderr=subprocess.DEVNULL)
+    assert info.split("Pages:")[1].split()[0] == "1", info
+    pdf = subprocess.check_output(["pdftotext", str(path), "-"], text=True, stderr=subprocess.DEVNULL)
+    text = " ".join(pdf.split())
+    for expected in texts:
+        assert expected in text, (expected, text)
 
 
 def run(*args, cwd):
@@ -54,6 +80,8 @@ def main():
             cwd=root,
         )
         assert "42" in (root / "executed.ipynb").read_text()
+        run("jupyter", "nbconvert", "--to", "html", "executed.ipynb", cwd=root)
+        assert "42" in (root / "executed.html").read_text()
         (root / "report.qmd").write_text(
             "---\ntitle: Offline smoke\nformat:\n  html:\n    embed-resources: true\n---\n"
             "\n```{python}\nprint(6 * 7)\n```\n"
@@ -62,6 +90,21 @@ def main():
         assert "42" in (root / "report.html").read_text()
         run("quarto", "render", "report.qmd", "--to", "docx", cwd=root)
         assert (root / "report.docx").stat().st_size > 1000
+        # R Markdown, through the image's pandoc (Quarto's).
+        (root / "r-notes.Rmd").write_text(
+            "---\ntitle: R smoke\noutput: html_document\n---\n\n```{r}\n6 * 7\n```\n"
+        )
+        run("Rscript", "-e", 'rmarkdown::render("r-notes.Rmd", quiet=TRUE)', cwd=root)
+        assert "42" in (root / "r-notes.html").read_text()
+        run("Rscript", "-e", 'rmarkdown::render("r-notes.Rmd", "word_document", quiet=TRUE)', cwd=root)
+        assert (root / "r-notes.docx").stat().st_size > 1000
+        # PDF with no TeX: Quarto's bundled Typst (fonts included), and
+        # Pandoc's Typst engine for plain Markdown.
+        run("quarto", "render", "report.qmd", "--to", "typst", cwd=root)
+        assert_pdf(root / "report.pdf", "Offline smoke", "42")
+        (root / "notes.md").write_text("# Notes\n\nSix times seven is 42.\n")
+        run("pandoc", "notes.md", "--pdf-engine=typst", "-o", "notes.pdf", cwd=root)
+        assert_pdf(root / "notes.pdf", "Six times seven is 42.")
         # Copy the installed R packages into the project library; no cache
         # symlinks or network are needed. Validate in a second R process.
         run(
@@ -119,6 +162,9 @@ def main():
                             ) as response:
                                 assert response.status == 200
                             run("um-codex-dashboard-check", f"http://127.0.0.1:{port}", cwd=root)
+                            # The helper's default: the container's loopback only.
+                            addresses = listening_addresses(port)
+                            assert addresses == {"127.0.0.1"}, f"{framework} listens on {addresses}"
                             break
                         except OSError:
                             if proc.poll() is not None or time.monotonic() > deadline:
@@ -132,7 +178,10 @@ def main():
                     except subprocess.TimeoutExpired:
                         os.killpg(proc.pid, 9)
                         proc.wait(timeout=5)
-        print("offline environment, R library, notebook, Quarto HTML/DOCX and three dashboards passed")
+        print(
+            "offline environment, R library, notebook, Quarto HTML/DOCX/Typst PDF, "
+            "Pandoc Typst PDF and three dashboards passed"
+        )
 
 
 if __name__ == "__main__":

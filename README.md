@@ -16,7 +16,8 @@ never goes into the container.
 ## Research and development tools
 
 The capability-bundle image includes Python and R analysis libraries,
-reproducible environments (uv/renv), Jupyter notebooks, Quarto reports,
+reproducible environments (uv/renv), Jupyter notebooks (run headless, no
+Jupyter server), Quarto reports,
 Shiny, Streamlit and Dash dashboards, and Node/TypeScript build tools.
 Codex has focused skills for these tasks, research handoffs, figures and
 Office documents. Ask for the deliverable you need; it chooses the workflow.
@@ -33,13 +34,16 @@ For example:
 
 Keep project code, environments and outputs in your working folder so they
 survive Stop. Bundled tools work with internet off; additional packages need
-internet or a previously prepared local package store. Quarto HTML and Word
-reports work offline; PDF through LaTeX needs an additional TeX installation.
+internet or a previously prepared local package store. Quarto HTML, Word and
+PDF reports work offline: PDFs are made with Typst, which comes with Quarto
+(`quarto render report.qmd --to typst`); only LaTeX templates need a TeX
+installation.
 
-Dashboards run on container ports 3838 (Shiny), 8501 (Streamlit) or 8050
-(Dash). The Codex app's remote SSH connection can forward a port to your
-computer; a terminal launch does not automatically expose a dashboard URL.
-Codex should tell you the port and how to reach it. Stop ends the server.
+Dashboards run inside the container on ports 3838 (Shiny), 8501 (Streamlit)
+or 8050 (Dash). In the Codex app, its connection to the container can
+forward that port to your computer; a terminal launch doesn't show a
+dashboard on your computer. Codex tells you the port and how to reach it.
+Stop ends the server.
 
 ## Install on a Mac
 

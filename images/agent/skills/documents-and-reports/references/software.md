@@ -9,7 +9,7 @@ and rerun a representative check. Do not paste secrets into install commands.
 
 | Task | Bundled starting point | Optional addition and limitation |
 |---|---|---|
-| Quarto PDF via LaTeX | Quarto, Pandoc; HTML/DOCX offline | TinyTeX/TeX Live, downloaded with internet on; save a reusable installation on a writable mount, configure PATH and validate `quarto check` |
+| PDF | Quarto and Pandoc with Typst: HTML, DOCX and PDF (`--to typst`) offline | Only for LaTeX templates or raw LaTeX: TinyTeX/TeX Live, downloaded with internet on; save a reusable installation on a writable mount, configure PATH and validate `quarto check` |
 | Office visual rendering | python-docx/pptx, officer; PDF inspection tools | LibreOffice headless via apt, internet on, ephemeral install unless included in a future image; verify converted pages visually |
 | GPU/deep learning | NumPy/scikit-learn CPU | Pin PyTorch/JAX in project venv for actual platform; this Docker image promises no GPU access, CUDA or Apple Metal |
 | Neuroimaging/genomics | Python/R general statistics | Domain-specific tools such as nibabel, MNE, Bioconductor or system pipelines; check data formats, licensing, size and architecture before installing |

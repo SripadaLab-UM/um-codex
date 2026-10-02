@@ -1,6 +1,6 @@
 ---
 name: notebooks
-description: Create, execute or repair Jupyter notebooks and their kernels, including reproducible offline execution and HTML exports.
+description: Create, execute or repair Jupyter notebooks and their kernels, including reproducible offline execution and HTML exports (headless; no Jupyter server installed).
 ---
 
 # Executable notebooks
@@ -23,9 +23,12 @@ Verify results, warnings and execution order; export HTML when requested.
 Do not silently overwrite the original notebook or erase its outputs.
 An execution timeout is not an instruction to skip failing cells.
 
-Jupyter is bundled; launching an interactive server is optional. Keep token
-or password authentication on, bind to the container, and use an existing
-local SSH forward for host access. Never print its token into a shared
-handoff. No accounts or downloads are needed for bundled kernels; new
-kernels and libraries may require internet. Large outputs belong in data
-files, not embedded notebook blobs.
+The image has the kernel (ipykernel), nbformat, nbclient and nbconvert:
+notebooks are authored, executed and exported headless. No Jupyter server,
+JupyterLab or Notebook is installed; the person can open the `.ipynb` in
+their own editor or VS Code. If they need a server here, it needs
+internet to install (`uv pip install jupyterlab` into the project's
+environment); keep token authentication on, listen on `127.0.0.1`, and use
+the Codex app's SSH port forward for host access. Never print its token
+into a shared handoff. New kernels and libraries may require internet.
+Large outputs belong in data files, not embedded notebook blobs.
