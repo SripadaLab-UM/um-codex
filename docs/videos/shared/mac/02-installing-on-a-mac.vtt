@@ -1,0 +1,109 @@
+WEBVTT
+
+00:00.800 --> 00:04.240
+This video shows how to install UM-Codex on a Mac.
+
+00:04.240 --> 00:06.320
+First, what to have ready.
+
+00:06.320 --> 00:09.040
+Then, the one command that installs it.
+
+00:09.040 --> 00:12.320
+Then, Docker Desktop and your key.
+
+00:12.320 --> 00:14.360
+And last, how to open UM-Codex.
+
+00:15.560 --> 00:19.720
+UM-Codex runs Codex in a sealed environment on your own computer.
+
+00:19.720 --> 00:24.160
+You need a Mac, your key for the University of Michigan's GPT Toolkit,
+
+00:24.160 --> 00:25.740
+which is in Aman's email,
+
+00:25.740 --> 00:30.500
+shared on Dropbox, and Docker Desktop, which runs the sealed environment.
+
+00:30.500 --> 00:34.856
+If Docker Desktop isn't installed, setup offers to install it.
+
+00:36.056 --> 00:37.276
+Open Terminal.
+
+00:37.276 --> 00:41.116
+Press Command and Space, type Terminal, and press Return.
+
+00:41.116 --> 00:44.120
+It's also in Applications, under Utilities.
+
+00:44.620 --> 00:49.540
+Paste the install command from UM-Codex's page on GitHub, and press Return.
+
+00:49.540 --> 00:53.260
+It works through six steps, and each one says what it's doing.
+
+00:54.460 --> 00:56.700
+Step one is Docker Desktop.
+
+00:56.700 --> 00:59.340
+On this Mac it's already installed and running.
+
+00:59.340 --> 01:05.140
+On a Mac without Docker, the installer asks first, then downloads and installs it.
+
+01:05.640 --> 01:10.440
+Steps two to four install UM-Codex itself, with its own copy of Python,
+
+01:10.440 --> 01:12.820
+and download the sealed environment's image.
+
+01:12.820 --> 01:15.840
+The download is the long part, the first time.
+
+01:16.340 --> 01:18.400
+Step five asks for your key.
+
+01:18.400 --> 01:22.300
+Copy it from Aman's email, paste it, and press Return.
+
+01:22.300 --> 01:26.980
+Each character shows as a star, and the key is saved in your Mac's Keychain.
+
+01:26.980 --> 01:31.364
+It never goes into the sealed environment, and it isn't kept in any file.
+
+01:31.864 --> 01:37.384
+Step six adds the UM-Codex app to Applications, and a shortcut to your Desktop.
+
+01:37.384 --> 01:41.604
+If you have the Codex app, setup may also ask one question about it.
+
+01:41.604 --> 01:44.544
+It gives the reason, and Return means yes.
+
+01:44.544 --> 01:45.736
+Then it's done.
+
+01:46.936 --> 01:51.816
+To open UM-Codex, double-click the UM-Codex icon on your Desktop.
+
+01:51.816 --> 01:55.048
+It's also in Applications, and Spotlight finds it.
+
+01:55.548 --> 01:58.288
+It opens UM-Codex's window in your browser.
+
+01:58.288 --> 02:01.528
+That's a page running on your own Mac, not a website.
+
+02:01.528 --> 02:05.244
+The line at the top says Docker is running and your key is saved.
+
+02:05.744 --> 02:07.764
+That's UM-Codex installed.
+
+02:07.764 --> 02:12.200
+In the next video, Your first launch, you start Codex in a folder.

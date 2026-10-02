@@ -1,0 +1,115 @@
+WEBVTT
+
+00:00.800 --> 00:03.840
+This video is a first walk through UM-Codex.
+
+00:03.840 --> 00:07.940
+You'll open its window, choose a folder, and watch Codex open on it.
+
+00:07.940 --> 00:11.936
+Then you'll ask Codex to do something, and stop and start again.
+
+00:13.136 --> 00:17.556
+Open UM-Codex from your Desktop, and its window opens in your browser.
+
+00:17.556 --> 00:19.936
+Docker is running and your key is saved.
+
+00:19.936 --> 00:23.896
+The first time, there's one button: Choose a folder and start.
+
+00:23.896 --> 00:25.976
+Under it is what Codex gets.
+
+00:25.976 --> 00:30.976
+It can change and delete files in that folder: they're your real files, with no undo.
+
+00:30.976 --> 00:34.976
+And the internet is on, so Codex could send what it reads anywhere.
+
+00:34.976 --> 00:36.992
+You can change any of that later.
+
+00:37.492 --> 00:41.012
+Press it, and choose a folder in your Mac's own folder picker.
+
+00:41.012 --> 00:44.412
+For this video, it's a demo folder of made-up files.
+
+00:44.412 --> 00:49.612
+For anything important, work in a copy, or in a folder that's a git repository.
+
+00:50.812 --> 00:52.032
+That's all you do.
+
+00:52.032 --> 00:55.312
+The folder is now a setup, a card named after it.
+
+00:55.312 --> 00:59.132
+Its line goes from Starting, to Opening Codex, to Connected.
+
+00:59.132 --> 01:03.612
+UM-Codex opens its own copy of the Codex app, with its own settings.
+
+01:03.612 --> 01:06.436
+Your own ChatGPT app isn't touched.
+
+01:06.936 --> 01:10.076
+Codex opens on a project named after your folder.
+
+01:10.076 --> 01:13.816
+At the bottom, it says Remote, and the setup's name.
+
+01:13.816 --> 01:17.056
+That chat is running in the sealed environment on your Mac.
+
+01:17.056 --> 01:21.960
+A chat that doesn't say Remote would run on your Mac itself, so UM-Codex blocks it.
+
+01:22.460 --> 01:24.900
+Now ask Codex for something in the folder.
+
+01:24.900 --> 01:29.100
+Here, it summarizes the spreadsheet and writes a short note about it.
+
+01:29.100 --> 01:33.980
+Codex works inside the sealed environment, and the note lands in your real folder.
+
+01:34.480 --> 01:38.760
+Back in the window, the card always says what Codex can do with this setup:
+
+01:38.760 --> 01:43.912
+the folder, and that changes there are real; the internet; and the model it's using.
+
+01:45.112 --> 01:47.052
+When you're finished, press Stop.
+
+01:47.052 --> 01:48.332
+It asks first.
+
+01:48.332 --> 01:51.172
+Codex stops and its sandbox is removed.
+
+01:51.172 --> 01:56.012
+Files it already changed in your folder stay as they are, and its history is kept.
+
+01:56.012 --> 01:58.852
+The Codex app then says it can't reconnect.
+
+01:58.852 --> 02:00.184
+That's expected.
+
+02:00.684 --> 02:05.824
+Next time, the button at the top is Start, with your folder's name.
+
+02:05.824 --> 02:05.824
+One click.
+
+02:05.824 --> 02:10.004
+Edit shows three sections: Folder, Access and Codex.
+
+02:10.004 --> 02:14.508
+That's where you add a folder Codex can only read, or turn the internet off.
+
+02:15.008 --> 02:16.568
+That's your first launch.
