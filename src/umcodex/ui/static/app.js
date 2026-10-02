@@ -197,7 +197,7 @@ const WORDS = {
   local: "On this computer: Codex runs on your Mac, not in the sandbox. It can do anything you can do here.",
   localFull: "Codex can change and delete any of your files, not only these: no undo.",
   localFolder: "Codex's commands can change only these folders (its own sandbox). Computer and browser control aren't limited by that.",
-  localControlOn: "Computer and browser control on: Computer Use, the app's browser and your Chrome (macOS asks once for Screen Recording and Accessibility).",
+  localControlOn: "Computer and browser control on: Computer Use and the app's own browser (macOS asks once for Screen Recording and Accessibility). Your own Chrome: not supported yet.",
   localControlOff: "Computer and browser control off.",
   localKey: "Your Toolkit key stays in the keychain, but Codex runs as you here, so it may be able to reach it.",
   localNetFull: "Internet: everything this Mac can reach (full access doesn't limit it).",
@@ -476,6 +476,7 @@ function statusOf(s, run) {
     if (!app && s.open_in === "codex-app") return { text: "Opening Codex… preparing the sandbox for the Codex app.", live: true };
     if (!app) return { text: `Running in Terminal since ${run.since}. Quit Codex there, or Stop here.`, live: true };
     if (app.fallback_message) return { text: app.fallback_message, bad: true, terminal: true };
+    if (app.copy === "reopening") return { text: "Reopening the Codex window… so it knows this setup.", live: true };
     if (app.copy === "failed") return { text: "UM-Codex's Codex window couldn't be opened. Stop, then Start again.", bad: true, live: true };
     if (app.copy === "refused")
       return { text: "UM-Codex didn't open its Codex window: its folders would have been your own app's. Use Terminal.", bad: true, terminal: true };
@@ -517,6 +518,16 @@ function checkPending() {
 }
 
 async function stopLaunch(run) {
+  if (run.app?.local) {
+    const yes = await confirmBox(`Stop “${run.setup_name}”?`, "UM-Codex's Codex window on this computer closes. Chats are kept.", "Stop");
+    if (!yes) return;
+    try {
+      await api("POST", `/api/launches/${encodeURIComponent(run.launch_id)}/stop`);
+    } catch (error) {
+      notice(error.message, true);
+    }
+    return refresh();
+  }
   const inApp = run.app
     ? ` The Codex app then says it can't reconnect to ${run.app.alias}; that's expected. Start the setup again to go on.`
     : "";
@@ -905,7 +916,19 @@ async function pickFolder(start) {
 
 // "Choose a folder and start": the computer's own folder picker, then a
 // setup with the defaults (named after the folder), started at once.
+let quickStarting = false; // one quick start at a time: a second click (or event) does nothing
+
 async function quickStart() {
+  if (quickStarting) return;
+  quickStarting = true;
+  try {
+    await quickStartOnce();
+  } finally {
+    quickStarting = false;
+  }
+}
+
+async function quickStartOnce() {
   notice("");
   hero = { text: "Choose the folder in the window that opened (it may be behind this one)." };
   redraw();
@@ -1001,15 +1024,18 @@ async function loadModels() {
 function renderForm() {
   const { draft, errors } = view;
   const local = onThisComputer(draft);
+  // On this computer, full access or computer and browser control need "Ask before commands".
+  const mustAsk = local && (draft.local_access !== "folder" || draft.computer_use !== false);
+  if (mustAsk) draft.approvals = "on-request";
   const running = Boolean(draft.id && state?.running.some((run) => run.setup_id === draft.id));
   const errorId = (field) => (errors[field] ? `err-${field}` : null);
   const describe = (...ids) => ids.filter(Boolean).join(" ") || null;
   const error = (field) => (errors[field] ? el("p", { class: "message", id: `err-${field}`, text: errors[field] }) : null);
-  const switchRow = (key, label, help, checked, onchange, extraClass) =>
+  const switchRow = (key, label, help, checked, onchange, extraClass, disabled = false) =>
     el(
       "label",
-      { class: `switch ${extraClass || ""}` },
-      el("input", { type: "checkbox", role: "switch", key, checked, onchange, "aria-describedby": help ? `help-${key}` : null }),
+      { class: `switch ${extraClass || ""}${disabled ? " off" : ""}` },
+      el("input", { type: "checkbox", role: "switch", key, checked, disabled, onchange, "aria-describedby": help ? `help-${key}` : null }),
       el("span", { class: "text" }, el("strong", { text: label }), help ? el("span", { class: "help", id: `help-${key}`, text: help }) : null),
     );
   const section = (title, ...children) => el("fieldset", { class: "section" }, el("legend", { text: title }), ...children);
@@ -1186,12 +1212,14 @@ function renderForm() {
       "ask",
       "Ask before commands",
       local
-        ? draft.local_access === "folder"
-          ? "On (recommended here): Codex asks before commands that need your OK. There's no sandbox around it on this computer."
-          : "On: needed with full access on this computer (there's no sandbox around Codex here)."
+        ? mustAsk
+          ? "On: Codex asks before each command and file change it doesn't know to be read-only. It stays on with full access or with computer and browser control (without it, the apps' own permission questions are turned down)."
+          : "On (recommended here): Codex asks before each command and file change it doesn't know to be read-only. There's no sandbox around it on this computer."
         : "Off (recommended): Codex runs commands without asking; the sandbox is what keeps it in.",
       draft.approvals === "on-request",
       (e) => ((draft.approvals = e.target.checked ? "on-request" : "never"), renderSummary()),
+      "",
+      local && mustAsk,
     ),
     error("approvals"),
     nameField,
@@ -1253,9 +1281,9 @@ function renderForm() {
           switchRow(
             "computer-use",
             "Computer and browser control",
-            "Computer Use (your Mac's apps), the app's own browser and your Chrome. macOS asks once for Screen Recording and Accessibility.",
+            "Computer Use (your Mac's apps) and the app's own browser. macOS asks once for Screen Recording and Accessibility. Control of your own Chrome isn't supported yet.",
             draft.computer_use !== false,
-            (e) => ((draft.computer_use = e.target.checked), renderSummary()),
+            (e) => ((draft.computer_use = e.target.checked), renderForm()),
           ),
         )
       : section(

@@ -523,8 +523,8 @@ def local_summary(setup: Setup, layout: folders.Layout) -> list[str]:
         lines.append("Codex can read, change and DELETE any of your files, not only these.")
         lines.append("Internet: ON, everything this Mac can reach (full access doesn't limit it).")
     lines.append(
-        "Computer and browser control: ON (Computer Use, the app's browser, your Chrome). macOS asks you "
-        'once for Screen Recording and Accessibility, for "Codex Computer Use".'
+        "Computer and browser control: ON (Computer Use and the app's own browser; not your Chrome "
+        'yet). macOS asks you once for Screen Recording and Accessibility, for "Codex Computer Use".'
         if setup.computer_use
         else "Computer and browser control: off."
     )

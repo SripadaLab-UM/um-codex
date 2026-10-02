@@ -39,9 +39,12 @@ def test_local_config_provider_through_the_relay(tmp_path: Path) -> None:
     assert "requires_openai_auth" not in provider and "env_key" not in provider
     assert config["forced_login_method"] == "api"
     assert config["sandbox_mode"] == "danger-full-access"
-    assert config["approval_policy"] == "on-request"  # "ask me" by default on this computer
+    # "Ask before commands" is Codex's untrusted behaviour, through the projects' trust level
+    # (config's approval_policy = "untrusted" is refused since 0.157.1).
+    assert "approval_policy" not in config
     assert config["approvals_reviewer"] == "user"  # no "Approve for me": no reviewer model on the Toolkit
-    assert config["projects"][str(tmp_path / "work")] == {"trust_level": "trusted"}
+    assert config["projects"][str(tmp_path / "work")] == {"trust_level": "untrusted"}
+    assert config["plugins"]["chrome@openai-bundled"] == {"enabled": False}  # Chrome: not yet
     # The app's own settings are kept.
     assert config["tui"] == {"theme": "dark"}
     assert config["model_providers"]["other"]["base_url"] == "http://example.invalid"
@@ -61,7 +64,18 @@ def test_local_config_this_folder_only(tmp_path: Path) -> None:
     )
     config = tomllib.loads(text)
     assert config["sandbox_mode"] == "workspace-write"
-    assert config["approval_policy"] == "on-request"
+    assert "approval_policy" not in config
+    never = tomllib.loads(
+        tc.local_config("approval_policy = \"on-request\"\n", port=1, token_command=["x"], model="m",
+                        folders=[tmp_path], approval_policy="never")
+    )  # fmt: skip
+    assert never["approval_policy"] == "never" and never["projects"][str(tmp_path)] == {
+        "trust_level": "trusted"
+    }
+    # Asking again: what an earlier start (or the app) saved goes.
+    assert "approval_policy" not in tomllib.loads(
+        tc.local_config('approval_policy = "never"\n', port=1, token_command=["x"], model="m", folders=[])
+    )
     assert config["sandbox_workspace_write"] == {"network_access": False, "writable_roots": []}
     roots = tomllib.loads(
         tc.local_config(
@@ -227,7 +241,8 @@ def test_local_config_switches_computer_and_browser_control(tmp_path: Path) -> N
     untouched = tomllib.loads(
         tc.local_config("", port=1, token_command=["um-codex", "local-token"], model="m", folders=[])
     )
-    assert "plugins" not in untouched
+    assert untouched["plugins"] == {"chrome@openai-bundled": {"enabled": False}}  # only Chrome, always
+    assert "unified-computer-use" in tc.CONTROL_PLUGINS and "chrome" not in tc.CONTROL_PLUGINS
 
 
 # --- The launcher's API
@@ -432,7 +447,7 @@ def test_run_local_opens_the_copy_and_holds_the_relay_until_it_quits(tmp_path: P
     assert seen["status"] == 204
     home, _ = tc.copy_paths(data)
     config = tomllib.loads((home / "config.toml").read_text())
-    assert config["model_provider"] == "toolkit" and config["approval_policy"] == "on-request"
+    assert config["model_provider"] == "toolkit" and "approval_policy" not in config
     state = json.loads((home / ".codex-global-state.json").read_text())
     assert state["selected-project"]["type"] == "local"
     # The copy quit: the launch ended, the token went, nothing of the key anywhere.
@@ -705,7 +720,10 @@ def test_full_access_without_asking_is_refused(tmp_path: Path) -> None:
     setup = Setup(**{**local_setup(work).__dict__, "approvals": "never"})
     code, copy, said, _ = run_held(tmp_path, lambda s: None, setup=setup)
     assert code == 1 and said == [tc.FULL_AND_NEVER] and copy.commands == []
-    assert tc.local_refusal(Setup(**{**setup.__dict__, "local_access": "folder"})) is None
+    # Computer and browser control need asking too (the apps' questions would be turned down).
+    folder = Setup(**{**setup.__dict__, "local_access": "folder"})
+    assert tc.local_refusal(folder) == tc.FULL_AND_NEVER
+    assert tc.local_refusal(Setup(**{**folder.__dict__, "computer_use": False})) is None
 
 
 def test_full_access_without_asking_is_refused_by_the_api(tmp_path: Path) -> None:
@@ -719,7 +737,9 @@ def test_full_access_without_asking_is_refused_by_the_api(tmp_path: Path) -> Non
         refused = await h.post("/api/setups", body)
         assert refused.status == 400
         assert (await refused.json())["errors"]["approvals"] == tc.FULL_AND_NEVER
-        ok = await h.post("/api/setups", {**body, "local_access": "folder"})
+        control = await h.post("/api/setups", {**body, "local_access": "folder"})
+        assert (await control.json())["errors"]["approvals"] == tc.FULL_AND_NEVER  # control on: asks
+        ok = await h.post("/api/setups", {**body, "local_access": "folder", "computer_use": False})
         assert ok.status == 201
 
     ui.with_server(test)
@@ -836,3 +856,104 @@ def test_chrome_manifest_match_ignores_letter_case(tmp_path: Path) -> None:
     host = str(tc.local_folder(data).resolve()).upper() + "/codex-home/plugins/chrome/host"
     ours.write_text(json.dumps({"path": host}))
     assert len(tc.forget_chrome_manifests(data, home)) == 1 and not ours.exists()
+
+
+# --- The GUI round: Chrome's shared manifest, Stop's words, the quick start ---------------
+
+
+def chrome_setup(tmp_path: Path) -> tuple[Path, Path, Path]:
+    data, home = tmp_path / "data", tmp_path / "home"
+    manifest = tc.chrome_manifests(home)[0]
+    manifest.parent.mkdir(parents=True)
+    tc.local_folder(data).mkdir(parents=True)
+    return data, home, manifest
+
+
+def ours_manifest(data: Path) -> str:
+    host = tc.local_folder(data) / "codex-home" / "plugins" / "cache" / "openai-bundled" / "chrome" / "host"
+    return json.dumps({"name": "com.openai.codexextension", "path": str(host)})
+
+
+PERSONS = json.dumps(
+    {"name": "com.openai.codexextension", "path": "/Users/me/.codex/plugins/cache/chrome/host"}
+)
+
+
+def test_the_persons_chrome_manifest_is_put_back(tmp_path: Path) -> None:
+    data, home, manifest = chrome_setup(tmp_path)
+    manifest.write_text(PERSONS)
+    tc.remember_chrome_manifests(data, home)
+    manifest.write_text(ours_manifest(data))  # the local copy's Chrome plugin wrote its own
+    lines = tc.restore_chrome_manifests(data, home)
+    assert manifest.read_text() == PERSONS and len(lines) == 1 and "Put back" in lines[0]
+    assert not (tc.local_folder(data) / tc.CHROME_BACKUP).exists()
+
+
+def test_a_manifest_the_copy_made_is_removed_when_there_was_none(tmp_path: Path) -> None:
+    data, home, manifest = chrome_setup(tmp_path)
+    tc.remember_chrome_manifests(data, home)
+    manifest.write_text(ours_manifest(data))
+    assert tc.restore_chrome_manifests(data, home) and not manifest.exists()
+
+
+def test_a_manifest_the_persons_app_rewrote_is_left(tmp_path: Path) -> None:
+    data, home, manifest = chrome_setup(tmp_path)
+    tc.remember_chrome_manifests(data, home)
+    manifest.write_text(PERSONS)  # their own app started meanwhile and wrote its own
+    assert tc.restore_chrome_manifests(data, home) == [] and manifest.read_text() == PERSONS
+
+
+def test_a_backup_left_by_a_crash_isnt_overwritten(tmp_path: Path) -> None:
+    data, home, manifest = chrome_setup(tmp_path)
+    manifest.write_text(PERSONS)
+    tc.remember_chrome_manifests(data, home)
+    manifest.write_text(ours_manifest(data))  # the launch was killed before restoring
+    tc.remember_chrome_manifests(data, home)  # the next start
+    tc.restore_chrome_manifests(data, home)
+    assert manifest.read_text() == PERSONS
+
+
+def test_the_shared_chrome_registry_loses_only_the_local_copys_entries(tmp_path: Path) -> None:
+    data, home, _ = chrome_setup(tmp_path)
+    registry = tc.chrome_registry(home)
+    registry.parent.mkdir(parents=True)
+    local_home = str(tc.local_folder(data) / "codex-home")
+    theirs = {"installId": "a", "paths": {"codexHome": "/Users/me/.codex", "extensionHostPath": "/x/host"}}
+    ours = {"installId": "b", "paths": {"codexHome": local_home, "extensionHostPath": local_home + "/p/host"}}
+    registry.write_text(json.dumps({"schemaVersion": 2, "entries": [theirs, ours]}))
+    assert tc.forget_chrome_registry(data, home) is True
+    assert json.loads(registry.read_text()) == {"schemaVersion": 2, "entries": [theirs]}
+    assert tc.forget_chrome_registry(data, home) is False  # nothing more of ours
+    registry.write_text("not json")
+    assert tc.forget_chrome_registry(data, home) is False and registry.read_text() == "not json"
+
+
+def test_run_local_puts_the_chrome_manifest_back_after_the_copy(tmp_path: Path) -> None:
+    home = Path(os.environ["HOME"])  # the tests' own home (conftest)
+    manifest = tc.chrome_manifests(home)[0]
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(PERSONS)
+    data = tmp_path / "data"
+
+    class WritingCopy(FakeCopy):
+        def __call__(self, command, **kwargs):
+            if command[0] == "/usr/bin/open":
+                manifest.write_text(ours_manifest(self.data))  # as the app's Chrome plugin would
+            return super().__call__(command, **kwargs)
+
+    copy = WritingCopy(data, lifetime=0.3)
+    # Polling reaps the stand-in's ended process (a real copy isn't UM-Codex's child).
+    code, _, _, _ = run_held(tmp_path, lambda s: (time.sleep(0.05), copy.alive()), copy=copy)
+    assert code == 0 and manifest.read_text() == PERSONS
+
+
+def test_stop_on_this_computer_has_its_own_words_and_quick_start_runs_once() -> None:
+    static = Path(__file__).resolve().parents[1] / "src" / "umcodex" / "ui" / "static"
+    script = (static / "app.js").read_text()
+    stop = script[script.index("async function stopLaunch") :]
+    stop = stop[: stop.index("\n}\n")]
+    assert "UM-Codex's Codex window on this computer closes. Chats are kept." in stop
+    assert stop.index("run.app?.local") < stop.index("can't reconnect")
+    quick = script[script.index("async function quickStart()") :]
+    assert quick.index("if (quickStarting) return;") < quick.index("quickStartOnce()")
+    assert "Control of your own Chrome isn't supported yet." in script

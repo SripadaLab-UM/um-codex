@@ -1406,7 +1406,7 @@ def test_the_page_starts_at_once_and_asks_only_before_stop_and_delete():
     assert "/prepare" not in script  # no summary page before a start
     # Its definition, Stop, Delete, Windows' fix, and choosing "On this computer" (M4: the one
     # deliberate pop-up when the choice is made; Start never asks).
-    assert script.count("confirmBox(") == 5
+    assert script.count("confirmBox(") == 6  # and Stop on this computer (its own words)
     assert "/api/codex-app/allow" not in script and "allow_ssh_include: true" in script
     # The safety facts, short, on every card and under the form.
     for words in ("your real files, no undo", "could send what it can read anywhere", "only the model"):

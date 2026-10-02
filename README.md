@@ -167,8 +167,8 @@ In a terminal: `um-codex launch --setup <name> --open app`.
 ### On this computer (Mac): computer and browser control
 
 The sandbox is the safe default. A setup can instead run Codex **directly
-on your Mac**, when you need it to use your apps (Computer Use), the Codex
-app's own browser, or your own Chrome. Use it only for that.
+on your Mac**, when you need it to use your apps (Computer Use) or the
+Codex app's own browser. Use it only for that.
 
 - In the setup's form, open **More options** → **Where Codex runs** → **On
   this computer**. UM-Codex asks once, then: *Codex will run on your Mac, not
@@ -186,15 +186,18 @@ app's own browser, or your own Chrome. Use it only for that.
   and file edits), with its own **Internet for Codex's commands** switch.
   That second choice doesn't limit computer and browser control: those act
   through your apps, which can change anything you can.
-- **Ask before commands** is on by default here, and needed with full
-  access. There's no "Approve for me" (the Toolkit has no reviewer model
-  for it).
+- **Ask before commands** is on by default here: Codex asks before each
+  command and file change it doesn't know to be read-only. It stays on with
+  full access or with computer and browser control (without it, the apps'
+  own permission questions are turned down). There's no "Approve for me"
+  (the Toolkit has no reviewer model for it).
 - **Computer and browser control** (on by default) turns on the app's
-  Computer Use, Browser and Chrome plugins. The first time, macOS asks for
-  **Screen Recording** and **Accessibility** for "Codex Computer Use";
-  Chrome needs the ChatGPT extension (Settings → Computer Use in that
-  window). Whether OpenAI offers these without a ChatGPT account is still
-  being checked.
+  Computer Use and its own browser; both work on the Toolkit with no
+  ChatGPT account. The first time, macOS asks for **Screen Recording** and
+  **Accessibility** for "Codex Computer Use", and the app asks before using
+  each app or site. **Control of your own Chrome isn't supported yet**: it's
+  kept off in that window, and UM-Codex puts back your own ChatGPT app's
+  Chrome connection if the window changed it.
 - Read-only folders aren't offered (Codex can read all your files here).
 - Your Toolkit key stays in the keychain, read only by UM-Codex's relay,
   which runs while that window is open. Quit the window, or press **Stop**,

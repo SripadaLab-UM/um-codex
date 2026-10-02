@@ -113,7 +113,7 @@ def uninstall(
     # of Computer Use, the app's plugins), its relay files and Chrome's link
     # to it always go; its settings and chats are data (below).
     local = this_computer.local_folder(data)
-    for line in this_computer.forget_chrome_manifests(data):
+    for line in this_computer.restore_chrome_manifests(data) + this_computer.forget_chrome_manifests(data):
         say(line)
     programs = [local / part for part in this_computer.PROGRAMS]
     relay_files = [local / name for name in (this_computer.TOKEN_FILE, this_computer.RELAY_PID_FILE)]

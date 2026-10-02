@@ -65,14 +65,21 @@ WARNING = (
 
 # The bundled plugins behind "computer and browser control" (the app's
 # `openai-bundled` marketplace): Computer Use, the in-app browser, Chrome.
-CONTROL_PLUGINS = ("computer-use", "browser", "chrome")
+# The bundled plugins behind "computer and browser control" (26.928's marketplace):
+# Computer Use and its unified backend, the in-app browser, and the two that
+# watch or act through the screen and apps (Record & Replay, Computer History).
+CONTROL_PLUGINS = ("computer-use", "unified-computer-use", "browser", "record-and-replay", "computer-history")
+# Chrome control: always off in the local copy for now. Its install writes the
+# ChatGPT extension's native host manifest for the whole macOS user (the
+# person's own app shares it), and the GUI round found it unusable here anyway.
+OFF_PLUGINS = ("chrome",)
 MARKETPLACE = "openai-bundled"
 
 NOTES = (
     "This window runs Codex on your Mac, not in the sandbox: it can do anything you can do here.",
     'Computer Use asks macOS once for Screen Recording and Accessibility, for "Codex Computer Use". '
     "Grant them in System Settings only if you want Codex to see and use your apps.",
-    "Chrome control needs the ChatGPT extension in Chrome (Settings > Computer Use in this window).",
+    "Control of your own Chrome isn't supported yet: it's off in this window.",
     "Quit this window (or Stop in UM-Codex) when you're done: the relay to the Toolkit ends with it.",
 )
 
@@ -154,10 +161,18 @@ def local_config(
         # this computer's relay, held by this person (local_token).
         "auth": {"command": token_command[0], "args": token_command[1:], "refresh_interval_ms": 300000},
     }
+    # "Ask before commands" (on-request from the setup): Codex's "untrusted"
+    # behaviour, which asks before every command it doesn't know to be
+    # read-only and before file edits (core/src/exec_policy.rs and
+    # tools/sandboxing.rs, rust-v0.157.1). With full access, on-request never
+    # asks (nothing needs escalating). `approval_policy = "untrusted"` itself
+    # is refused in config since 0.157.1 ("no longer supported"), so it comes
+    # from the projects' trust level, with no approval_policy set.
+    asks = approval_policy != "never"
     projects = config.get("projects")
     projects = projects if isinstance(projects, dict) else {}
     for folder in folders:
-        projects[str(folder)] = {"trust_level": "trusted"}
+        projects[str(folder)] = {"trust_level": "untrusted" if asks else "trusted"}
     config.update(
         {
             "model_provider": PROVIDER,
@@ -167,12 +182,15 @@ def local_config(
             "feedback": {"enabled": False},
             "model_providers": providers,
             "projects": projects,
-            "approval_policy": approval_policy,
             # The person reviews; "Approve for me" would need a reviewer model the Toolkit doesn't have.
             "approvals_reviewer": "user",
             **ACCESS[access],
         }
     )
+    if asks:
+        config.pop("approval_policy", None)
+    else:
+        config["approval_policy"] = "never"
     if access == "folder":
         # Codex 0.157.1 and 0.159.2: `SandboxWorkspaceWrite { writable_roots, network_access, ... }`.
         # Every project folder is writable, not only the chat's working folder.
@@ -182,9 +200,14 @@ def local_config(
         }
     else:
         config.pop("sandbox_workspace_write", None)
+    plugins = config.get("plugins")
+    plugins = plugins if isinstance(plugins, dict) else {}
+    for name in OFF_PLUGINS:
+        key = f"{name}@{MARKETPLACE}"
+        entry = plugins.get(key)
+        plugins[key] = {**(entry if isinstance(entry, dict) else {}), "enabled": False}
+    config["plugins"] = plugins
     if computer_use is not None:
-        plugins = config.get("plugins")
-        plugins = plugins if isinstance(plugins, dict) else {}
         for name in CONTROL_PLUGINS:
             key = f"{name}@{MARKETPLACE}"
             entry = plugins.get(key)
@@ -192,8 +215,6 @@ def local_config(
                 plugins[key] = {**(entry if isinstance(entry, dict) else {}), "enabled": False}
             elif isinstance(entry, dict) and entry.get("enabled") is False:
                 plugins[key] = {**entry, "enabled": True}  # switched back on: the app's choice again
-        if plugins:
-            config["plugins"] = plugins
     config["model"] = model
     if catalog is not None:
         config["model_catalog_json"] = str(catalog)
@@ -644,6 +665,7 @@ def run_local(
         elif app is None:
             state["copy"] = "not-opened"
         else:
+            remember_chrome_manifests(data)
             done = run(open_command(app, data), capture_output=True, timeout=60, check=False)
             pid = _open_wait(data, run, sleep) if done.returncode == 0 else None
             state["copy"] = "opened" if pid is not None else "failed"
@@ -670,6 +692,9 @@ def run_local(
         try:
             if running_copy(data, run) is not None:
                 quit_copy(data, run=run, sleep=sleep)
+            if running_copy(data, run) is None:
+                for line in restore_chrome_manifests(data):
+                    log.info("%s", line)
         finally:
             quiet()
             if relay is not None:
@@ -683,14 +708,15 @@ def local_refusal(setup) -> str | None:
     """Why a setup can't run on this computer as it is (None: it can)."""
     if setup.reads:
         return "Read-only folders aren't available on this computer: edit the setup and remove them."
-    if setup.local_access == "full" and setup.approvals == "never":
+    if setup.approvals == "never" and (setup.local_access == "full" or setup.computer_use):
         return FULL_AND_NEVER
     return None
 
 
 FULL_AND_NEVER = (
-    "On this computer with full access, Codex must ask before commands: turn on Ask before commands, "
-    "or choose Only this setup's folders."
+    "On this computer, Codex must ask before commands with full access or with computer and browser "
+    "control on (without asking, the apps' own permission questions are turned down): turn on Ask before "
+    "commands, or choose Only this setup's folders with computer and browser control off."
 )
 
 
@@ -781,9 +807,26 @@ def quit_copy(
     """Make sure UM-Codex's local copy has ended: asked to quit, then SIGTERM,
     then SIGKILL, each after a short wait. Only the process carrying the
     copy's profile folder. True when no copy is left."""
+    ended = quit_found(lambda: running_copy(data, run), run=run, sleep=sleep, patience=patience)
+    if not ended:
+        log.warning("UM-Codex's local Codex window didn't quit")
+    return ended
+
+
+def quit_found(
+    find: Callable[[], int | None],
+    *,
+    run: Runner = subprocess.run,
+    sleep: Callable[[float], None] = time.sleep,
+    patience: float = 10.0,
+) -> bool:
+    """End the app process `find` finds (it's looked for again before each
+    step, by its profile folder): asked to quit, then SIGTERM, then SIGKILL,
+    each after `patience` seconds. True when it's gone. Also used for the
+    sandbox copy (codex_app.AppHold, to reopen it set up for a new setup)."""
     import signal
 
-    pid = running_copy(data, run)
+    pid = find()
     if pid is None:
         return True
     steps = [
@@ -796,14 +839,13 @@ def quit_copy(
             step(pid)
         waited = 0.0
         while waited < patience:
-            if running_copy(data, run) is None:
+            if find() is None:
                 return True
             sleep(0.5)
             waited += 0.5
-        pid = running_copy(data, run)
+        pid = find()
         if pid is None:
             return True
-    log.warning("UM-Codex's local Codex window didn't quit")
     return False
 
 
@@ -854,6 +896,114 @@ def forget_chrome_manifests(data: Path, home: Path | None = None) -> list[str]:
                     f"Removed Chrome's link to UM-Codex's local Codex window ({path.parent.parent.name})."
                 )
     return removed
+
+
+# The person's Chrome connection. The app's Chrome plugin writes the ChatGPT
+# extension's native host manifest (`com.openai.codexextension.json`, for the
+# whole macOS user) and an entry in a shared registry
+# (~/Library/Application Support/OpenAI/Codex/chrome-native-hosts-v2.json)
+# when it installs or reconciles the plugin, which the app does at start
+# (26.928's bootstrap: DF → JF and AF). The local copy keeps Chrome off, but
+# UM-Codex still keeps what was there: before the copy opens, the manifests
+# are remembered (`chrome-manifests.json` in the local folder, kept until
+# restored, so a crash doesn't lose them); after it quits (and at uninstall),
+# a manifest that now leads into the local copy is put back, or removed if
+# there was none, and the registry's entries for the local copy are taken out.
+# A manifest that leads elsewhere (the person's own app rewrote it) is left.
+
+CHROME_BACKUP = "chrome-manifests.json"
+
+
+def chrome_registry(home: Path | None = None) -> Path:
+    home = home or Path.home()
+    return home / "Library" / "Application Support" / "OpenAI" / "Codex" / "chrome-native-hosts-v2.json"
+
+
+def _leads_into_local(path: Path, data: Path) -> bool:
+    try:
+        target = json.loads(path.read_text(encoding="utf-8"))["path"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return isinstance(target, str) and _inside(Path(target).resolve(), local_folder(data).resolve())
+
+
+def remember_chrome_manifests(data: Path, home: Path | None = None) -> None:
+    """Before the copy opens: what each manifest is now (None: there's none,
+    or it's already the local copy's). A backup from a launch that didn't
+    restore it is kept, never overwritten with the local copy's manifest."""
+    backup = local_folder(data) / CHROME_BACKUP
+    if backup.exists():
+        return
+    saved: dict[str, str | None] = {}
+    for path in chrome_manifests(home):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = None
+        saved[str(path)] = None if text is None or _leads_into_local(path, data) else text
+    _private_folder(local_folder(data))
+    _private_write(backup, json.dumps(saved))
+
+
+def restore_chrome_manifests(data: Path, home: Path | None = None) -> list[str]:
+    """After the copy quits (and at uninstall): put back the person's
+    manifests that the copy replaced, remove the copy's own, and take the
+    copy's entries out of the shared registry. Lines saying what changed."""
+    backup = local_folder(data) / CHROME_BACKUP
+    try:
+        saved = json.loads(backup.read_text(encoding="utf-8"))
+        saved = saved if isinstance(saved, dict) else {}
+    except (OSError, ValueError):
+        saved = {}
+    changed = []
+    for path in chrome_manifests(home):
+        if not _leads_into_local(path, data):
+            continue  # untouched, or the person's own app wrote it since
+        before = saved.get(str(path))
+        with contextlib.suppress(OSError):
+            if isinstance(before, str):
+                _replace(path, before.encode("utf-8"), mode=0o644)
+                changed.append(f"Put back Chrome's link to your own ChatGPT app ({path.parent.parent.name}).")
+            else:
+                path.unlink()
+                changed.append(
+                    f"Removed Chrome's link to UM-Codex's local Codex window ({path.parent.parent.name})."
+                )
+    forget_chrome_registry(data, home)
+    backup.unlink(missing_ok=True)
+    return changed
+
+
+def forget_chrome_registry(data: Path, home: Path | None = None) -> bool:
+    """Take the local copy's entries out of the app's shared Chrome registry
+    (only those whose paths lead into the local folder; the rest, and the
+    file's shape, are kept). False when nothing was changed."""
+    path = chrome_registry(home)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    entries = raw.get("entries") if isinstance(raw, dict) else None
+    if not isinstance(entries, list):
+        return False
+    ours = local_folder(data).resolve()
+
+    def local_entry(entry: object) -> bool:
+        paths = entry.get("paths") if isinstance(entry, dict) else None
+        if not isinstance(paths, dict):
+            return False
+        return any(
+            isinstance(paths.get(k), str) and _inside(Path(paths[k]).resolve(), ours)
+            for k in ("codexHome", "extensionHostPath")
+        )
+
+    kept = [e for e in entries if not local_entry(e)]
+    if len(kept) == len(entries):
+        return False
+    with contextlib.suppress(OSError):
+        _replace(path, (json.dumps({**raw, "entries": kept}, indent=2) + "\n").encode("utf-8"), mode=0o644)
+        return True
+    return False
 
 
 # What uninstall always removes from the local copy, even when the data is

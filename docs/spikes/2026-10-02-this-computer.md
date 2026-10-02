@@ -488,17 +488,12 @@ and record each prompt's exact words. Screenshot each "Expect".
     name). Grant for this test only. Expect 144, and screenshots in the
     chat. Then System Settings > Privacy & Security > Screen Recording and
     Accessibility: list the "Codex Computer Use" entries (question 3).
-23. Edit "here": "Only this setup's folders", "Ask before commands" off
-    (allowed there); Start; repeat 22 (question 4).
+23. (Changed after the round: with computer and browser control on,
+    "Ask before commands" can't be turned off; see R4.)
 24. "@Browser open https://example.com and tell me the heading": the
     app's own browser pane and the answer.
-25. Chrome (question 5): Settings > Computer Use > Google Chrome. Stop here
-    unless the maintainer wants the extension installed. If so: install it,
-    "@Chrome open example.com and read its heading", record the site
-    prompt; record the `path` in
-    `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.openai.codexextension.json`
-    before and after; then check the person's own ChatGPT app can still
-    use Chrome.
+25. (Changed after the round: Chrome control is off in the local copy and
+    not offered; see R1.)
 26. Edit "here": "Computer and browser control" off, Stop and Start.
     Expect: Computer Use, Browser and Chrome not offered (or disabled) in
     the local window; `config.toml` has them `enabled = false`.
@@ -526,6 +521,80 @@ and record each prompt's exact words. Screenshot each "Expect".
 29. List any macOS permissions granted during the round for the maintainer
     to remove if wanted.
 
+
+## The GUI round's results (at b61b17f) and the re-test
+
+Passed: the first run and returning flows; the caution dialog (Cancel
+default; Return and Esc keep the sandbox); the local copy with no sign-in;
+the token and relay checks; the two copies kept apart; Stop, Cmd-Q and
+SIGTERM closing the copy; folders-only mode with `writable_roots`;
+**Computer Use through the Toolkit with no account** (Calculator 12×12 =
+144 after "Allow this conversation"); **the in-app browser** (after "Allow
+once").
+
+Fixed since (see DESIGN M4 and M6):
+1. Chrome: the local copy's Chrome plugin is always off ("not supported
+   yet" in the form); the person's manifest is remembered before the copy
+   opens and put back after it quits (and at uninstall); the copy's entries
+   leave the shared registry.
+2. Stop on this computer has its own question.
+3. "Ask before commands" really asks: Codex's untrusted behaviour, through
+   the projects' trust level (config's `approval_policy = "untrusted"` is
+   refused since 0.157.1).
+4. "Never" isn't allowed with computer and browser control (or full
+   access): the switch stays on with the reason; API and launch refuse it.
+5. Control off also turns off `unified-computer-use`, `record-and-replay`
+   and `computer-history`.
+6. Every Codex-app setup is seeded into the sandbox copy; a copy that's open
+   but doesn't know a new setup is reopened when no other launch uses it.
+7. "here 2": the page's quick start now ignores a second click while one
+   runs (the server's picker already allowed one at a time); the duplicate
+   was most likely the automation (Duplicate, then Delete).
+
+**Before the re-test, restore the maintainer's own Chrome control** (the
+round left the manifest pointing into the scratch copy). Don't edit the
+file by hand: quit the person's own ChatGPT app (Cmd-Q) and open it again.
+At start it reconciles its bundled plugins and, with its Chrome plugin
+installed, rewrites the manifest and its registry entry for itself
+(VERIFIED bundle 26.928.40906, `DF`; UNSURE whether every start rewrites
+it). Then check that the `path` in
+`~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.openai.codexextension.json`
+leads into `~/.codex/plugins/…`. If it still leads into the scratch folder:
+in the person's own app, Plugins → Chrome, turn it off and on again (or
+reinstall it), then check again. Deleting the scratch data folder later is
+safe once the manifest no longer leads into it.
+
+**Short re-test** (same scratch data folder, from this branch):
+- R1, Chrome. Note the manifest's `path` (it must lead into the person's
+  own app, as above). Start "here" (on this computer). Expect: the form
+  and card say Chrome control isn't supported yet; the copy's
+  `config.toml` has `chrome@openai-bundled` `enabled = false`; `@` offers
+  no Chrome. Quit the window. Expect: the manifest's `path` is what it was
+  before; `codex-app-local/chrome-manifests.json` is gone; the person's
+  own app's @Chrome still works (if it did before).
+- R2, Stop's words. Start "here", Stop on its card. Expect "Stop “here”?
+  UM-Codex's Codex window on this computer closes. Chats are kept."
+- R3, asking. "here" with full access and "Ask before commands" on. Ask
+  Codex to create `hi.txt`. Expect: the app asks before it (and before a
+  command such as `touch`); `ls` may run unasked. Record what the app's
+  permission picker shows for the chat (if it shows its own "Ask for
+  approval"/"Full access" choice and that overrides the trust level, say
+  so: then the switch needs rewording instead).
+- R4, never. Edit "here": with computer and browser control on, the "Ask
+  before commands" switch is on and greyed with the reason; choose "Only
+  this setup's folders" and turn control off: it can be turned off; saving
+  works. With control on and "never" sent through the API, the save is
+  refused.
+- R5, control off. With control off, Start: `config.toml` has
+  `computer-use`, `unified-computer-use`, `browser`, `record-and-replay`
+  and `computer-history` `enabled = false`; the window offers none of
+  them.
+- R6, a new sandbox setup while the copy is open. With "demo" stopped but
+  the sandbox copy open, make a new Codex-app setup "demo2" and Start it.
+  Expect: the card says "Reopening the Codex window…", the copy quits and
+  opens again on "demo2", connected, with "demo" in its sidebar too. Then,
+  with "demo" running in the copy, make "demo3" and Start it: the copy is
+  left open and the card shows the guided steps.
 
 ## Sources
 

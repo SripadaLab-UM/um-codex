@@ -219,8 +219,10 @@ def setup_from(
     local_access = body.get("local_access") or "full"
     if local_access not in LOCAL_ACCESS:
         errors["local_access"] = "That choice of what Codex can change wasn't understood."
-    if runs_on == "this-computer" and local_access == "full" and approvals == "never":
-        # Full access on the Mac with nothing asked: refused (approvals is in More options).
+    computer_use = body.get("computer_use") is not False
+    if runs_on == "this-computer" and approvals == "never" and (local_access == "full" or computer_use):
+        # On the Mac with nothing asked, with full access or with computer and browser control
+        # (whose own permission questions would be turned down): refused (More options).
         errors.setdefault("approvals", this_computer.FULL_AND_NEVER)
     if runs_on == "this-computer" and reads and "folders" not in errors:
         errors["folders"] = (
@@ -246,7 +248,7 @@ def setup_from(
         open_in=open_in,
         runs_on=runs_on,
         local_access=local_access,
-        computer_use=body.get("computer_use") is not False,
+        computer_use=computer_use,
     )
 
 

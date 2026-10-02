@@ -787,12 +787,25 @@ modes, rigor, and the frontend.
      that it doesn't limit computer and browser control, and then an
      "Internet for Codex's commands" switch (`network_access`; with full
      access the line says the internet is everything the Mac can reach);
-     "Ask before commands" on by default, and required with full access
-     (the API refuses full access with "never", and so does the launch: a
-     setup edited in the terminal could have it); "Computer and browser
-     control" (`computer_use`, default on); no sandbox browser tool; "Open
-     in" is the local window. The summary and the card say which internet
-     applies.
+     "Ask before commands" on by default, and required (the switch shown
+     on and greyed, with the reason) with full access or with computer and
+     browser control, since under "never" Codex turns the apps' own
+     permission questions down (the GUI round: "Calculator access wasn't
+     approved"); the API refuses those combinations, and so does the
+     launch (a setup edited in the terminal could have one). "Ask before
+     commands" is Codex's untrusted behaviour: it asks before every command
+     it doesn't know to be read-only and before file edits
+     (`core/src/exec_policy.rs`, `tools/sandboxing.rs`, rust-v0.157.1). With
+     full access, `on-request` never asks (nothing needs escalating: the
+     GUI round's hi.txt was made unasked), and `approval_policy =
+     "untrusted"` in config.toml is refused since 0.157.1 ("no longer
+     supported"), so it comes from the projects' `trust_level = "untrusted"`
+     with no `approval_policy` set; "never" sets `approval_policy = "never"`
+     and the projects trusted. "Computer and browser control"
+     (`computer_use`, default on) means Computer Use and the app's own
+     browser; control of the person's own Chrome isn't supported yet (the
+     form says so). No sandbox browser tool; "Open in" is the local window.
+     The summary and the card say which internet applies.
    - **A separate app copy**, `<data>/codex-app-local/` (`codex-home`,
      `user-data`, `relay-port`, `relay-token`, `models.json`), opened as M6
      opens its copy (`open -n --env CODEX_HOME=… --env
@@ -807,11 +820,13 @@ modes, rigor, and the frontend.
      (`um-codex local-token`, below)
      and no `requires_openai_auth` (no sign-in), `forced_login_method =
      "api"`, analytics, feedback and update checks off, the setup's model,
-     the bundled catalog (no upgrade offers), `approval_policy` from the
-     setup, `approvals_reviewer = "user"` (no "Approve for me": it needs a
-     reviewer model the Toolkit doesn't have), the folders trusted, and,
-     with control off, `plugins."<name>@openai-bundled".enabled = false`
-     for `computer-use`, `browser` and `chrome` (switched back on, a false
+     the bundled catalog (no upgrade offers), the approvals as above,
+     `approvals_reviewer = "user"` (no "Approve for me": it needs a
+     reviewer model the Toolkit doesn't have), `plugins."chrome@openai-bundled".enabled
+     = false` always, and, with control off, the same for `computer-use`,
+     `unified-computer-use`, `browser`, `record-and-replay` and
+     `computer-history` (26.928's computer-use backends and the plugins
+     that watch or act through the screen; switched back on, a false
      UM-Codex wrote is set true; otherwise the app's own choice). These are
      defaults the person can change in the app: nothing on a Mac enforces
      settings for one copy only.
@@ -853,7 +868,28 @@ modes, rigor, and the frontend.
      and that the token file is this person's and private; otherwise it
      prints nothing on stdout and exits 1 (Codex then waits for the
      network). So a program that took the port never gets the token.
-   - **Stop** in the launcher asks UM-Codex's local copy to quit
+   - **The person's Chrome connection.** The app's Chrome plugin writes the
+     ChatGPT extension's native host manifest
+     (`~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.openai.codexextension.json`,
+     and Chromium's and Chrome for Testing's) for the whole macOS user, and
+     an entry in a shared registry
+     (`~/Library/Application Support/OpenAI/Codex/chrome-native-hosts-v2.json`,
+     per install: a hash of the host name, resources path and CODEX_HOME),
+     whenever it installs or reconciles the plugin, which it does at start
+     (26.928's bootstrap: `DF` writes both). The GUI round found the
+     manifest pointing into the local copy after it started, and the local
+     copy's own @Chrome unusable ("its Codex connection is unavailable").
+     So Chrome is off in the local copy, and around each launch UM-Codex
+     remembers the manifests before the copy opens
+     (`codex-app-local/chrome-manifests.json`, kept until restored, never
+     overwritten by a later start) and, after it quits and at uninstall,
+     puts back one that now leads into the local copy (or removes it if
+     there was none), leaves one that leads elsewhere (the person's own app
+     rewrote it), and takes the local copy's entries out of the shared
+     registry (only those whose paths lead into its folder; a file of
+     another shape is left).
+   - **Stop** in the launcher (its question: "Stop “<name>”? UM-Codex's
+     Codex window on this computer closes. Chats are kept.") asks UM-Codex's local copy to quit
      (`stop_local`: the process whose arguments carry the copy's profile
      folder, whatever PID the launch noted; through AppKit as its Quit menu
      does, else SIGTERM); its launch then ends and makes sure it has.
@@ -864,6 +900,9 @@ modes, rigor, and the frontend.
      Toolkit through the relay while the copy is open; and Codex, running as
      the person, may be able to read UM-Codex's keychain item the way
      UM-Codex does.
+   - **Computer Use and the in-app browser work** with no ChatGPT account,
+     on the Toolkit (the GUI round: Calculator 12×12 = 144 after "Allow
+     this conversation"; the in-app browser after "Allow once").
    - **Computer Use, the in-app browser and Chrome** are OpenAI's bundled
      plugins in that copy, behind its remote flags (Statsig gates
      `1506311413`, `410262010`, `410065390`), the Codex features
@@ -1344,6 +1383,18 @@ modes, rigor, and the frontend.
        --bundled`, with no `availability_nux` or `upgrade`), so no model
        qualifies for an announcement; the remote side already has
        UM-Codex's catalog. Nothing switches the model.
+
+     **Every Codex-app setup is set up at once** (the M4 GUI round: a
+     second setup started while the copy was open stayed at "Opening
+     Codex", since the open copy knew only the first): each launch gives
+     every saved setup that opens in the Codex app (in the sandbox) its key
+     and Host, and seeds all their hosts and projects, the started one last
+     (selected and first). **A copy that's open but doesn't know the setup**
+     (one made after the copy opened, `copy_knows`) is quit (asked as its
+     Quit menu does, then SIGTERM, then SIGKILL), set up and opened again,
+     with the card saying "Reopening the Codex window… so it knows this
+     setup", when no other setup's launch in the app uses it (Mac only);
+     otherwise it's left as it is and the guided steps show, as before.
 
      The rest of the file is kept; it's written whole (temporary file and
      rename), with its backup. If a key UM-Codex touches has a shape it

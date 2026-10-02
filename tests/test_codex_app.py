@@ -1826,7 +1826,9 @@ def test_folder_rules_come_from_icacls_save(tmp_path):
 
     def run(command, **options):
         asked.append(command)
-        Path(command[3]).write_bytes("with-mode\r\nD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)\r\n".encode("utf-16-le"))
+        Path(command[3]).write_bytes(
+            "with-mode\r\nD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)\r\n".encode("utf-16-le")
+        )
         return subprocess.CompletedProcess(command, 0, "", "")
 
     assert win.saved_rules(tmp_path, run) == "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)"
@@ -1878,3 +1880,112 @@ def test_a_rollback_whose_permissions_cant_be_put_back_says_so(ssh_home, monkeyp
     assert config.read_text() == "Host mine\n"
     assert calls == [codex_app.BACKUP_NAME, "config", "config"]  # the third, the rollback's, failed
     assert "not its permissions" in str(raised.value) and "Bad permissions" in str(raised.value)
+
+
+# --- Every Codex-app setup is known to the copy; a copy that isn't is reopened (GUI round) ---
+
+
+def _save_app_setups(tmp_path: Path) -> None:
+    from umcodex.setups import SetupStore
+
+    store = SetupStore()
+    for setup in (
+        Setup(id="thesis-a1", name="Thesis", working=str(tmp_path), open_in="codex-app"),
+        Setup(id="other-b2", name="Other", working=str(tmp_path), open_in="codex-app"),
+        Setup(id="here-c3", name="Here", working=str(tmp_path), open_in="codex-app", runs_on="this-computer"),
+        Setup(id="term-d4", name="Term", working=str(tmp_path), open_in="terminal"),
+    ):
+        store.save(setup)
+
+
+def test_the_copy_is_set_up_with_every_codex_app_setup(tmp_path, data_folder, ssh_home):
+    _save_app_setups(tmp_path)
+    running = _running(tmp_path, data_folder)
+    hold = codex_app.AppHold(
+        "thesis-a1", say=lambda _: None, data=data_folder, app=Path("/Applications/ChatGPT.app"),
+        docker=FakeDocker(running_for=3, connects_after=1), run=_ran([]), sleep=lambda _: None,
+        proxy_for=lambda s: ["/x/um-codex", "ssh-proxy", s],
+    )  # fmt: skip
+    assert hold(running) == 0
+    home, _ = codex_app.copy_paths(data_folder)
+    state = json.loads((home / ".codex-global-state.json").read_text())
+    hosts = set(state["remote-connection-auto-connect-by-host-id"])
+    assert hosts == {"remote-ssh-discovered:umcodex-thesis-a1", "remote-ssh-discovered:umcodex-other-b2"}
+    assert state["selected-project"]["projectId"] == codex_app.project_id("thesis-a1", data_folder)
+    assert state["project-order"][0] == codex_app.project_id("thesis-a1", data_folder)
+    assert codex_app.copy_knows("other-b2", data_folder) and not codex_app.copy_knows("here-c3", data_folder)
+    config = (ssh_home / ".ssh" / "um-codex" / "config").read_text()
+    assert "Host umcodex-other-b2" in config and "Host umcodex-here-c3" not in config
+
+
+class OpenCopy:
+    """`ps` lists UM-Codex's copy until it's asked to quit; everything else answers ok."""
+
+    def __init__(self, data: Path) -> None:
+        self.data = data
+        self.open = True
+        self.calls: list[list[str]] = []
+
+    def __call__(self, command, **options):
+        self.calls.append(list(command))
+        if command[0] == "ssh-keygen":
+            key = Path(command[command.index("-f") + 1])
+            key.write_text("private")
+            key.with_name(key.name + ".pub").write_text("ssh-ed25519 AAAA test\n")
+        if command[0] == "/bin/ps":
+            _, user_data = codex_app.copy_paths(self.data)
+            line = f"4242 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT --user-data-dir={user_data}\n"
+            return subprocess.CompletedProcess(command, 0, line if self.open else "", "")
+        if command[0] == "/usr/bin/osascript" and "terminate()" in " ".join(command):
+            self.open = False
+            return subprocess.CompletedProcess(command, 0, "ok\n", "")
+        if command[0] == "/usr/bin/open":
+            self.open = True
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+
+def _open_copy_knowing_only_other(tmp_path: Path, data: Path) -> None:
+    _save_app_setups(tmp_path)
+    home, _ = codex_app.copy_paths(data)
+    home.mkdir(parents=True)
+    other = Setup(id="other-b2", name="Other", working=str(tmp_path), open_in="codex-app")
+    codex_app.seed_copy(home, other, data=data)
+
+
+def test_a_copy_that_doesnt_know_the_setup_is_reopened_set_up(tmp_path, data_folder, monkeypatch):
+    _open_copy_knowing_only_other(tmp_path, data_folder)
+    monkeypatch.setattr(launch, "running_launches", lambda data: [])
+    running = _running(tmp_path, data_folder)
+    run = OpenCopy(data_folder)
+    said: list[str] = []
+    hold = codex_app.AppHold(
+        "thesis-a1", say=said.append, data=data_folder, app=Path("/Applications/ChatGPT.app"),
+        docker=FakeDocker(running_for=3, connects_after=1), run=run, sleep=lambda _: None,
+        proxy_for=lambda s: ["/x/um-codex", "ssh-proxy", s], platform="darwin",
+    )  # fmt: skip
+    assert hold(running) == 0
+    quit_at = next(i for i, c in enumerate(run.calls) if "terminate()" in " ".join(c))
+    open_at = next(i for i, c in enumerate(run.calls) if c[0] == "/usr/bin/open")
+    assert quit_at < open_at  # quit, set up, opened again
+    assert codex_app.copy_knows("thesis-a1", data_folder) and codex_app.copy_knows("other-b2", data_folder)
+    info = json.loads((running.folder / "launch.json").read_text())["app"]
+    assert info["reopened"] is True and info["seeded"] is True and info["copy"] == "opened"
+    assert any("Reopening" in line for line in said)
+
+
+def test_a_copy_another_launch_uses_isnt_reopened(tmp_path, data_folder, monkeypatch):
+    _open_copy_knowing_only_other(tmp_path, data_folder)
+    other = launch.RunningLaunch("ffff0000", "other-b2", "Other", 90.0, app={"alias": "umcodex-other-b2"})
+    monkeypatch.setattr(launch, "running_launches", lambda data: [other])
+    running = _running(tmp_path, data_folder)
+    run = OpenCopy(data_folder)
+    hold = codex_app.AppHold(
+        "thesis-a1", say=lambda _: None, data=data_folder, app=Path("/Applications/ChatGPT.app"),
+        docker=FakeDocker(running_for=3, connects_after=None), run=run, sleep=lambda _: None,
+        proxy_for=lambda s: ["/x/um-codex", "ssh-proxy", s], platform="darwin",
+    )  # fmt: skip
+    hold(running)
+    assert not any("terminate()" in " ".join(c) for c in run.calls)
+    assert not any(c[0] == "/usr/bin/open" for c in run.calls)
+    info = json.loads((running.folder / "launch.json").read_text())["app"]
+    assert info["reopened"] is False and info["first_time"] is True  # the guided steps
