@@ -941,8 +941,17 @@ fi
 step "6/6 Launcher"
 NAME="UM-Codex"
 BUNDLE="edu.umich.umcodex"
-# Whether a bundle is UM-Codex's app (one this installer made).
-ours() { [ -f "$1/Contents/Info.plist" ] && grep -qF "<string>$BUNDLE</string>" "$1/Contents/Info.plist"; }
+# Whether a bundle is this UM-Codex's app (one this installer made): its
+# bundle id, and a script that runs this install's command, single-quoted as
+# every installer wrote it (umcodex/launchers.py: is_our_app), so another
+# account's UM-Codex in a shared /Applications is never taken for ours. Never
+# through a link.
+COMMAND_QUOTED="'$(printf '%s' "$UMCODEX" | sed "s/'/'\\\\''/g")'"
+ours() {
+  [ ! -L "$1" ] && [ ! -L "$1/Contents" ] && [ ! -L "$1/Contents/MacOS" ] \
+    && [ -f "$1/Contents/Info.plist" ] && grep -qF "<string>$BUNDLE</string>" "$1/Contents/Info.plist" \
+    && [ -f "$1/Contents/MacOS/$NAME" ] && grep -qF "$COMMAND_QUOTED" "$1/Contents/MacOS/$NAME"
+}
 # In /Applications, where people look, if you can add to it without sudo (an
 # administrator account can); otherwise in your own Applications folder
 # (~/Applications, which Finder, Spotlight and Launchpad also show). Only an
@@ -959,6 +968,13 @@ prepare() {
   fi
   mkdir -p "$target/Contents/MacOS" "$target/Contents/Resources" 2>/dev/null || return 2
 }
+# Which of the two are ours now, before either is touched: one that can't
+# be replaced may be left half-removed (no longer passing ours()), and is
+# still reported below.
+EARLIER_USER=0
+EARLIER_SYSTEM=0
+if ours "$USER_APPS/$NAME.app"; then EARLIER_USER=1; fi
+if ours "$SYSTEM_APPS/$NAME.app"; then EARLIER_SYSTEM=1; fi
 APPS=""
 if [ -d "$SYSTEM_APPS" ] && [ -w "$SYSTEM_APPS" ] && prepare "$SYSTEM_APPS"; then
   APPS="$SYSTEM_APPS"
@@ -977,47 +993,31 @@ else
   esac
 fi
 APP="$APPS/$NAME.app"
-# The icon comes with the package. The app keeps its own copy, so removing
-# this version's folder later doesn't take the icon with it.
-ICONFILE=""
-for found in "$TARGET"/lib/python*/site-packages/umcodex/branding/UM-Codex.icns; do
-  if [ -f "$found" ] && cp "$found" "$APP/Contents/Resources/UM-Codex.icns"; then ICONFILE="UM-Codex"; fi
-done
-cat > "$APP/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>CFBundleName</key><string>$NAME</string>
-  <key>CFBundleDisplayName</key><string>$NAME</string>
-  <key>CFBundleIdentifier</key><string>$BUNDLE</string>
-  <key>CFBundleExecutable</key><string>UM-Codex</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleIconFile</key><string>$ICONFILE</string>
-  <key>LSUIElement</key><true/>
-</dict></plist>
-PLIST
-# The app opens UM-Codex's launcher window (`um-codex ui --detach`): a page in
-# the browser, served by UM-Codex on this computer, where the person picks or
-# makes a setup. It runs in the background, so no Terminal window opens until
-# a setup is started (then the launcher opens one, with Codex in it), and the
-# app has no Dock icon of its own (LSUIElement in Info.plist).
-# The app runs bin/um-codex, never a version's own folder: that opens the
-# version `current` names, so the app (and the Desktop shortcut to it) keeps
-# working when another version is installed.
-# The path is single-quoted for the app's script ('\'' for a quote, as in
-# /Users/o'brien).
-QUOTED="$(printf '%s' "$UMCODEX" | sed "s/'/'\\\\''/g")"
-cat > "$APP/Contents/MacOS/UM-Codex" <<LAUNCH
-#!/bin/sh
-exec '$QUOTED' ui --detach
-LAUNCH
-chmod +x "$APP/Contents/MacOS/UM-Codex"
-touch "$APP" # so Finder picks up the icon
+# What the app contains comes from UM-Codex itself (umcodex/launchers.py),
+# which `um-codex update` also uses to bring it up to date, so the two never
+# differ: its Info.plist (bundle id, no Dock icon of its own), its own copy of
+# the icon, and a script that opens UM-Codex's launcher window (`um-codex ui
+# --detach`, a page in the browser; no Terminal window opens until a setup is
+# started). The script runs bin/um-codex, never a version's own folder: that
+# opens the version `current` names, so the app (and the Desktop shortcut to
+# it) keeps working when another version is installed.
+if ! "$UMCODEX" launchers --write "$APP"; then
+  # The half-made app is the one prepared above (an earlier one of ours was
+  # removed first, or there was none): removed, so it doesn't block the next run.
+  if [ ! -L "$APP" ]; then rm -rf "$APP" 2>/dev/null || true; fi
+  echo "The app couldn't be made in $APPS (the message above says why). Run this"
+  echo "installer again (UM-Codex itself is installed: run $RUN_HOW)."
+  exit 1
+fi
 echo "Added $NAME to $APPS."
 # An earlier installer's copy in the other Applications folder would be a
 # second, stale "$NAME".
 for other in "$USER_APPS/$NAME.app" "$SYSTEM_APPS/$NAME.app"; do
-  if [ "$other" != "$APP" ] && [ ! -L "$other" ] && ours "$other"; then
+  case "$other" in
+    "$USER_APPS/$NAME.app") earlier="$EARLIER_USER" ;;
+    *) earlier="$EARLIER_SYSTEM" ;;
+  esac
+  if [ "$other" != "$APP" ] && [ ! -L "$other" ] && [ -e "$other" ] && { [ "$earlier" = 1 ] || ours "$other"; }; then
     if rm -rf "$other" 2>/dev/null; then
       echo "(Removed the copy an earlier installer put in $(dirname "$other").)"
     else

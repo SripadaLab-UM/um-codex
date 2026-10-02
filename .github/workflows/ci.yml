@@ -377,3 +377,9 @@ jobs:
         run: |
           uv sync
           uv run pytest -q tests/test_ui.py -k windows_command
+      - name: The app's shortcuts are brought up to date (real shortcuts, through WScript.Shell)
+        # An alpha.1-style shortcut (Windows Terminal, `launch --from-app`) in a
+        # temporary Start menu folder is rewritten by `um-codex launchers
+        # --refresh`'s code, someone else's on a temporary Desktop is left
+        # alone, and a second run changes nothing. The rest of the file runs too.
+        run: uv run pytest -q tests/test_launchers.py -rs

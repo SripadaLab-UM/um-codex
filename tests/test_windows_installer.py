@@ -10,7 +10,7 @@ what the scripts promise each other, UM-Codex and the release.
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -510,34 +510,40 @@ def test_the_installer_needs_a_console_host():
 # --- Launchers -------------------------------------------------------------------
 
 
-def test_the_start_menu_and_desktop_shortcuts_open_the_launcher_window():
+def test_the_start_menu_and_desktop_shortcuts_are_written_by_um_codex_itself():
     seven = step(7)
     assert '$Links = @(Join-Path $StartMenu "$LinkName.lnk")' in seven
     assert '$LinkName = "UM-Codex"' in seven
     assert '[Environment]::GetFolderPath("Desktop")' in seven
     assert "$Links += $DesktopLink" in seven
-    # Windows PowerShell, hidden and minimized, starts the launcher window in
-    # the background; no terminal stays open.
-    assert "$LinkTarget = $WindowsPowerShell" in seven
-    assert '$LinkArguments = "-NoProfile -WindowStyle Hidden -Command `"$Launch`""' in seven
-    assert "$Shortcut.WindowStyle = 7" in seven
-    assert "-NoExit" not in code(seven) and "wt.exe" not in code(seven)
-    # The version `current` names, run directly (no cmd.exe "Terminate batch job?").
+    # What they contain comes from umcodex/launchers.py (as `um-codex update`
+    # rewrites them), never from the installer's own copy of it.
+    assert "& $UmCodex launchers --write @Links" in seven
+    after = seven[seven.index("& $UmCodex launchers --write @Links") :]
+    failed = after.index("if ($Wrote -ne 0) {")
+    assert '$Env:PYTHONUTF8 = "1"' in seven and "$Env:PYTHONUTF8 = $SavedUtf8" in seven
+    assert failed < after.index("Stop-Install") < after.index('Good "Added')
+    assert ".Save()" not in code(seven) and "$Shortcut." not in code(seven)
+    assert "Scripts\\um-codex.exe" not in code(seven) and "-NoExit" not in code(seven)
+    # Someone else's Desktop shortcut of that name is left alone, and it says
+    # so: UM-Codex's (any installer's, or launchers.py's) name the program
+    # folder, single-quoted, then "\\".
     assert "EscapeSingleQuotedStringContent($Root)" in seven
-    assert "$Marker = \"'$QuotedRoot\\current'\"" in seven
-    assert "\\Scripts\\um-codex.exe')" in seven and "um-codex.cmd" not in code(seven)
-    assert "\\Scripts\\um-codex.exe') ui --detach\"" in seven
-    launch = re.search(r"(?s)\$Launch = (.*?)\n\$LinkTarget", seven).group(1)
-    assert '`"' not in launch  # no double quotes inside -Command "..."
-    assert "([string](Get-Content -LiteralPath $Marker -TotalCount 1)).Trim()" in launch
-    assert "`$Env:PYTHONUTF8 = '1'" in launch
-    # Someone else's Desktop shortcut of that name is left alone, and it says so.
+    assert "$Marker = \"'$QuotedRoot\\\"" in seven
     assert ".IndexOf($Marker, [StringComparison]::OrdinalIgnoreCase) -lt 0" in seven
+    assert '.IndexOf($Marker.Replace(";", "\\;"), [StringComparison]::OrdinalIgnoreCase) -lt 0' in seven
     assert "that isn't UM-Codex's; it was left alone." in seven
-    # The icon comes from the package, kept beside bin\ (an update removes version folders).
-    assert '$Icons = Join-Path $Root "icons"' in seven
-    assert 'Join-Path $Target "Lib\\site-packages\\umcodex\\branding\\UM-Codex.ico"' in seven
-    assert '$Shortcut.IconLocation = "$Icon,0"' in seven
+
+
+def test_the_installers_marker_is_the_one_launchers_py_checks():
+    from umcodex import launchers
+
+    root = PureWindowsPath("C:/Users/o'brien/AppData/Local/UM-Codex/app")
+    # $Marker = "'$QuotedRoot\\", with EscapeSingleQuotedStringContent's quoting.
+    assert launchers.windows_marker(root) == "'" + str(root).replace("'", "''") + "\\"
+    shortcut = launchers.windows_shortcut(root, home="C:/Users/o'brien", powershell="ps.exe", icon=True)
+    assert launchers.is_our_shortcut(shortcut, root)
+    assert launchers.windows_marker(root) in shortcut.arguments
 
 
 def test_the_icon_the_launchers_name_comes_with_the_package():
@@ -595,6 +601,7 @@ def test_the_uninstaller_removes_only_what_the_installer_put_in_the_app_folder()
     body = code(UNINSTALL)
     # downloads: the updater's (DataLab 615cd0f).
     assert 'foreach ($name in "versions", "bin", "icons", "downloads")' in body
+    assert 'foreach ($name in "current", "previous", "launchers")' in body
     assert "if ($inRoot.Count -eq 0) { Remove-Tree $Root }" in body
     installer = 'foreach ($name in "installer", "install", "uv") { Remove-Tree (Join-Path $StateDir $name) }'
     assert installer in body
@@ -603,7 +610,7 @@ def test_the_uninstaller_removes_only_what_the_installer_put_in_the_app_folder()
 def test_the_uninstaller_removes_shortcuts_and_the_path_entry_and_reports_leftovers():
     body = code(UNINSTALL)
     assert '$Link = Join-Path $StartMenu "UM-Codex.lnk"' in body
-    assert "$Marker = \"'$QuotedRoot\\current'\"" in body  # the Desktop one only if it's ours
+    assert "$Marker = \"'$QuotedRoot\\\"" in body  # the Desktop one only if it's ours
     assert "it isn't UM-Codex's." in body
     assert "-not (Test-SamePath $_ $Bin)" in body and "Send-EnvironmentChanged" in body
     assert "couldn't be removed: a file still in use?" in body

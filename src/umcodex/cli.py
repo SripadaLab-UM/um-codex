@@ -7,6 +7,7 @@ um-codex setups     list, edit and delete saved setups
 um-codex key        save or replace the Toolkit API key
 um-codex doctor     check Docker, the images, the key and the Toolkit
 um-codex update     install a newer signed release (--rollback: back to the one before)
+um-codex launchers --refresh   bring the UM-Codex app or shortcuts up to date (update does this)
 """
 
 from __future__ import annotations
@@ -71,6 +72,24 @@ def main(argv: list[str] | None = None) -> int:
     update.add_argument(
         "--rollback", action="store_true", help="switch back to the version in use before the last update"
     )
+    links = commands.add_parser(
+        "launchers", help="bring the UM-Codex app (Mac) or shortcuts (Windows) up to date"
+    )
+    which = links.add_mutually_exclusive_group(required=True)
+    which.add_argument(
+        "--refresh",
+        action="store_true",
+        help="rewrite UM-Codex's own app or shortcuts, where they are, if they're out of date "
+        "(um-codex update does this)",
+    )
+    which.add_argument(
+        "--write",
+        nargs="+",
+        type=Path,
+        metavar="PATH",
+        help="for the installers: write the app (a .app folder) or shortcuts (.lnk files) at PATH",
+    )
+    links.add_argument("--dry-run", action="store_true", help="with --refresh: only say what would change")
     remove = commands.add_parser("uninstall", help="remove UM-Codex's containers, key, images and data")
     data = remove.add_mutually_exclusive_group()
     data.add_argument("--delete-data", action="store_true", help="also delete saved setups and Codex history")
@@ -85,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "ui":
             from umcodex.ui import server
 
+            _refresh_launchers()
             if args.detach:
                 return server.detach(open_browser=not args.no_browser)
             return server.main(open_browser=not args.no_browser)
@@ -103,6 +123,14 @@ def main(argv: list[str] | None = None) -> int:
 
             updater = Updater()
             return updater.rollback() if args.rollback else updater.update()
+        if args.command == "launchers":
+            from umcodex.launchers import Launchers
+
+            if args.dry_run and not args.refresh:
+                parser.error("--dry-run goes with --refresh")
+            launchers = Launchers()
+            report = launchers.write(args.write) if args.write else launchers.refresh(dry_run=args.dry_run)
+            return 0 if report.ok else 1
         if args.command == "uninstall":
             from umcodex.uninstall import uninstall
 
@@ -225,10 +253,23 @@ def _update_notice() -> None:
         logging.getLogger(__name__).warning("the update check at launch failed", exc_info=True)
 
 
+def _refresh_launchers() -> None:
+    """The app or shortcuts, brought up to date once if an older installer
+    wrote them (an update by alpha.1's own updater didn't). Nothing about it
+    may stop a launch."""
+    try:
+        from umcodex.launchers import refresh_if_differs
+
+        refresh_if_differs()
+    except Exception:
+        logging.getLogger(__name__).warning("refreshing the launchers failed", exc_info=True)
+
+
 def _launch(codex_args: list[str], *, from_app: bool = False, setup_name: str | None = None) -> int:
     from umcodex import launch
 
     print(f"UM-Codex {__version__}")
+    _refresh_launchers()
     _update_notice()
     if sys.platform == "win32" and not codex_args and not (sys.stdin.isatty() and sys.stdout.isatty()):
         print("This window can't run Codex's screen (Git Bash and mintty can't).")

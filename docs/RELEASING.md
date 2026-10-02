@@ -262,13 +262,36 @@ but nothing checks that pair against the key).
 6. **Prune** every version but those two (only folders named as versions),
    each unmarked (its `.complete` removed) before it's deleted, so one whose
    removal stops part way never counts as installed.
+7. **Refresh the launchers** with the new version's own `um-codex launchers
+   --refresh` (`src/umcodex/launchers.py`): the Mac app, or the Start menu
+   and Desktop shortcuts, are rewritten as that version writes them if
+   they're UM-Codex's own and out of date (docs/INSTALLING.md, "Keeping the
+   app and shortcuts up to date"). If one can't be, the update still stands
+   and it says what to do (run the installer again, or `um-codex launchers
+   --refresh` later).
 
 It refuses while any launch is running (each launch holds a lock), runs one
 at a time, and undoes what it installed if a step fails, so the running
 version stays the one in use. It works only in a copy the installer made
 (not a development checkout). `um-codex update --rollback` switches
-`current` and `previous`, then pulls that version's images (usually still
-there; if that fails it says to run `um-codex pull`).
+`current` and `previous`, refreshes the launchers with that version's
+`um-codex launchers --refresh` (0.1.0-alpha.1 has none: the newer code doing
+the rollback writes alpha.1's own launchers, format 1, so it still opens; if
+it can't, it says the app won't open it and how to start it), then pulls
+that version's images
+(usually still there; if that fails it says to run `um-codex pull`).
+
+An update made by an older updater (0.1.0-alpha.1's never refreshed the
+launchers) is caught at the new version's first `um-codex` or `um-codex ui`:
+`<app>/launchers` records the launcher format, and when it's missing or
+differs the launchers are refreshed (a failure is said once, then retried at
+most once a day, in the log only).
+
+**A release that changes what the launchers contain** (the app's script or
+`Info.plist`, the shortcut's command line) bumps `FORMAT` in
+`src/umcodex/launchers.py`, so installs that skipped the updater's refresh
+are caught at a launch too. Before tagging, `um-codex launchers --refresh
+--dry-run` on an installed Mac shows what the update will change.
 
 **At launch**, at most once a day, `um-codex` asks the same question and,
 when a newer release is out, prints one line: "UM-Codex X is available: run
@@ -292,6 +315,8 @@ bin/um-codex          the command (Mac: a shim that runs `current`;
                       Windows: um-codex.exe, a copy of current's own launcher)
 downloads/<version>/  a release's files while it's being installed
 update.lock           held while an update or rollback runs
+launchers             the launcher format the app or shortcuts were last written in
+icons/                Windows: the shortcuts' icon (kept out of the version folders)
 ```
 
 ## Testing it without GitHub

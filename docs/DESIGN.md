@@ -101,6 +101,17 @@ It follows ITS's "Codex Setup" articles for the model settings (the
    - `um-codex launch --from-app`: what the app and the shortcuts ran before
      M5 (kept working for them), so the folder the terminal opened in isn't
      offered as the working folder (see the Setup step above).
+   - `um-codex launchers --write <path>...`: the installers' way to write
+     the Mac app (a `.app` folder) or the Windows shortcuts (`.lnk` files)
+     at the places they chose; `um-codex launchers --refresh [--dry-run]`:
+     what `um-codex update` and `--rollback` run with the version switched
+     to, rewriting this install's own launchers where they are if they're out
+     of date (never through a link, never another account's app). Exit 0, or
+     1 when one couldn't be written (it says what to do). A rollback to a
+     version without the command (0.1.0-alpha.1) has the newer code write
+     that version's launchers (format 1).
+     `launchers.py` is the one place that says what they contain
+     (docs/INSTALLING.md, "Keeping the app and shortcuts up to date").
    - `um-codex key [--from-stdin]`: exit 0 saved, 1 refused or invalid,
      2 cancelled (Ctrl-C at the masked prompt, or an empty entry). The Mac
      installer runs `um-codex key < /dev/tty`, so the key never passes
@@ -407,6 +418,8 @@ um-codex/
     release_keys.py         the pinned release public keys (from DataLab; empty until the maintainer adds one)
     releases.py             which GitHub release is offered, and its checks (from DataLab)
     update.py               `um-codex update`, rollback, the daily notice (from DataLab's updater, simpler)
+    launchers.py            what the Mac app and Windows shortcuts contain; written by the installers,
+                            brought up to date by update, rollback and a launch (when the recorded format differs)
     gateway.conf            (from DataLab, /mcp removed)
     images.json             pinned image digests (stamped by the release)
   images/agent/             Dockerfile, AGENTS.md (from DataLab's image: Codex, Node, Python, R; DataLab skills removed; build tools added),
@@ -781,7 +794,7 @@ modes, rigor, and the frontend.
      and has no Dock icon of its own (`LSUIElement`), so no Terminal window
      opens until a setup is started. The Windows shortcuts run Windows
      PowerShell with a hidden window (minimized; it may flash for a moment)
-     that runs `um-codex.exe ui --detach`; the server then has a console
+     that runs `bin\um-codex.exe ui --detach`; the server then has a console
      that's never shown, which the Docker commands it runs share (so they
      don't flash windows either).
    - `um-codex uninstall`, `um-codex update` and `--rollback` close a
