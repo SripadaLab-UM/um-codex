@@ -43,7 +43,7 @@ ARG PLAYWRIGHT_MCP_VERSION=0.0.83
 RUN npm install -g "@openai/codex@${CODEX_VERSION}" "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" \
     && npm cache clean --force
 
-FROM rocker/r-ver:4.6.1@sha256:4e6e6696ff54a86625c7f80046478e67014a2184e942b85eeff43db7b992d93e
+FROM rocker/r-ver:4.6.1@sha256:4e6e6696ff54a86625c7f80046478e67014a2184e942b85eeff43db7b992d93e AS runtime
 
 # Freeze CRAN at a date, so rebuilding the image gives the same R packages.
 ARG CRAN_SNAPSHOT=https://p3m.dev/cran/__linux__/noble/2026-09-25
@@ -105,12 +105,37 @@ RUN useradd --create-home --uid 10004 --shell /bin/bash agent \
     && visudo -cf /etc/sudoers.d/agent
 
 # Python: a venv the agent owns, so `pip install` works without sudo.
-COPY requirements.txt /tmp/requirements.txt
+COPY requirements.txt /opt/um-codex/python-requirements.txt
 RUN python3 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-deps -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt \
+    && /opt/venv/bin/pip install --no-deps -r /opt/um-codex/python-requirements.txt \
+    && /opt/venv/bin/pip check \
     && chown -R agent:agent /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
+
+# Research authoring and dashboard tools. Versions are fixed; Quarto's
+# release assets are verified on both supported architectures. No TeX/GPU
+# stack is downloaded: HTML/DOCX and notebooks work offline; PDF via TeX
+# and specialist stacks need an explicit project-specific installation.
+ARG QUARTO_VERSION=1.10.18
+RUN arch="$(dpkg --print-architecture)" \
+    && case "$arch" in \
+        amd64) checksum=4bdf5a17df300003beb2f8f0e4dfe568e2ca0ff91318220c8537d2655015c430 ;; \
+        arm64) checksum=ed3f70f63ee12b290ea1e38da08aa7c74c6843f6bed6df828e1e1652ef6d7d98 ;; \
+        *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL "https://github.com/quarto-dev/quarto-cli/releases/download/v${QUARTO_VERSION}/quarto-${QUARTO_VERSION}-linux-${arch}.deb" -o /tmp/quarto.deb \
+    && echo "$checksum  /tmp/quarto.deb" | sha256sum -c - \
+    && dpkg -i /tmp/quarto.deb \
+    && rm /tmp/quarto.deb
+# CRAN's fs binary (used by renv/Shiny) links against Ubuntu's libuv.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libuv1t64 \
+    && rm -rf /var/lib/apt/lists/*
+RUN install2.r --error --skipinstalled --ncpus -1 renv shiny \
+    && Rscript -e 'stopifnot(as.character(packageVersion("renv")) == "1.2.4", as.character(packageVersion("shiny")) == "1.14.0")' \
+    && rm -rf /tmp/downloaded_packages
+RUN npm install -g typescript@7.0.2 esbuild@0.28.2 \
+    && npm cache clean --force
 
 # Base instructions Codex reads (copied into CODEX_HOME at start) and the
 # smoke test, which CI can also run: `docker run --rm <image> um-codex-smoke`.
@@ -142,6 +167,20 @@ COPY umcodex-token /usr/local/bin/umcodex-token
 RUN chmod 0644 /etc/um-codex/sshd_config /etc/profile.d/um-codex.sh \
     && chmod 0755 /usr/local/bin/umcodex-token
 
+# /etc/codex is a launch-time mount, which would hide image-bundled skills.
+# Use Codex's standard user skill discovery location instead. Managed
+# settings request enablement in both terminal and SSH sessions; Codex
+# still respects a user per-skill disable (these are workflow defaults).
+COPY skills/ /home/agent/.agents/skills/
+COPY project-env.py /usr/local/bin/um-codex-env
+COPY dashboard.py /usr/local/bin/um-codex-dashboard
+COPY capability-check.py /usr/local/bin/um-codex-capability-check
+COPY dashboard-check.js /usr/local/bin/um-codex-dashboard-check
+COPY skills-check.py /usr/local/bin/um-codex-skills-check
+RUN chmod -R a+rX /home/agent/.agents/skills \
+    && chmod 0755 /usr/local/bin/um-codex-env /usr/local/bin/um-codex-dashboard /usr/local/bin/um-codex-capability-check \
+        /usr/local/bin/um-codex-dashboard-check /usr/local/bin/um-codex-skills-check
+
 USER agent
 WORKDIR /work
 ENV HOME=/home/agent \
@@ -149,7 +188,10 @@ ENV HOME=/home/agent \
     MPLCONFIGDIR=/tmp/matplotlib \
     R_LIBS_USER=/home/agent/R/library
 
-RUN um-codex-smoke
+# Runtime is also a diagnostic target; the shipped default stage always
+# executes the smoke test. Do not publish the unvalidated runtime target.
+FROM runtime AS validated
+RUN --network=none um-codex-smoke && sudo -n rm -rf /home/agent/.cache
 
 ENTRYPOINT []
 # Put the base instructions where Codex reads them (they're the app's file,

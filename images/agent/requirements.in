@@ -34,3 +34,11 @@ lxml
 requests
 pytest
 ruff
+
+# Reproducible environments, notebooks and dashboards (build-time only).
+uv==0.12.22
+jupyter==1.1.1
+ipykernel==7.4.0
+nbconvert==7.17.1
+streamlit==1.64.0
+dash==4.4.1

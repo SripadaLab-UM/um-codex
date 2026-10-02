@@ -29,6 +29,7 @@ check "mount points exist" test -d /mnt/write -a -d /mnt/read
 check "base AGENTS.md" test -s /etc/um-codex/AGENTS.md
 
 check "codex" codex --version
+check "shipped skill discovery" timeout 60 um-codex-skills-check
 check "node" node --version
 check "npm" npm --version
 for tool in git ssh curl wget jq rg fd tree less ps make gcc g++ vi nano unzip pandoc sqlite3; do
@@ -58,6 +59,13 @@ check "python is the venv" test "$(command -v python)" = /opt/venv/bin/python
 check "pip in the venv" python -m pip --version
 check "venv owned by agent" test -w /opt/venv/lib
 check "python headers" sh -c 'test -f "$(python -c "import sysconfig; print(sysconfig.get_paths()[\"include\"])")/Python.h"'
+check "pip dependency consistency" python -m pip check
+check "uv" uv --version
+check "Quarto" quarto --version
+check "TypeScript" tsc --version
+check "esbuild" esbuild --version
+check "research execution and dashboards" um-codex-capability-check
+
 check "python packages" python -c "import duckdb, pandas, polars, numpy, scipy, statsmodels, sklearn, matplotlib, seaborn, altair, plotnine, pyarrow, pdfplumber, pypdf, docx, pptx, openpyxl, xlsxwriter, vl_convert, bs4, httpx, lxml, requests, pytest"
 check "R packages" Rscript -e "suppressMessages({library(tidyverse); library(data.table); library(lubridate); library(ggplot2); library(lme4); library(lmerTest); library(survival); library(mgcv); library(arrow); library(rmarkdown); library(flextable); library(testthat)})"
 check "R user library writable" test -w "$R_LIBS_USER"

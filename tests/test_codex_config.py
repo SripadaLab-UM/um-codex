@@ -301,3 +301,18 @@ def test_the_smoke_test_starts_the_browser_the_same_way():
     dockerfile = (Path(__file__).parents[1] / "images" / "agent" / "Dockerfile").read_text()
     for name, value in BROWSER_ENV.items():
         assert f"ENV {name}={value}" in dockerfile
+
+
+@pytest.mark.parametrize("internet", [True, False])
+@pytest.mark.parametrize("app", [True, False])
+def test_shipped_skill_defaults_for_every_launch(internet, app):
+    from umcodex.codex_config import SHIPPED_SKILLS, SKILLS_ROOT
+
+    config = parsed(internet=internet, app=app)
+    paths = {entry["path"] for entry in config["skills"]["config"] if entry["enabled"]}
+    assert paths == {f"{SKILLS_ROOT}/{name}/SKILL.md" for name in SHIPPED_SKILLS}
+    image_skills = Path(__file__).parents[1] / "images/agent/skills"
+    assert {p.parent.name for p in image_skills.glob("*/SKILL.md")} == set(SHIPPED_SKILLS)
+    # Shipped skills are offline instruction files, not extra service connections.
+    assert "mcp_servers" not in config
+    assert requirements(internet=internet, app=app)["model_provider"] == "toolkit"

@@ -64,6 +64,22 @@ REQUIREMENTS_FILE = "requirements.toml"
 MANAGED_CONFIG_FILE = "managed_config.toml"
 CATALOG_FILE = "models.json"
 
+# Standard user discovery path: /etc/codex is hidden by the launch mount.
+# Keep the shipped catalog small; all instructions and helpers are offline.
+# Skill enablement is a default, not a security constraint: Codex merges
+# per-skill overrides across layers and respects a user disabling a path.
+SHIPPED_SKILLS = (
+    "project-environments",
+    "data-analysis",
+    "research-handoff",
+    "scientific-figures",
+    "documents-and-reports",
+    "notebooks",
+    "dashboards",
+    "software-development",
+)
+SKILLS_ROOT = "/home/agent/.agents/skills"
+
 Approvals = Literal["never", "on-request"]
 
 # The browser tool (M2b): Playwright's MCP server, installed in the agent
@@ -159,6 +175,13 @@ def render(
         '[projects."/work"]',
         'trust_level = "trusted"',
     ]
+    for skill in SHIPPED_SKILLS:
+        lines += [
+            "",
+            "[[skills.config]]",
+            f'path = "{SKILLS_ROOT}/{skill}/SKILL.md"',
+            "enabled = true",
+        ]
     if browser:
         lines += [
             "",
