@@ -688,7 +688,7 @@ function card(s) {
         "div",
         { class: "card-title" },
         el("h3", { text: s.name }),
-        onThisComputer(s) ? el("span", { class: "badge local", title: WORDS.local, text: "On this computer" }) : null,
+        onThisComputer(s) ? el("span", { class: "badge local", title: WORDS.local, text: "On this computer · experimental" }) : null,
         el("button", { class: "link small", key: `rename-${s.id}`, "aria-label": `Rename ${s.name}`, text: "Rename", onclick: () => startRename(s) }),
       );
   let start;
@@ -1399,12 +1399,12 @@ function whereField(draft, errors, error) {
       "div",
       { class: "radios", role: "radiogroup", "aria-labelledby": "label-runs-on" },
       option("sandbox", "In the sandbox (recommended)"),
-      option("this-computer", "On this computer"),
+      option("this-computer", "On this computer (experimental)"),
     ),
     el("span", {
       class: "help",
       text: info.available
-        ? "On this computer: Codex works directly on your Mac, with computer and browser control. Only when you need that."
+        ? "On this computer (experimental): Codex works directly on your Mac, with computer and browser control. Only when you need that."
         : info.reason || "",
     }),
     (view.notes || []).map((n) => el("p", { class: "note", text: n })),

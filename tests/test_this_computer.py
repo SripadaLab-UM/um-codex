@@ -580,7 +580,7 @@ def test_the_page_asks_once_and_marks_the_card() -> None:
     assert 'confirmBox("Run Codex on this computer?", info.warning, "Run on this computer")' in where
     start = script[script.index("async function startSetup") :]
     assert "confirmBox" not in start[: start.index("\n}\n")]
-    assert 'text: "On this computer" }' in script  # the card's marker
+    assert 'text: "On this computer · experimental" }' in script  # the card's marker
     assert 'option("sandbox", "In the sandbox (recommended)")' in where
 
 

@@ -166,7 +166,7 @@ is only the window you use. What to know:
 
 In a terminal: `um-codex launch --setup <name> --open app`.
 
-### On this computer (Mac): computer and browser control
+### On this computer (Mac, experimental): computer and browser control
 
 The sandbox is the safe default. A setup can instead run Codex **directly
 on your Mac**, when you need it to use your apps (Computer Use) or the
@@ -177,7 +177,7 @@ Codex app's own browser. Use it only for that.
   in the sandbox. It can read, change and delete any of your files, use your
   apps and browser, and act with your accounts. While it runs, it may also be
   able to reach UM-Codex's own Toolkit key.* **Cancel** keeps the sandbox;
-  **Run on this computer** switches. Its card then says **On this computer**,
+  **Run on this computer** switches. Its card then says **On this computer · experimental**,
   and Start doesn't ask again.
 - It opens in **UM-Codex's local Codex window**: another copy of the Codex
   app, apart from your own and from the sandbox's copy (its chats never mix
