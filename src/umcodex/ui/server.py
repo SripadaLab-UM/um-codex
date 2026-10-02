@@ -887,6 +887,16 @@ async def serve(
     _write_private(info, json.dumps(record) + "\n")
     url = f"http://127.0.0.1:{port}{session.sign_in_path()}"
     loop.run_in_executor(None, launcher.check_update)
+    # While this window is open it also answers the Codex app copy's local
+    # chats (codex_app.LocalChatsServer), between and before launches.
+    responder = codex_app.LocalChatsServer(data)
+
+    def answer_local_chats() -> None:
+        if codex_app.app_folder(data).is_dir() and not codex_app.LOCAL_CHATS:
+            with contextlib.suppress(Exception):
+                responder.ensure()
+
+    await loop.run_in_executor(None, answer_local_chats)
     say(f"UM-Codex's window (if your browser doesn't open it, go here): {url}")
     say("It closes by itself a while after its page is closed. Ctrl-C ends it now.")
     if ready is not None:
@@ -896,11 +906,13 @@ async def serve(
     try:
         while not stop.is_set():
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(stop.wait(), timeout=min(30.0, idle_seconds))
+                await asyncio.wait_for(stop.wait(), timeout=min(10.0, idle_seconds))
             if time.monotonic() - seen[-1] > idle_seconds:
                 log.info("launcher window: idle, ending")
                 break
+            await loop.run_in_executor(None, answer_local_chats)
     finally:
+        await loop.run_in_executor(None, responder.stop)
         info.unlink(missing_ok=True)
         await runner.cleanup()
 

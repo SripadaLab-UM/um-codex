@@ -1020,22 +1020,37 @@ modes, rigor, and the frontend.
        the sandbox. The copy's `config.toml` gets UM-Codex's provider at
        each launch: a custom one without `requires_openai_auth` (so the copy
        opens with no sign-in, as in the test), `forced_login_method = "api"`,
-       analytics, feedback and update checks off, whose base URL is the
-       launch's relay at `/um-codex-local/<alias>/v1`, with no credential.
-       The relay answers `POST …/responses` there itself, before any token
-       check and without reading the key, with a normal streamed assistant
-       message: "This UM-Codex window only works in Remote chats. Start a
-       chat on Remote · `<alias>` (project "work"). Local chats would run on
-       your Mac, outside the sandbox." Anything else there gets 404; nothing
-       under that path is ever sent upstream (`relay.LOCAL_PREFIX`). Chosen
-       over a failing `auth.command` because the person reads a plain
-       sentence in the chat instead of an error. Checked: the app's bundled
-       Codex (0.159.2) with this config against a real relay whose key
-       function fails and whose upstream doesn't exist showed the message,
-       made no model call and never read the key; the image's Codex
-       (0.157.1) showed it too. With no launch running, local chats fail to
-       connect. `codex_app.LOCAL_CHATS = True` switches back to the test's
-       behaviour (the Toolkit through the relay with the launch token).
+       analytics, feedback and update checks off, with no credential, whose
+       base URL is `http://127.0.0.1:<port>/um-codex-local/<alias>/v1` on a
+       small **local-chats responder** (`relay.local_chats_app`, run by
+       `codex_app.LocalChatsServer`), never the relay: it has no key and
+       calls nothing. It answers `POST …/responses` with a normal streamed
+       assistant message: "This UM-Codex window only works in Remote chats.
+       Start a chat on Remote · `<alias>` (its project in the sidebar). Local
+       chats would run on your Mac, outside the sandbox." (naming the setups
+       running in the app now), or, with none running, that no setup is
+       running and to start one. Anything else there gets 404.
+       - **The port is fixed per data folder** (`codex-app/local-chats-port`,
+         chosen once): the copy keeps the config it started with while it
+         runs, so a launch's own port (the first version used the relay's)
+         was gone after Stop and Start, and an old local chat showed
+         "Reconnecting… waiting for network" (the GUI test's step 12). Every
+         app launch and the launcher window serve it: whichever binds it
+         first; the others see it's there (`/um-codex-local/_whoami`, by
+         data folder) and take it over when that process ends (a launch
+         checks every 2 s, the window every 10 s). If another program holds
+         the port, a new one is chosen and kept (the copy follows after its
+         next restart). With no launch and no launcher window running,
+         nothing answers, and local chats wait for the network.
+       - A failing `auth.command` was tried instead (a helper printing the
+         reminder and exiting 1): Codex 0.159.2 retries it for ever,
+         showing only "Reconnecting... waiting for network".
+       - Checked: the app's bundled Codex (0.159.2) with the copy's config
+         showed the message during a launch, after Stop (the launcher window
+         answering), and after Start again, all on the same port; the
+         responder never reaches the Toolkit (it has no client or key).
+         `codex_app.LOCAL_CHATS = True` switches back to the test's behaviour
+         (the Toolkit through the relay with the launch token).
      - The app's other settings in that `config.toml` are kept. If it
        doesn't parse, it's moved aside as `config.toml.bad-<time>` (and
        logged) before UM-Codex's settings are written.
@@ -1043,21 +1058,61 @@ modes, rigor, and the frontend.
        app isn't installed. It's part of OpenAI's ChatGPT desktop app: get
        it from https://chatgpt.com/download, then come back. Terminal works
        in the meantime."
-   - **The first time for a setup** (the one-step link with `projectPath`
-     and `enabled=true` didn't connect in the hands-on test): the copy opens
-     on the documented `codex://settings/connections/ssh/add?name=<alias>`
-     link (it adds the host, switched off), and the launcher shows the steps:
-     switch to UM-Codex's Codex window; Settings → Connections, turn on
-     `<alias>`; start a chat in the project "work" (Remote · `<alias>`), or
-     add the folder `/work`; check that it shows Remote · `<alias>`. The
-     launch watches the container every 2 s for the app's `codex app-server
-     --listen` (`pgrep -f`, as the test's monitor did) and then marks the
-     launch "Connected ✓" (`launch.json`) and the setup as connected once
-     (`<data>/codex-app/hosts.json`). Later launches of that setup pass no
-     link (it would switch the host off again) and show "Waiting for the
-     Codex app to reconnect…" with "It doesn't connect: show the steps".
-     If the copy was already running the first time, the link can't reach
-     it; the steps are the same (the host is in the ssh config the app reads).
+   - **The copy is set up before it opens** (asked for after the GUI test:
+     adding the connection and the project by hand was too hard). The app
+     (26.928) keeps its state in `$CODEX_HOME/.codex-global-state.json`
+     (and `.bak`, read when the first doesn't parse): a plain JSON object,
+     loaded once at start and rewritten by the app as things change, each
+     key checked against a schema (a value that fails is dropped). So, only
+     while UM-Codex's copy isn't running, a launch merges in (`seeded_state`,
+     with the shapes the app itself wrote in the GUI test):
+     - the host: `codex-managed-remote-connections` (`hostId`
+       `remote-ssh-discovered:<alias>`, `source` `discovered`),
+       `remote-connection-auto-connect-by-host-id` true, its analytics id;
+     - its project: `remote-projects` (`/work`, named after the setup, a
+       stable id from the alias), first in `project-order` and the sidebar,
+       and `selected-project`, so the copy opens on it;
+     - pop-ups: `electron:onboarding-projectless-completed` (the welcome
+       flow's route goes to the app when it's true; the person's role isn't
+       answered for them), `electron:onboarding-hide-first-new-thread-promos`,
+       and `seen-model-upgrade-list` with the models the app's bundled Codex
+       would announce. The copy's own side also gets a model catalog
+       (`model_catalog_json`: the bundled Codex's list, `debug models
+       --bundled`, with no `availability_nux` or `upgrade`), so no model
+       qualifies for an announcement; the remote side already has
+       UM-Codex's catalog. Nothing switches the model.
+
+     The rest of the file is kept; it's written whole (temporary file and
+     rename), with its backup. If a key UM-Codex touches has a shape it
+     doesn't know (an app update), nothing is changed and the launcher shows
+     the steps; a version other than the tested ones (`TESTED_APP_VERSIONS`,
+     26.928.x) is tried and logged. **A known fragility:** these are the
+     app's internals, not an interface.
+
+     Checked live with a fresh data folder (app 26.928.40906): Start, and
+     the copy opened on the setup's project with Remote · `<alias>`
+     connected, "Full access" and the setup's model, with no onboarding and
+     no model announcement, and the launch saw the app-server start (about
+     19 s, no clicks). After Stop and Start (the copy still open) it
+     reconnected by itself in about 9 s, and the app had kept the seeded
+     host and project.
+   - **When it can't be set up** (the copy was already open, or the file's
+     shape is unknown), the copy opens on the documented
+     `codex://settings/connections/ssh/add?name=<alias>` link (if the host
+     never connected) and the launcher shows the steps the GUI test found:
+     switch to UM-Codex's Codex window; Settings → Connections → Add, choose
+     `<alias>`, Add (it's switched on and connects); Home → Choose project →
+     Create project, named after the setup, "Add a folder on this computer"
+     → `<alias>` → Add, `/work`, Return, Create project; start a chat there
+     and check it shows Remote · `<alias>`; and, for pop-ups: choose Skip,
+     and Continue with current model.
+   - **Connected:** the launch watches the container every 2 s for the
+     app's `codex app-server --listen` (`pgrep -f`) and then marks the launch
+     "Connected ✓" (`launch.json`) and the setup as connected once
+     (`<data>/codex-app/hosts.json`); the launcher's banner follows ("is
+     running…", then "working in the sandbox"). Later launches pass no link
+     and show "Waiting for the Codex app to reconnect…" with "It doesn't
+     connect: show the steps".
    - **The launcher window:** "Open in: Codex app" is enabled when the app
      is installed. Start for an app setup asks for the ssh line once (above),
      then starts `um-codex launch --setup <id> --open app` in the background
@@ -1067,9 +1122,14 @@ modes, rigor, and the frontend.
      guide or "Connected ✓", and the plain lines: "Chats must show Remote ·
      `<alias>` to run in the sandbox. Other (local) chats in that Codex
      window would run on this computer, outside the sandbox, so they're
-     blocked: they only answer with that reminder." and "The Codex app's own browser runs on this computer, not
-     in the sandbox; use the Browser tool for browsing inside it." (also on
-     the summary before Start). Stop removes the containers (the launch then
+     blocked: they only answer with that reminder.", "The app may show the
+     chat's permissions as Custom (greyed): UM-Codex fixes them to full
+     access inside the sandbox, so there's nothing to choose there." (the GUI
+     test saw Custom; a seeded copy showed "Full access") and "The Codex
+     app's own browser runs on this computer, not in the sandbox; use the
+     Browser tool for browsing inside it." (also on the summary before
+     Start). The app marks a local chat only by the absence of the Remote ·
+     `<alias>` strip and globe. Stop removes the containers (the launch then
      ends and cleans up); its question adds that the app will say it can't
      reconnect, which is expected.
    - **Lifetime:** the launch runs until Stop (or Ctrl-C when it was started
@@ -1118,13 +1178,18 @@ modes, rigor, and the frontend.
        launch held the same way (internet and browser tool on, the app not
        opened) again ran a `:workspace` chat with full access and a turn
        through the Toolkit.
-   - **Not checked** (needs a person or computer use, steps in
-     `docs/spikes/2026-10-01-m6-codex-app-gui-test.md`): turning the host on
-     and opening `/work` in the copy, that the app's permission control
-     shows only full access, that a later launch reconnects with no steps,
-     the local-chats message inside the app (and after a launch with a new
-     relay port), the bring-forward when the copy is behind other windows,
-     and Windows.
+   - **GUI test** (the maintainer's computer-use agent, 2026-10-01, at
+     b32b68e, before the copy was set up automatically): no sign-in,
+     connecting, commands in `/work` as `agent`, hello.txt on the Mac, the
+     models, the internet, the browser tool's approval card, the local block,
+     Stop, and the restart reconnecting by itself (24–32 s) passed; step 12
+     (an old local chat after Stop and Start) failed, which the fixed port
+     fixes. The steps it found for the connection and project are the
+     fallback above.
+   - **Not checked** (steps in `docs/spikes/2026-10-01-m6-codex-app-gui-test.md`):
+     the local-chats message inside the app's window after a restart, a
+     second setup in the same copy, pop-ups after an app update, and
+     Windows.
 8. **Acceptance, on a fresh Mac and a fresh Windows machine:**
    1. install from the README in under 20 minutes;
    2. launch with internet off: Codex answers, `curl https://example.com`

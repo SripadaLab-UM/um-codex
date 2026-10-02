@@ -77,17 +77,26 @@ is only the window you use. What to know:
   uninstalling takes it out). Choose **Allow**, or use Terminal instead.
   Settings in your own `Host *` entries (such as port forwards) still apply
   to these hosts, as ssh does for every host.
-- **The first time for each setup**, in UM-Codex's Codex window: open
-  Settings → Connections and turn on `umcodex-<setup>`; then start a chat in
-  the project "work" (Remote · `umcodex-<setup>`), or add the folder `/work`.
-  The launcher shows these steps and says "Connected ✓" once the app is in.
-  After that, the app is meant to reconnect by itself when you start the
-  setup again; if it doesn't, "show the steps" in the launcher brings them
-  back.
+- **No set-up in the app:** UM-Codex prepares its copy before opening it,
+  so it opens on a project named after your setup, already connected to the
+  sandbox (Remote · `umcodex-<setup>`). Just start a chat there. The launcher
+  says "Connected ✓" once the app is in, and starting the setup again later
+  reconnects by itself.
+- If UM-Codex's copy was already open (or an app update changed how it keeps
+  its settings), the launcher shows the steps instead: in UM-Codex's Codex
+  window, Settings → Connections → **Add**, choose `umcodex-<setup>`, **Add**;
+  then Home → Choose project → **Create project**, named after the setup,
+  "Add a folder on this computer" → `umcodex-<setup>` → **Add**, type
+  `/work`, press Return, **Create project**. If the app asks what you'll use
+  it for, choose **Skip**; if it announces a new model, choose **Continue
+  with current model** (your setup decides the model).
 - **Chats must show "Remote · umcodex-<setup>"** to run in the sandbox. Other
   (local) chats in that window would run on your computer, outside the
   sandbox, so UM-Codex blocks them: they only answer with a reminder to start
-  a chat on Remote · `umcodex-<setup>`.
+  a chat on Remote · `umcodex-<setup>` (while a setup runs or this launcher
+  window is open; otherwise they just wait for the network).
+- The app may show a chat's permissions as "Custom", greyed out: UM-Codex
+  fixes them to full access inside the sandbox.
 - Your own ChatGPT app reads the same `~/.ssh/config`, so it lists the
   `umcodex-*` hosts under Settings → Connections too (switched off). You can
   leave them off there; use UM-Codex's copy.

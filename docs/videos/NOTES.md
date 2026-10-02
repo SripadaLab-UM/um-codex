@@ -55,10 +55,9 @@ plain; no product pitch. These are separate from DataLab's users.
      sandbox?", with the reason) and Allow;
    - a second ChatGPT icon in the Dock: UM-Codex's own copy, which opens
      with no sign-in (say: your own ChatGPT app isn't touched);
-   - the launcher's steps, done in the copy: Settings → Connections, turn on
-     `umcodex-<setup>`; a new chat in the project "work" (Remote ·
-     `umcodex-<setup>`), or add the folder `/work`; the chat's strip
-     reading "work · Remote · umcodex-<setup>";
+   - the copy opening straight on a project named after the setup, with
+     "Remote · umcodex-<setup>" and a green dot under the composer: nothing
+     to set up (say: UM-Codex prepared it);
    - the launcher turning to "Connected ✓";
    - asking Codex to list the files and make one in the working folder, and
      the file appearing in Finder; the diff and "View changes" in the app;
@@ -66,8 +65,8 @@ plain; no product pitch. These are separate from DataLab's users.
      use a Remote chat;
    - Stop in the launcher (its question says the app will show it can't
      reconnect), and the app showing that;
-   - starting the setup again later: the app reconnects by itself (record
-     this only once checked; see DESIGN.md M6 "Not checked").
+   - starting the setup again later: the app comes forward and reconnects by
+     itself.
 
 Later, when built: "On this computer" mode (M4).
 
@@ -163,14 +162,15 @@ Later, when built: "On this computer" mode (M4).
   person's normal one; it needs no sign-in, and the person's own app isn't
   changed. The app reaches the environment through ssh, so the first time
   UM-Codex asks to add one line to the person's ssh settings (with a backup;
-  uninstalling takes it out). The first time for each setup there are a few
-  steps in the app (turn on its connection, open the "work" project); the
-  launcher shows them and says "Connected" when done. Chats run in the
+  uninstalling takes it out). UM-Codex prepares its copy, so it opens on a
+  project named after the setup, already connected; the launcher says
+  "Connected" when the app is in. (Only if the copy was already open does the
+  launcher show a few steps instead.) Chats run in the
   environment only when they show "Remote · umcodex-…". Other (local) chats
   in that window would run on the person's computer, so UM-Codex blocks
   them: they answer only "This UM-Codex window only works in Remote chats.
-  Start a chat on Remote · umcodex-… (project "work"). Local chats would run
-  on your Mac, outside the sandbox." The person's own ChatGPT app also lists
+  Start a chat on Remote · umcodex-… (its project in the sidebar). Local
+  chats would run on your Mac, outside the sandbox." The person's own ChatGPT app also lists
   the `umcodex-*` hosts in its Connections (it reads the same ssh settings);
   they can stay off there. The app's own browser is on the person's computer
   too; the Browser tool is the one inside the environment. The setup runs

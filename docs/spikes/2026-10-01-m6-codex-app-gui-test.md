@@ -5,6 +5,12 @@ for branch `m6-codex-app`. Everything up to the app's own window was checked
 without a GUI (docs/DESIGN.md, M6 "Live check"); these steps cover what
 needs clicks. Report back with the answers in "What to report".
 
+Second run (after the first one at b32b68e): UM-Codex now sets its copy up
+before opening it (the connection and a project, pop-ups marked as seen),
+and local chats are answered from a port that stays the same across
+launches. Use a **fresh** data folder (`UM-Codex-m6-test2`, below), not the
+first run's.
+
 ## Background, briefly
 
 UM-Codex runs OpenAI Codex inside a Docker container (the "sandbox"). With
@@ -21,8 +27,8 @@ There will be **two copies of the ChatGPT app** running. Use only
 UM-Codex's:
 
 - **UM-Codex's copy:** started with the settings folder
-  `~/Library/Application Support/UM-Codex-m6-test/codex-app/`. Find it with
-  `ps -axww -o pid=,args= | grep "UM-Codex-m6-test/codex-app/user-data" | grep -v Helper | grep -v grep`.
+  `~/Library/Application Support/UM-Codex-m6-test2/codex-app/`. Find it with
+  `ps -axww -o pid=,args= | grep "UM-Codex-m6-test2/codex-app/user-data" | grep -v Helper | grep -v grep`.
 - **The maintainer's normal copy:** don't use it, don't change its
   settings, don't quit it.
 
@@ -56,7 +62,7 @@ UM-Codex's:
    ```sh
    mkdir -p ~/Documents/UM-Codex-m6-test
    cd ~/work/um-codex-appopen
-   UMCODEX_DATA_DIR="$HOME/Library/Application Support/UM-Codex-m6-test" \
+   UMCODEX_DATA_DIR="$HOME/Library/Application Support/UM-Codex-m6-test2" \
    UMCODEX_AGENT_IMAGE=um-codex-agent:m6 uv run um-codex ui
    ```
 
@@ -73,23 +79,28 @@ UM-Codex's:
 2. **Start** on the card. Record the summary page's "In the Codex app:"
    lines, then press "Start in Codex app".
    - Expected: a notice "Starting in the Codex app…", then in about 20 s a
-     **second ChatGPT window** opens (UM-Codex's copy), and the launcher's
-     "Running now" shows "m6 test · Running in the Codex app since …" with
-     "The first time for this setup…" and four steps.
-   - Record: did the copy show any sign-in screen? Did it open on Settings →
-     Connections, or on its home screen?
-3. **Settings → Connections** in UM-Codex's copy. Record what's listed under
-   SSH (expect `umcodex-m6-test-…`; the spike's `umcodex-test` should be
-   gone: UM-Codex removes keys of no saved setup). Turn on `umcodex-m6-test-…`.
-   Record what it shows (connecting, connected, an error).
-4. **Open a chat in the sandbox.** Start a new chat on that host with the
-   folder `/work` (the project "work", Remote · `umcodex-m6-test-…`, or
-   "add folder" `/work` on that host). Record the exact clicks: they become
-   the launcher's steps.
-   - The chat's location strip must read "work · Remote · umcodex-m6-test-…".
-   - Within a few seconds the launcher page should show **"✓ Connected: the
-     Codex app is working in the sandbox (umcodex-m6-test-…)"**, and the
-     steps go away. Record how long it took.
+     **second ChatGPT window** opens (UM-Codex's copy). The launcher's
+     "Running now" shows "m6 test · Running in the Codex app since …" and
+     "UM-Codex's Codex window opens on this setup's project…", and the
+     notice at the top changes from "Starting…" to "is running…".
+3. **Pop-ups.** Record every pop-up or extra screen the copy shows from its
+   start until step 4, with a screenshot each: a sign-in, a "what are you
+   planning to use this for?" screen, a new-model announcement ("Introducing
+   …"), or anything else. Expected: none. If one appears, answer it the way
+   the launcher's notes say (Skip; Continue with current model) and note it.
+4. **It opens set up.** Without clicking anything in the copy yet, record:
+   - which project is selected in the sidebar (expected: "m6 test", with a
+     green dot and `umcodex-m6-test-…` beside it);
+   - the strip above the composer (expected: "m6 test · Remote ·
+     umcodex-m6-test-…" with a globe and a green dot);
+   - whether the launcher shows **"✓ Connected: the Codex app is working in
+     the sandbox (umcodex-m6-test-…)"**, and how long after Start; and that
+     the top notice then says the app is working in the sandbox.
+   - Settings → Connections: is `umcodex-m6-test-…` listed and switched on?
+     (Only look; change nothing.)
+   If the copy did **not** open set up (no project, or the host not there),
+   follow the steps the launcher shows instead, record exactly where they
+   differ from what you see, and go on.
 5. **Permissions.** In the chat's composer, find the permission control
    (it may read "Full access", "Default permissions" or similar). Record
    what it shows, then open it and record every option offered. Don't
@@ -108,13 +119,14 @@ UM-Codex's:
    Expect an approval question for opening the page (approve it) and the
    title "Example Domain". Record how the approval looked in the app.
 9. **A local chat is blocked.** In UM-Codex's copy, start a new chat that
-   is **not** on the remote host (the local "this computer" kind). Send:
+   is **not** on the remote host (New chat with no project, or a project on
+   this computer; no "Remote" strip). Send:
    `reply with the single word hi; don't run any commands`.
    Expected: no model answer, but this message from UM-Codex: "This UM-Codex
    window only works in Remote chats. Start a chat on Remote ·
-   umcodex-m6-test-… (project "work"). Local chats would run on your Mac,
-   outside the sandbox." Record exactly what the app shows (the message, an
-   error, or nothing), and how the app marks the chat as local.
+   umcodex-m6-test-… (its project in the sidebar). Local chats would run on
+   your Mac, outside the sandbox." Record exactly what the app shows, and
+   how the app marks the chat as local.
 10. **Stop.** In the launcher, press Stop on the running setup. Record the
     question's text; press Stop. In the app, record what the sandbox chat
     shows (expected: it can't reconnect to `umcodex-m6-test-…`).
@@ -128,7 +140,11 @@ UM-Codex's:
     - In the old sandbox chat, send `run pwd` and record the result.
 12. **The local chat after a restart.** In the local chat from step 9, send
     `reply with the single word again`. Expected: the same UM-Codex message
-    (the launch's relay has a new port now). Record what it shows.
+    within a few seconds (not "Reconnecting… waiting for network"). Then, in
+    the launcher, Stop the setup, wait until it's gone from "Running now",
+    and in the same local chat send `and again`. Expected: "…no UM-Codex
+    setup is running in the Codex app right now…" (the launcher window
+    answers while it's open). Record both.
 13. **End.** Stop the setup in the launcher. Quit **UM-Codex's copy only**
     (Cmd-Q while it's in front; check the maintainer's normal copy is still
     running). In the launcher's Terminal tab press Ctrl-C.
@@ -136,9 +152,11 @@ UM-Codex's:
 ## What to report
 
 1. Step 1: was "Codex app" enabled; its help line.
-2. Step 2: the summary lines; any sign-in screen; where the copy opened.
-3. Step 3: what Connections → SSH listed; what turning the host on showed.
-4. Step 4: the exact clicks; the location strip; when "Connected ✓" showed.
+2. Step 2: the summary lines; how the top notice changed.
+3. Step 3: every pop-up seen (expected none), with screenshots.
+4. Step 4: the selected project, the strip, Connections, and when
+   "Connected ✓" showed (or, if it didn't open set up, where the launcher's
+   steps differed from the app).
 5. Step 5: the permission control's label and every option it offered.
 6. Steps 6–8: the outputs; whether hello.txt appeared on the Mac; the model
    list; the browser approval and the title.
@@ -147,12 +165,12 @@ UM-Codex's:
 8. Step 10: the Stop question's text and what the app showed.
 9. Step 11: whether the copy came forward, whether the app reconnected by
    itself (and how long), and `pwd` in the old chat.
-10. Step 12: what the local chat showed after the restart.
+10. Step 12: what the local chat showed after the restart, and after Stop.
 11. Anything confusing for a non-developer, and anything that looked wrong.
 
 ## Undo (only if the maintainer asks)
 
-- `rm -rf "$HOME/Library/Application Support/UM-Codex-m6-test"` (the test's
+- `rm -rf "$HOME/Library/Application Support/UM-Codex-m6-test2"` (the test's
   setups and the copy's settings and chats), after the copy has been quit.
 - The setup's Codex history volume: `docker volume ls --filter label=umcodex.app=um-codex`
   and `docker volume rm` the `umcodex-home-m6-test-…` one.

@@ -382,6 +382,8 @@ function appPanel(run) {
   let head;
   if (app.connected) {
     head = el("p", { class: "connected", role: "status" }, el("span", { class: "tick", "aria-hidden": "true", text: "✓ " }), `Connected: the Codex app is working in the sandbox (${app.alias}).`);
+  } else if (app.seeded) {
+    head = el("p", { role: "status", text: `UM-Codex's Codex window opens on this setup's project, connected to ${app.alias}. Waiting for it to connect…` });
   } else if (app.first_time) {
     head = el("p", { class: "strong", role: "status", text: "The first time for this setup, in UM-Codex's Codex window:" });
   } else {
@@ -409,9 +411,27 @@ function appPanel(run) {
   );
 }
 
+// The notice Start put up for a setup in the Codex app, replaced as its state changes.
+const appNotices = new Map(); // setup id -> the last state it was told ("starting" | "running" | "connected")
+
+function updateAppNotice(s, run) {
+  const said = appNotices.get(s.id);
+  if (!said || !run || !run.app) return;
+  const now = run.app.connected ? "connected" : "running";
+  if (now === said) return;
+  appNotices.set(s.id, now);
+  if (now === "connected") {
+    notice(`“${s.name}”: the Codex app is working in the sandbox (${run.app.alias}).`);
+    appNotices.delete(s.id);
+  } else {
+    notice(`“${s.name}” is running; UM-Codex's Codex window is opening. Waiting for it to connect…`);
+  }
+}
+
 function card(s) {
   const run = runningOf(s.id);
   if (run) starting.delete(s.id);
+  updateAppNotice(s, run);
   const since = starting.get(s.id);
   if (since && Date.now() - since > START_WAIT_MS) {
     starting.delete(s.id);
@@ -1032,6 +1052,7 @@ async function startSetup() {
       result = await start();
     }
     starting.set(setup.id, Date.now());
+    if (result.in_background) appNotices.set(setup.id, "starting");
     notice(
       result.in_background
         ? "Starting in the Codex app: UM-Codex's Codex window opens when the sandbox is ready. Stop it here."

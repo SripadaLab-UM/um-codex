@@ -205,9 +205,7 @@ def resolved(setup: Setup, layout: folders.Layout) -> Setup:
 # --- Asking -----------------------------------------------------------------
 
 
-WRITES_ARE_REAL = (
-    "These are your real files: changes and deletions there happen straight away, with no undo."
-)
+WRITES_ARE_REAL = "These are your real files: changes and deletions there happen straight away, with no undo."
 BROWSER_PLAIN = "Codex can open websites in a fresh browser inside the sandbox; it has none of your logins."
 BROWSER_QUESTION = f"Browser tool on? ({BROWSER_PLAIN})"
 BROWSER_ASKS_QUESTION = "Approve each browser action (opening pages, clicking, typing)?"

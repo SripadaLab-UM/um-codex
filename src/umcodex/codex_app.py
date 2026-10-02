@@ -91,9 +91,17 @@ INCLUDE_EXPLAINED = (
 
 # The plain lines the launcher and the terminal show for a setup in the app.
 APP_NOTES = (
-    "Chats must show Remote · {alias} to run in the sandbox. {other}",
+    "Chats must show Remote · {alias} (and a globe) to run in the sandbox. {other}",
+    "The app may show the chat's permissions as Custom (greyed): UM-Codex fixes them to full access "
+    "inside the sandbox, so there's nothing to choose there.",
     "The Codex app's own browser runs on this computer, not in the sandbox; use the Browser tool "
     "for browsing inside it.",
+)
+# Pop-ups the app may still show (UM-Codex marks them as seen beforehand; an
+# app update can bring new ones).
+POPUP_NOTE = (
+    "If the app asks what you'll use it for, choose Skip. If it announces a new model, choose "
+    "Continue with current model: the setup decides the model."
 )
 
 
@@ -116,15 +124,20 @@ def notes(setup_id: str, *, local_chats: bool | None = None) -> list[str]:
     return [note.format(alias=alias(setup_id), other=other) for note in APP_NOTES]
 
 
-def first_steps(setup_id: str) -> list[str]:
-    """What the person does once per setup, in UM-Codex's Codex window (from
-    the hands-on test: the one-step link didn't connect by itself)."""
+def first_steps(setup_id: str, project: str) -> list[str]:
+    """What the person does once per setup when UM-Codex couldn't set the
+    copy up itself (it was already open, or the app's format changed), in
+    UM-Codex's Codex window: the flow the GUI test found (app 26.928)."""
     name = alias(setup_id)
     return [
         "Switch to UM-Codex's Codex window (a second ChatGPT icon in the Dock).",
-        f"Open Settings → Connections, and turn on {name}.",
-        f"Start a new chat: choose the project “work” (Remote · {name}), or add the folder /work on {name}.",
-        f"Check that the chat shows Remote · {name}, then ask away.",
+        f"Open Settings → Connections and press Add; choose {name} from the list, then Add. "
+        "It's switched on and connects.",
+        f"Go Home → Choose project → Create project. Name it “{project}”; under the source folders, "
+        f"open “Add a folder on this computer”, choose {name}, then Add; type /work and press Return; "
+        "then Create project.",
+        f"Start a chat in that project, and check that it shows Remote · {name}.",
+        POPUP_NOTE,
     ]
 
 
@@ -672,18 +685,20 @@ LOCAL_CHATS = False
 
 def local_config(
     existing: str,
-    relay_port: int,
+    port: int,
     model: str,
     *,
     setup_alias: str,
     token_file: Path | None = None,
     local_chats: bool = LOCAL_CHATS,
+    catalog: Path | None = None,
 ) -> str:
     """The copy's own config.toml. Its provider is a custom one without
     `requires_openai_auth`, so the copy opens with no ChatGPT or OpenAI
-    sign-in. With local chats blocked (the default), it leads to the relay's
-    local-chats answer (no credential, no model call); with them on, to the
-    Toolkit through the relay, with the launch token read from `token_file`.
+    sign-in. With local chats blocked (the default), `port` is the
+    local-chats responder's (LocalChatsServer: no credential, no model
+    call); with them on, it's the launch's relay, to the Toolkit with the
+    launch token read from `token_file`.
     The other settings the app saved there are kept. `existing` must parse
     (AppHold moves a broken file aside first)."""
     config = tomllib.loads(existing) if existing.strip() else {}
@@ -694,7 +709,7 @@ def local_config(
             raise ValueError("local chats need the launch token's file")
         providers["toolkit"] = {
             "name": "U-M GPT Toolkit (through UM-Codex)",
-            "base_url": f"http://127.0.0.1:{relay_port}/relay/v1",
+            "base_url": f"http://127.0.0.1:{port}/relay/v1",
             "wire_api": "responses",
             "request_max_retries": 1,
             "stream_max_retries": 2,
@@ -704,7 +719,7 @@ def local_config(
     else:
         providers["toolkit"] = {
             "name": "UM-Codex: use a Remote chat",
-            "base_url": f"http://127.0.0.1:{relay_port}/um-codex-local/{setup_alias}/v1",
+            "base_url": f"http://127.0.0.1:{port}/um-codex-local/{setup_alias}/v1",
             "wire_api": "responses",
             "request_max_retries": 0,
             "stream_max_retries": 0,
@@ -720,8 +735,332 @@ def local_config(
         }
     )
     config.setdefault("model", model)
+    if catalog is not None:
+        # No upgrade offers or new-model announcements on the copy's own side.
+        config["model_catalog_json"] = str(catalog)
+    else:
+        config.pop("model_catalog_json", None)
     head = "# UM-Codex sets the provider here at each launch in the Codex app; the rest is the app's.\n"
     return head + tomli_w.dumps(config)
+
+
+# --- The local-chats responder ----------------------------------------------------
+#
+# The copy keeps the config it started with while it runs, so its local
+# provider can't follow a launch's relay port (the GUI test: after Stop and
+# Start, an old local chat waited for a relay that was gone, showing
+# "Reconnecting... waiting for network"). It points at a port fixed per data
+# folder instead (`codex-app/local-chats-port`), where every app launch and
+# the launcher window serve the responder (relay.local_chats_app): whichever
+# binds it first, the others see it's there (`_whoami`). A failing
+# `auth.command` was tried first: Codex 0.159.2 then retries for ever with
+# "Reconnecting... waiting for network", never showing its message.
+
+PORT_FILE = "local-chats-port"
+
+
+def _port_file(data: Path | None = None) -> Path:
+    return app_folder(data) / PORT_FILE
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def local_chats_port(data: Path | None = None) -> int:
+    """This data folder's port for the responder, chosen once and kept."""
+    path = _port_file(data)
+    try:
+        port = int(path.read_text(encoding="ascii").strip())
+        if 1024 < port < 65536:
+            return port
+    except (OSError, ValueError):
+        pass
+    port = _free_port()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _private_write(path, f"{port}\n")
+    return port
+
+
+def _serves_us(port: int, instance: str) -> bool:
+    import httpx
+
+    from umcodex.relay import LOCAL_WHOAMI
+
+    try:
+        answer = httpx.get(f"http://127.0.0.1:{port}{LOCAL_WHOAMI}", timeout=2)
+        return answer.json().get("instance") == instance
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return False
+
+
+class LocalChatsServer:
+    """Serves the local-chats responder on this data folder's port, in a
+    background thread, while it holds the port. `ensure()` (call it again
+    from time to time) takes the port over when the process that had it has
+    ended. If another program holds the port, a new one is chosen and kept;
+    the copy follows it after a restart (its config is rewritten at each
+    launch)."""
+
+    def __init__(self, data: Path | None = None) -> None:
+        self.data = data or data_dir()
+        self._loop = None
+        self._thread = None
+        self._runner = None
+        self.port: int | None = None
+
+    @property
+    def serving(self) -> bool:
+        return self._runner is not None
+
+    def ensure(self) -> int:
+        """The port local chats reach now (served here or by another UM-Codex)."""
+        port = local_chats_port(self.data)
+        if self.serving and self.port == port:
+            return port
+        instance = instance_of(self.data)
+        if self._bind(port, instance):
+            return port
+        if _serves_us(port, instance):
+            return port
+        log.warning("the local-chats port %d is used by another program; choosing another", port)
+        _port_file(self.data).unlink(missing_ok=True)
+        port = local_chats_port(self.data)
+        self._bind(port, instance)
+        return port
+
+    def _bind(self, port: int, instance: str) -> bool:
+        import asyncio
+        import socket
+        import threading
+
+        from aiohttp import web
+
+        from umcodex.relay import local_chats_app
+
+        self.stop()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            sock.close()
+            return False
+        loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=loop.run_forever, name="umcodex-local-chats", daemon=True)
+        thread.start()
+
+        data = self.data
+
+        def running() -> list[str]:
+            from umcodex.launch import running_launches
+
+            return [
+                launch.app["alias"]
+                for launch in running_launches(data)
+                if launch.app and "alias" in launch.app
+            ]
+
+        async def start() -> web.AppRunner:
+            runner = web.AppRunner(local_chats_app(instance, running), access_log=None)
+            await runner.setup()
+            await web.SockSite(runner, sock).start()
+            return runner
+
+        self._runner = asyncio.run_coroutine_threadsafe(start(), loop).result(timeout=20)
+        self._loop, self._thread, self.port = loop, thread, port
+        return True
+
+    def stop(self) -> None:
+        import asyncio
+
+        if self._loop is None or self._runner is None:
+            return
+        loop, runner, thread = self._loop, self._runner, self._thread
+        self._loop = self._runner = self._thread = None
+        self.port = None
+        with contextlib.suppress(Exception):
+            asyncio.run_coroutine_threadsafe(runner.cleanup(), loop).result(timeout=10)
+        loop.call_soon_threadsafe(loop.stop)
+        if thread is not None:
+            thread.join(timeout=10)
+        loop.close()
+
+
+# --- The copy's own state: the host, its project, pop-ups seen ----------------
+#
+# The app (26.928) keeps its connections, projects and what it has shown in
+# `$CODEX_HOME/.codex-global-state.json` (and `.bak`, read when the first
+# doesn't parse): a plain JSON object, loaded once when the app starts and
+# rewritten by it as things change, each key checked against a schema (a
+# value that fails is dropped). So UM-Codex merges its entries in only while
+# the copy isn't running; with the copy open, the launcher shows the steps.
+# The shapes are the ones the app itself wrote in the GUI test, after the
+# host was added and a project made by hand. If the file holds anything
+# UM-Codex doesn't recognise for these keys (an app update changed them), it
+# changes nothing and the launcher shows the steps.
+
+GLOBAL_STATE = ".codex-global-state.json"
+ATOMS = "electron-persisted-atom-state"
+TESTED_APP_VERSIONS = ("26.928.",)  # the app versions this was checked with
+
+
+def host_id(setup_id: str) -> str:
+    return f"remote-ssh-discovered:{alias(setup_id)}"
+
+
+def project_id(setup_id: str) -> str:
+    """The setup's project id in the app: stable (a UUID from the alias)."""
+    import uuid
+
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"um-codex:{alias(setup_id)}:/work"))
+
+
+def app_version(app: Path | None) -> str | None:
+    if app is None:
+        return None
+    try:
+        with (app / "Contents" / "Info.plist").open("rb") as file:
+            value = plistlib.load(file).get("CFBundleShortVersionString")
+    except (OSError, plistlib.InvalidFileException, ValueError, AttributeError):
+        return None
+    return value if isinstance(value, str) else None
+
+
+class StateUnknown(ValueError):
+    """The app's state file has a shape UM-Codex doesn't know."""
+
+
+def _expect(value: object, kind: type, key: str) -> None:
+    if value is not None and not isinstance(value, kind):
+        raise StateUnknown(key)
+
+
+def seeded_state(
+    state: dict, setup: Setup, *, seen_models: Iterable[str] = (), now: float | None = None
+) -> dict:
+    """`state` with the setup's host added and switched on, its project
+    (/work, named after the setup) made and selected, and the first-run
+    onboarding and the given models' announcements marked as seen. Raises
+    StateUnknown for a shape it doesn't know."""
+    import uuid
+
+    now = time.time() if now is None else now
+    state = json.loads(json.dumps(state))  # a copy
+    host, project, name = host_id(setup.id), project_id(setup.id), alias(setup.id)
+    for key, kind in (
+        ("codex-managed-remote-connections", list),
+        ("remote-connection-auto-connect-by-host-id", dict),
+        ("remote-connection-analytics-id-by-host-id", dict),
+        ("remote-projects", list),
+        ("project-order", list),
+        ("selected-project", dict),
+        (ATOMS, dict),
+    ):
+        _expect(state.get(key), kind, key)
+    analytics = state.setdefault("remote-connection-analytics-id-by-host-id", {})
+    analytics_id = analytics.setdefault(host, str(uuid.uuid4()))
+    connections = state.setdefault("codex-managed-remote-connections", [])
+    if not any(isinstance(c, dict) and c.get("hostId") == host for c in connections):
+        connections.append(
+            {
+                "hostId": host,
+                "displayName": name,
+                "source": "discovered",
+                "alias": name,
+                "hostname": None,
+                "sshPort": None,
+                "identity": None,
+                "connectionAnalyticsId": analytics_id,
+            }
+        )
+    state.setdefault("remote-connection-auto-connect-by-host-id", {})[host] = True
+    projects = state.setdefault("remote-projects", [])
+    mine = next(
+        (
+            p
+            for p in projects
+            if isinstance(p, dict) and p.get("hostId") == host and p.get("remotePath") == "/work"
+        ),
+        None,
+    )
+    if mine is None:
+        mine = {"id": project, "hostId": host, "remotePath": "/work", "label": setup.name}
+        projects.append(mine)
+    order = state.setdefault("project-order", [])
+    if mine["id"] not in order:
+        order.insert(0, mine["id"])
+    state["selected-project"] = {"type": "remote", "projectId": mine["id"]}
+    state.setdefault("desktop-first-seen-at-ms", int(now * 1000))
+    atoms = state.setdefault(ATOMS, {})
+    # The welcome flow is skipped once this is true (app-initial's route);
+    # the person's role isn't answered for them.
+    atoms["electron:onboarding-projectless-completed"] = True
+    atoms.setdefault("electron:onboarding-hide-first-new-thread-promos", True)
+    atoms.setdefault("chatgpt-migration-announcement-completed-v1", True)
+    seen = atoms.setdefault("seen-model-upgrade-list", [])
+    if not isinstance(seen, list):
+        raise StateUnknown("seen-model-upgrade-list")
+    seen.extend(m for m in seen_models if m not in seen)
+    sidebar = atoms.setdefault("unified-sidebar-project-order-v1", [])
+    if isinstance(sidebar, list) and f"codex:project:{mine['id']}" not in sidebar:
+        sidebar.insert(0, f"codex:project:{mine['id']}")
+    return state
+
+
+def read_state(home: Path) -> dict:
+    """The copy's state file (its backup if the file itself doesn't parse,
+    as the app does); {} when there's none yet."""
+    for path in (home / GLOBAL_STATE, home / f"{GLOBAL_STATE}.bak"):
+        if not path.exists():
+            continue
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue
+        if isinstance(value, dict):
+            return value
+        raise StateUnknown("the state file isn't a JSON object")
+    return {}
+
+
+def seed_copy(home: Path, setup: Setup, *, seen_models: Iterable[str] = ()) -> None:
+    """Write the seeded state (the file and its backup, as the app does).
+    Only while the copy isn't running. Raises StateUnknown or OSError."""
+    text = json.dumps(seeded_state(read_state(home), setup, seen_models=seen_models))
+    for path in (home / GLOBAL_STATE, home / f"{GLOBAL_STATE}.bak"):
+        _replace(path, text.encode("utf-8"), mode=0o644)
+
+
+def bundled_catalog(
+    app: Path, home: Path, model: str, run: Runner = subprocess.run
+) -> tuple[str | None, list[str]]:
+    """The copy's own model catalog (the app's bundled Codex's list, with no
+    upgrade offers or announcements: codex_config.model_catalog), and the
+    models it would announce, to mark as seen. (None, []) if it can't be read."""
+    from umcodex.codex_config import model_catalog
+
+    codex = app / "Contents" / "Resources" / "codex-cli" / "bin" / "codex"
+    try:
+        done = run(
+            [str(codex), "debug", "models", "--bundled"],
+            capture_output=True, text=True, timeout=60, check=False,
+            env={"CODEX_HOME": str(home), "HOME": str(home), "PATH": "/usr/bin:/bin"},
+            stdin=subprocess.DEVNULL,
+        )  # fmt: skip
+    except (OSError, subprocess.SubprocessError):
+        return None, []
+    if done.returncode != 0:
+        return None, []
+    try:
+        entries = json.loads(done.stdout)["models"]
+        announced = [e["slug"] for e in entries if isinstance(e, dict) and e.get("availability_nux")]
+    except (ValueError, KeyError, TypeError):
+        return None, []
+    return model_catalog(done.stdout, [], model), announced
 
 
 # --- Which setups have connected once ---------------------------------------------
@@ -789,32 +1128,64 @@ class AppHold:
         public = ensure_key(setup.id, run=self.run)
         write_config(self.proxy_for, setup_ids={*_saved_setup_ids(), setup.id})
         prepare_container(self.docker, spec.agent, public)
-        token_file = self._write_copy_files(running.relay_port, running.token, setup)
-        first = not connected_before(setup.id, self.data)
+        responder = LocalChatsServer(self.data)
+        if not self.local_chats:
+            responder.ensure()
+        copy_open = self.app is not None and running_copy(self.data, self.run) is not None
+        seen = self._write_copy_files(running.relay_port, running.token, setup, responder)
+        seeded = False
+        if self.app is not None and not copy_open:
+            seeded = self._seed(setup, seen)
+        connected_once = connected_before(setup.id, self.data)
         state = {
             "alias": name,
             "connected": False,
-            "first_time": first,
-            "steps": first_steps(setup.id),
+            # The steps show at once only when UM-Codex couldn't set the copy
+            # up itself and the host hasn't connected before.
+            "first_time": not connected_once and not seeded,
+            "seeded": seeded,
+            "steps": first_steps(setup.id, setup.name),
             "notes": notes(setup.id, local_chats=self.local_chats),
             "copy": "not-opened",
         }
+        token_file = app_folder(self.data) / "launch-token"
         try:
-            state["copy"] = self._open_copy(setup.id, first)
+            state["copy"] = self._open_copy(setup.id, link=not seeded and not connected_once)
             update_launch_app(running.folder, state)
             self._say_ready(name, state)
-            return self._wait(running, state)
+            return self._wait(running, state, responder)
         except KeyboardInterrupt:
             self.say("")
             self.say("Ending the launch...")
             return 0
         finally:
+            responder.stop()
             # Only this launch's token (another launch may have written its own since).
             with contextlib.suppress(OSError):
                 if token_file.read_text(encoding="utf-8") == running.token:
                     token_file.unlink()
 
-    def _write_copy_files(self, relay_port: int, token: str, setup: Setup) -> Path:
+    def _seed(self, setup: Setup, seen: list[str]) -> bool:
+        """The host, its project and the pop-ups seen, in the copy's state
+        file (the copy isn't running). False, and nothing changed, if the
+        file's shape isn't one UM-Codex knows."""
+        home, _ = copy_paths(self.data)
+        version = app_version(self.app)
+        if version is not None and not version.startswith(TESTED_APP_VERSIONS):
+            log.info("Codex app %s: not a version the copy's set-up was checked with; trying it", version)
+        try:
+            seed_copy(home, setup, seen_models=seen)
+        except (StateUnknown, OSError) as error:
+            log.warning("the Codex app copy's state couldn't be set up (%s); showing the steps", error)
+            return False
+        log.info("the Codex app copy is set up for %s (app %s)", alias(setup.id), version)
+        return True
+
+    def _write_copy_files(
+        self, relay_port: int, token: str, setup: Setup, responder: LocalChatsServer
+    ) -> list[str]:
+        """The copy's config.toml (and its model catalog). Returns the models
+        the app would announce, to mark as seen."""
         home, user_data = copy_paths(self.data)
         for folder in (app_folder(self.data), home, user_data):
             folder.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -823,6 +1194,12 @@ class AppHold:
             _private_write(token_file, token)
         else:
             token_file.unlink(missing_ok=True)  # from a copy that allowed local chats
+        catalog_path, announced = None, []
+        if self.app is not None:
+            catalog, announced = bundled_catalog(self.app, home, setup.model, run=self.run)
+            if catalog is not None:
+                catalog_path = app_folder(self.data) / "models.json"
+                _private_write(catalog_path, catalog)
         config = home / "config.toml"
         existing = ""
         if config.exists():
@@ -836,25 +1213,31 @@ class AppHold:
                 existing = ""
         text = local_config(
             existing,
-            relay_port,
+            relay_port if self.local_chats else local_chats_port(self.data),
             setup.model,
             setup_alias=alias(setup.id),
             token_file=token_file if self.local_chats else None,
             local_chats=self.local_chats,
+            catalog=catalog_path,
         )
         _private_write(config, text)
-        return token_file
+        return announced
 
-    def _open_copy(self, setup_id: str, first: bool) -> str:
+    def _open_copy(self, setup_id: str, *, link: bool) -> str:
         if self.app is None:
             return "not-opened"
         pid = running_copy(self.data, self.run)
         if pid is not None:
             return "brought-forward" if bring_forward(pid, self.run) else "already-open"
-        # The add link only the first time: it adds the host switched off, so
-        # later it would switch off a host the person turned on.
-        link = deep_link(setup_id) if first else None
-        done = self.run(open_command(self.app, self.data, link), capture_output=True, timeout=60, check=False)
+        # The add link only when UM-Codex couldn't set the copy up and the
+        # host never connected: it adds the host switched off, so later it
+        # would switch off a host that's on.
+        done = self.run(
+            open_command(self.app, self.data, deep_link(setup_id) if link else None),
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
         if done.returncode != 0:
             log.warning("the Codex app copy didn't open (exit code %s)", done.returncode)
             return "failed"
@@ -873,6 +1256,9 @@ class AppHold:
             self.say("The first time for this setup, in UM-Codex's Codex window:")
             for number, step in enumerate(state["steps"], 1):
                 self.say(f"  {number}. {step}")
+        elif state.get("seeded"):
+            self.say(f"UM-Codex's Codex window opens on this setup's project, connected to {name}.")
+            self.say(POPUP_NOTE)
         else:
             self.say(f"The Codex app reconnects to {name} by itself.")
         self.say("")
@@ -883,7 +1269,7 @@ class AppHold:
         with contextlib.suppress(OSError, ValueError):
             sys.stdout.flush()
 
-    def _wait(self, running, state: dict) -> int:
+    def _wait(self, running, state: dict, responder: LocalChatsServer | None = None) -> int:
         from umcodex.launch import update_launch_app
 
         agent = running.spec.agent
@@ -891,6 +1277,9 @@ class AppHold:
         while True:
             # Twice in a row: a Docker that's slow to answer once isn't a stop.
             missing = 0 if self.docker.running(agent) else missing + 1
+            if responder is not None and not self.local_chats:
+                with contextlib.suppress(OSError, RuntimeError):
+                    responder.ensure()  # takes the port over if the process that had it ended
             if missing >= 2:
                 self.say("The sandbox was stopped.")
                 return 0

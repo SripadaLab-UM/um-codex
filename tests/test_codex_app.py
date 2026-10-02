@@ -542,7 +542,7 @@ def _ran(calls):
     return run
 
 
-def test_the_first_launch_opens_the_copy_on_the_add_link_and_notices_the_connection(
+def test_the_first_launch_sets_the_copy_up_opens_it_and_notices_the_connection(
     tmp_path, data_folder, ssh_home
 ):
     running = _running(tmp_path, data_folder)
@@ -556,20 +556,46 @@ def test_the_first_launch_opens_the_copy_on_the_add_link_and_notices_the_connect
     assert hold.labels == (("umcodex.ssh", "thesis-a1"),)
     assert hold(running) == 0
     opened = next(c for c in calls if c[0] == "/usr/bin/open")
-    assert opened[-1] == "codex://settings/connections/ssh/add?name=umcodex-thesis-a1"
+    assert not any(part.startswith("codex://") for part in opened)  # set up already: no add link
     assert any(c[:2] == ["docker", "exec"] and "root" in c for c in docker.commands)  # prepared
     info = json.loads((running.folder / "launch.json").read_text())
     assert info["app"]["connected"] is True and info["app"]["alias"] == "umcodex-thesis-a1"
+    assert info["app"]["seeded"] is True
     assert info["setup_id"] == "thesis-a1" and info["started_at"] == 100.0
     assert codex_app.connected_before("thesis-a1", data_folder)
-    assert any("Settings → Connections" in line for line in said)
+    assert any("opens on this setup's project" in line for line in said)
     assert any(line.startswith("Connected") for line in said)
-    # The copy's config and its token file; the token file goes at the end.
     home, _ = codex_app.copy_paths(data_folder)
-    assert "127.0.0.1:41234/um-codex-local/umcodex-thesis-a1/v1" in (home / "config.toml").read_text()
+    state = json.loads((home / ".codex-global-state.json").read_text())
+    assert state["remote-connection-auto-connect-by-host-id"] == {
+        "remote-ssh-discovered:umcodex-thesis-a1": True
+    }
+    port = codex_app.local_chats_port(data_folder)
+    assert f"127.0.0.1:{port}/um-codex-local/umcodex-thesis-a1/v1" in (home / "config.toml").read_text()
     assert not (codex_app.app_folder(data_folder) / "launch-token").exists()  # never written
     assert "tok-123" not in (home / "config.toml").read_text()
     assert (ssh_home / ".ssh" / "um-codex" / "config").read_text().count("Host umcodex-thesis-a1") == 1
+
+
+def test_a_copy_state_of_an_unknown_shape_gets_the_steps_and_the_add_link(tmp_path, data_folder):
+    home, _ = codex_app.copy_paths(data_folder)
+    home.mkdir(parents=True)
+    (home / ".codex-global-state.json").write_text(json.dumps({"remote-projects": {"not": "a list"}}))
+    running = _running(tmp_path, data_folder)
+    calls: list[list[str]] = []
+    hold = codex_app.AppHold(
+        "thesis-a1", say=lambda _: None, data=data_folder, app=Path("/Applications/ChatGPT.app"),
+        docker=FakeDocker(running_for=1, connects_after=None), run=_ran(calls), sleep=lambda _: None,
+        proxy_for=lambda s: ["/x/um-codex", "ssh-proxy", s],
+    )  # fmt: skip
+    hold(running)
+    opened = next(c for c in calls if c[0] == "/usr/bin/open")
+    assert opened[-1] == "codex://settings/connections/ssh/add?name=umcodex-thesis-a1"
+    info = json.loads((running.folder / "launch.json").read_text())
+    assert info["app"]["seeded"] is False and info["app"]["first_time"] is True
+    assert json.loads((home / ".codex-global-state.json").read_text()) == {
+        "remote-projects": {"not": "a list"}
+    }
 
 
 def test_a_later_launch_doesnt_pass_the_link_and_a_running_copy_isnt_doubled(tmp_path, data_folder):
@@ -683,3 +709,151 @@ def test_a_config_that_isnt_text_is_left_alone(ssh_home):
     with pytest.raises(UnicodeDecodeError):
         codex_app.add_include()
     assert (ssh / "config").read_bytes() == b"\xff\xfe binary"
+
+
+# --- The copy's state file (shapes the app 26.928 wrote in the GUI test) -------------
+
+GUI_TEST_STATE = {
+    "local-projects": {},
+    "codex-managed-remote-connections": [
+        {
+            "hostId": "remote-ssh-discovered:umcodex-other-c3",
+            "displayName": "umcodex-other-c3",
+            "source": "discovered",
+            "alias": "umcodex-other-c3",
+            "hostname": None,
+            "sshPort": None,
+            "identity": None,
+            "connectionAnalyticsId": "c55f5ada-089f-49d5-90d1-cc733963b884",
+        }
+    ],
+    "remote-connection-auto-connect-by-host-id": {"remote-ssh-discovered:umcodex-other-c3": True},
+    "remote-projects": [
+        {
+            "id": "3df46154",
+            "hostId": "remote-ssh-discovered:umcodex-other-c3",
+            "remotePath": "/work",
+            "label": "work",
+        }
+    ],
+    "project-order": ["3df46154"],
+    "selected-project": {"type": "remote", "projectId": "3df46154"},
+    "electron-persisted-atom-state": {
+        "seen-model-upgrade-list": ["gpt-6.1-sol"],
+        "home-composer-mode-v1": "work",
+    },
+}
+
+
+def test_the_copy_state_gets_the_host_on_its_project_selected_and_pop_ups_seen():
+    setup = Setup(id="thesis-a1", name="Thesis", working="/tmp")
+    state = codex_app.seeded_state(GUI_TEST_STATE, setup, seen_models=["gpt-6.1-sol", "gpt-7"])
+    host = "remote-ssh-discovered:umcodex-thesis-a1"
+    mine = next(c for c in state["codex-managed-remote-connections"] if c["hostId"] == host)
+    assert mine["alias"] == "umcodex-thesis-a1" and mine["source"] == "discovered"
+    assert mine["connectionAnalyticsId"] == state["remote-connection-analytics-id-by-host-id"][host]
+    assert state["remote-connection-auto-connect-by-host-id"][host] is True
+    project = next(p for p in state["remote-projects"] if p["hostId"] == host)
+    assert project == {
+        "id": codex_app.project_id("thesis-a1"),
+        "hostId": host,
+        "remotePath": "/work",
+        "label": "Thesis",
+    }
+    assert state["project-order"][0] == project["id"] and "3df46154" in state["project-order"]
+    assert state["selected-project"] == {"type": "remote", "projectId": project["id"]}
+    atoms = state["electron-persisted-atom-state"]
+    assert atoms["electron:onboarding-projectless-completed"] is True
+    assert atoms["seen-model-upgrade-list"] == ["gpt-6.1-sol", "gpt-7"]
+    assert "electron:onboarding-welcome-v2-role-state" not in atoms  # no role chosen for the person
+    assert atoms["home-composer-mode-v1"] == "work"  # the app's own state kept
+    # The other setup's host and project are kept, and a second pass changes nothing.
+    assert len(state["codex-managed-remote-connections"]) == 2 and len(state["remote-projects"]) == 2
+    assert codex_app.seeded_state(state, setup, seen_models=["gpt-7"]) == state
+    assert GUI_TEST_STATE["project-order"] == ["3df46154"]  # the input isn't changed
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"remote-projects": {}},
+        {"codex-managed-remote-connections": "x"},
+        {"electron-persisted-atom-state": []},
+        {"electron-persisted-atom-state": {"seen-model-upgrade-list": "gpt"}},
+    ],
+)
+def test_an_unknown_state_shape_isnt_touched(broken):
+    with pytest.raises(codex_app.StateUnknown):
+        codex_app.seeded_state(broken, Setup(id="a1", name="A", working="/tmp"))
+
+
+def test_the_state_file_and_its_backup_are_written_the_way_the_app_reads_them(tmp_path):
+    (tmp_path / ".codex-global-state.json").write_text("{ not json")
+    (tmp_path / ".codex-global-state.json.bak").write_text(json.dumps({"project-order": ["x"]}))
+    codex_app.seed_copy(tmp_path, Setup(id="a1", name="A", working="/tmp"))
+    main = json.loads((tmp_path / ".codex-global-state.json").read_text())
+    assert main == json.loads((tmp_path / ".codex-global-state.json.bak").read_text())
+    assert main["project-order"][-1] == "x"  # read from the backup, as the app does
+
+
+def test_the_copys_catalog_has_no_announcements(tmp_path):
+    bundled = Path(__file__).parent / "data" / "codex-0.157.1-bundled-models.json"
+    entries = json.loads(bundled.read_text())["models"]
+    entries[0]["availability_nux"] = {"title": "Introducing"}
+    text = json.dumps({"models": entries})
+    calls = []
+
+    def run(command, **options):
+        calls.append((command, options))
+        return subprocess.CompletedProcess(command, 0, text, "")
+
+    catalog, announced = codex_app.bundled_catalog(Path("/A.app"), tmp_path, "gpt-5.6-terra", run=run)
+    assert announced == [entries[0]["slug"]]
+    assert calls[0][0][-3:] == ["debug", "models", "--bundled"]
+    assert calls[0][1]["env"]["CODEX_HOME"] == str(tmp_path)  # never the person's ~/.codex
+    assert catalog is not None
+    assert all(m["availability_nux"] is None and m["upgrade"] is None for m in json.loads(catalog)["models"])
+    failed = lambda c, **o: subprocess.CompletedProcess(c, 1, "", "")  # noqa: E731
+    assert codex_app.bundled_catalog(Path("/A.app"), tmp_path, "m", run=failed) == (None, [])
+
+
+# --- The local-chats responder ------------------------------------------------------
+
+
+def test_the_responder_port_is_kept_and_taken_over_when_free(data_folder):
+    import httpx
+
+    first = codex_app.LocalChatsServer(data_folder)
+    port = first.ensure()
+    assert port == codex_app.local_chats_port(data_folder)  # kept in the data folder
+    second = codex_app.LocalChatsServer(data_folder)
+    try:
+        assert second.ensure() == port and not second.serving  # the first one serves it
+        answer = httpx.post(f"http://127.0.0.1:{port}/um-codex-local/umcodex-a1/v1/responses", content=b"{}")
+        assert "no UM-Codex setup is running" in answer.text
+        first.stop()
+        assert second.ensure() == port and second.serving  # taken over
+    finally:
+        first.stop()
+        second.stop()
+
+
+def test_a_port_held_by_another_program_is_replaced(data_folder):
+    import socket
+
+    taken = socket.socket()
+    taken.bind(("127.0.0.1", 0))
+    taken.listen()
+    try:
+        path = codex_app.app_folder(data_folder) / "local-chats-port"
+        path.parent.mkdir(parents=True)
+        path.write_text(f"{taken.getsockname()[1]}\n")
+        server = codex_app.LocalChatsServer(data_folder)
+        try:
+            port = server.ensure()
+            assert port != taken.getsockname()[1] and server.serving
+            assert codex_app.local_chats_port(data_folder) == port
+        finally:
+            server.stop()
+    finally:
+        taken.close()

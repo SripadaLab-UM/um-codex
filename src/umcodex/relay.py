@@ -52,11 +52,13 @@ for _noisy in ("httpcore", "httpx", "aiohttp.access"):
 PREFIX = "/relay/v1/"
 ALIVE = "_umcodex/alive"
 # The Codex app copy's own ("local", "this computer") side (M6, codex_app.py):
-# local chats are blocked, so its provider leads here, under the setup's ssh
-# alias: `/um-codex-local/<alias>/v1/`. Answered by the relay itself, with
-# no token, and never sent upstream: `responses` gets one assistant message
-# saying to use a Remote chat; anything else, 404.
+# local chats are blocked, so its provider leads to `/um-codex-local/<alias>/v1/`
+# on a small responder of its own (local_chats_app, served on a fixed port
+# per data folder by codex_app.LocalChatsServer), never this relay: it has no
+# key and calls nothing. `responses` gets one assistant message saying to use
+# a Remote chat; anything else, 404.
 LOCAL_PREFIX = "/um-codex-local/"
+LOCAL_WHOAMI = "/um-codex-local/_whoami"
 _LOCAL_PATH = re.compile(r"/um-codex-local/(umcodex-[A-Za-z0-9][A-Za-z0-9_.-]{0,127})/v1/(.*)")
 REDACTED = b"[removed by UM-Codex]"
 
@@ -113,10 +115,20 @@ def bearer_token(authorization: str | None) -> str | None:
     return None
 
 
-def local_chats_message(alias: str) -> str:
+def local_chats_message(aliases: list[str] | str) -> str:
+    """What a local chat in the app copy answers: which Remote chats to use
+    (the setups running in the app now), or that none is running."""
+    names = [aliases] if isinstance(aliases, str) else list(aliases)
+    if not names:
+        return (
+            "This UM-Codex window only works in Remote chats, and no UM-Codex setup is running in the "
+            "Codex app right now. Start one in UM-Codex, then use its Remote chat. Local chats would "
+            "run on your Mac, outside the sandbox."
+        )
+    remote = " or ".join(f"Remote · {name}" for name in names)
     return (
-        f"This UM-Codex window only works in Remote chats. Start a chat on Remote · {alias} "
-        '(project "work"). Local chats would run on your Mac, outside the sandbox.'
+        f"This UM-Codex window only works in Remote chats. Start a chat on {remote} "
+        "(its project in the sidebar). Local chats would run on your Mac, outside the sandbox."
     )
 
 
@@ -124,7 +136,7 @@ def _sse(data: dict) -> bytes:
     return f"event: {data['type']}\ndata: {json.dumps(data)}\n\n".encode()
 
 
-def local_chats_answer(alias: str) -> bytes:
+def local_chats_answer(alias: list[str] | str) -> bytes:
     """A complete streamed Responses API answer (the events Codex reads) with
     one assistant message and no model call."""
     response_id = "resp_umcodex_local_" + secrets.token_hex(8)
@@ -180,8 +192,6 @@ class Relay:
         return presented is not None and secrets.compare_digest(presented.encode(), self._token.encode())
 
     async def handle(self, request: web.Request) -> web.StreamResponse:
-        if request.path.startswith(LOCAL_PREFIX):
-            return await _local_chats(request)
         if not self.token_ok(bearer_token(request.headers.get("authorization"))):
             return _refused(401, "this launch's token is missing or wrong")
         if not request.path.startswith(PREFIX):
@@ -344,17 +354,36 @@ def _key_or_none(api_key: Callable[[], str]) -> str | None:
         return None
 
 
-async def _local_chats(request: web.Request) -> web.Response:
-    """The app copy's local side (see LOCAL_PREFIX): never upstream."""
-    found = _LOCAL_PATH.fullmatch(request.path)
-    if found is None or request.method != "POST" or found.group(2) != "responses":
-        return _refused(404, "local chats are off in UM-Codex")
-    await request.read()  # the request itself is ignored
-    log.info("local chat in the Codex app copy answered by UM-Codex (no model call)")
-    return web.Response(
-        body=local_chats_answer(found.group(1)),
-        headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"},
-    )
+def local_chats_app(instance: str, running: Callable[[], list[str]] | None = None) -> web.Application:
+    """The local-chats responder (see LOCAL_PREFIX). `_whoami` names the data
+    folder it serves, so another UM-Codex process can tell it's already there.
+    `running`: the aliases of the setups running in the app now, for the
+    message (else the alias in the path, from the copy's config)."""
+
+    async def whoami(request: web.Request) -> web.Response:
+        return web.json_response({"app": "um-codex-local-chats", "instance": instance})
+
+    async def local_chats(request: web.Request) -> web.Response:
+        found = _LOCAL_PATH.fullmatch(request.path)
+        if found is None or request.method != "POST" or found.group(2) != "responses":
+            return _refused(404, "local chats are off in UM-Codex")
+        await request.read()  # the request itself is ignored
+        aliases: list[str] | str = found.group(1)
+        if running is not None:
+            try:
+                aliases = await asyncio.to_thread(running)
+            except Exception:  # the message still goes out, with the path's alias
+                log.warning("couldn't list the setups running in the Codex app", exc_info=True)
+        log.info("local chat in the Codex app copy answered by UM-Codex (no model call)")
+        return web.Response(
+            body=local_chats_answer(aliases),
+            headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"},
+        )
+
+    app = web.Application(client_max_size=64 * 1024 * 1024)
+    app.router.add_get(LOCAL_WHOAMI, whoami)
+    app.router.add_route("*", "/{tail:.*}", local_chats)
+    return app
 
 
 def _refused(status: int, reason: str) -> web.Response:
