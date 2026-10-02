@@ -1239,3 +1239,65 @@ def test_a_port_held_by_another_program_is_replaced(data_folder):
             server.stop()
     finally:
         taken.close()
+
+
+def test_ssh_folders_keep_inherited_permissions_on_windows(tmp_path, monkeypatch):
+    """Python 3.13's mkdir(mode=0o700) gives a Windows folder an OWNER RIGHTS
+    entry, which Windows OpenSSH refuses for the config in it (live test,
+    2026-10-02): so no mode there."""
+    modes = []
+    real = Path.mkdir
+
+    def mkdir(self, *args, **options):
+        modes.append(options.get("mode"))
+        return real(self, *args, **options)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    codex_app._ssh_mkdir(tmp_path / "w", platform="win32")
+    codex_app._ssh_mkdir(tmp_path / "m" / "n", parents=True, platform="darwin")
+    assert modes[0] is None and 0o700 in modes[1:]
+    assert (tmp_path / "w").is_dir() and (tmp_path / "m" / "n").is_dir()
+
+
+WINDOWS_SSH = Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32" / "OpenSSH" / "ssh.exe"
+
+
+@pytest.mark.skipif(sys.platform != "win32" or not WINDOWS_SSH.is_file(), reason="needs Windows OpenSSH")
+def test_windows_openssh_accepts_umcodex_ssh_folders(tmp_path):
+    """The real check, with Windows' own ssh.exe: a config UM-Codex writes in
+    a folder it made is accepted when reached through an Include (ssh checks
+    included files' permissions; a file given with -F it doesn't). The same
+    file in a folder made with mode 0o700 is refused, so the check runs."""
+    host = "Host umcodex-x\n  HostName umcodex-x.invalid\n"
+
+    def resolves(folder: Path) -> subprocess.CompletedProcess:
+        codex_app._private_write(folder / "config", host)
+        top = tmp_path / f"top-{folder.name}"
+        top.write_text(f"Include {(folder / 'config').as_posix()}\n", encoding="utf-8")
+        return subprocess.run(
+            [str(WINDOWS_SSH), "-G", "-F", str(top), "umcodex-x"],
+            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
+        )  # fmt: skip
+
+    # A home like a real profile's (the person, SYSTEM, Administrators,
+    # inherited by what's made in it): pytest's own tmp_path is made with
+    # mkdir(mode=0o700), so on 3.13 it hands OWNER RIGHTS down itself.
+    home = tmp_path / "home"
+    home.mkdir()
+    sid = subprocess.run(
+        ["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True, check=True
+    ).stdout.strip().split(",")[-1].strip('"')
+    grants = [f"*{who}:(OI)(CI)F" for who in (sid, "S-1-5-18", "S-1-5-32-544")]
+    icacls = ["icacls", str(home), "/inheritance:r", *[x for g in grants for x in ("/grant:r", g)]]
+    subprocess.run(icacls, capture_output=True, check=True)
+    ours = home / ".ssh"
+    codex_app._private_dir(ours)
+    codex_app._private_dir(ours / "um-codex")
+    done = resolves(ours / "um-codex")
+    assert done.returncode == 0 and "Bad permissions" not in done.stderr, done.stderr
+    assert "hostname umcodex-x.invalid" in done.stdout.splitlines()
+    refused = home / "with-mode"
+    os.mkdir(refused, 0o700)
+    done = resolves(refused)
+    if sys.version_info >= (3, 13):  # mkdir's Windows ACL is new in 3.13
+        assert done.returncode != 0 and "Bad permissions" in done.stderr, done.stderr
