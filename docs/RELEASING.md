@@ -311,7 +311,7 @@ As the installers lay it out (docs/INSTALLING.md):
 versions/<version>/   one Python environment per version; .complete when whole
 current               the version the launchers run
 previous              the one before the last switch
-bin/um-codex          the command (Mac: a shim that runs `current`;
+bin/um-codex          the command (Mac: a shim that runs `current`, its folder written in;
                       Windows: um-codex.exe, a copy of current's own launcher)
 downloads/<version>/  a release's files while it's being installed
 update.lock           held while an update or rollback runs

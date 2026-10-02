@@ -72,6 +72,17 @@ its containers, and switches to it; the version before is kept.
 says when a new version is out. Running the install command again also
 installs the newest release.
 
+On a Mac with 0.1.0-alpha.1 or alpha.2, typing `um-codex` in Terminal
+doesn't work (it says "UM-Codex (none) can't be opened"). Update with the
+install command above, or run the command by its full path:
+
+```sh
+"$HOME/Library/Application Support/UM-Codex/app/bin/um-codex" update
+```
+
+After that, plain `um-codex` works. (If it still doesn't, open the UM-Codex
+app once: that puts it right.)
+
 To remove UM-Codex: `uninstall-macos.sh` or `uninstall-windows.ps1` from the
 same release page (they ask before removing your saved setups and Codex
 history).

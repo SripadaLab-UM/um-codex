@@ -839,23 +839,17 @@ else
   printf '{"version": "%s", "wheel_sha256": "%s", "installed_at": "%s"}\n' \
     "$VERSION" "$SHA256" "$(date +%Y-%m-%dT%H:%M:%S%z)" > "$TARGET/.complete"
 fi
-# The launcher's command runs whichever version `current` names.
+# The launcher's command, bin/um-codex, runs whichever version `current`
+# names (or `previous` if that one can't run). What it contains comes from
+# UM-Codex itself (umcodex/launchers.py), which `um-codex update` also uses to
+# bring it up to date: this install's folder is written in, quoted, never
+# worked out from $0, since the plain `um-codex` (below) is a link to it.
 mkdir -p "$ROOT/bin"
-cat > "$ROOT/bin/um-codex" <<'SHIM'
-#!/bin/sh
-# Runs the UM-Codex version named in ../current, or the one before
-# (../previous) if that one can't run.
-# UTF-8 for Python's own text files and console, whatever the locale.
-export PYTHONUTF8=1
-root="$(cd "$(dirname "$0")/.." && pwd)"
-version="$(head -n 1 "$root/current" 2>/dev/null || true)"
-if [ -z "$version" ] || [ ! -x "$root/versions/$version/bin/um-codex" ]; then
-  echo "UM-Codex ${version:-(none)} can't be opened; opening the version before it." >&2
-  version="$(head -n 1 "$root/previous" 2>/dev/null || true)"
+if ! "$TARGET/bin/um-codex" launchers --write-command; then
+  echo "The um-codex command couldn't be written in $ROOT/bin (the message above says why)."
+  echo "Run this installer again."
+  exit 1
 fi
-exec "$root/versions/$version/bin/um-codex" "$@"
-SHIM
-chmod +x "$ROOT/bin/um-codex"
 OLD="$(head -n 1 "$ROOT/current" 2>/dev/null || true)"
 if [ -n "$OLD" ] && [ "$OLD" != "$VERSION" ]; then
   printf '%s\n' "$OLD" > "$ROOT/.previous.new" && mv "$ROOT/.previous.new" "$ROOT/previous"
@@ -878,6 +872,13 @@ if [ -L "$COMMAND_LINK" ] || [ ! -e "$COMMAND_LINK" ]; then
   fi
 else
   echo "$COMMAND_LINK is already there and isn't UM-Codex's; it was left alone."
+fi
+# The link must work as people use it: run through the link, from another
+# folder (alpha.1's and alpha.2's command worked out its folder from $0, the
+# link, and failed there). If it doesn't, the end says the full path instead.
+if [ "$LINKED" = 1 ] && ! (cd / && "$COMMAND_LINK" --version >/dev/null 2>&1); then
+  echo "$COMMAND_LINK doesn't run UM-Codex; use the full path below instead."
+  LINKED=0
 fi
 # How to run it, said at the end: `um-codex` when ~/.local/bin was on your
 # PATH already, otherwise the command's full path, quoted for the shell.
