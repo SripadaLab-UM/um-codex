@@ -1,0 +1,6 @@
+{
+  "engine": "generative",
+  "voice": "Ruth",
+  "region": "us-east-1",
+  "text": "This video shows how to install UM-Codex on a Windows computer. First, what to have ready. Then, the one command that installs it. Then, Docker Desktop, the administrator step, and your key. And last, how to open UM-Codex."
+}

@@ -1,0 +1,6 @@
+{
+  "engine": "generative",
+  "voice": "Ruth",
+  "region": "us-east-1",
+  "text": "UM-Codex runs Codex in a sealed environment on your own computer. You need a Windows computer, your key for the University of Michigan's GPT Toolkit, which is in Aman's email, shared on Dropbox, and Docker Desktop, which runs the sealed environment. If Docker Desktop isn't installed, setup installs it for you."
+}

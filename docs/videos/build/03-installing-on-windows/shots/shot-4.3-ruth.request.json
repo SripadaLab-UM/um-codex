@@ -1,0 +1,6 @@
+{
+  "engine": "generative",
+  "voice": "Ruth",
+  "region": "us-east-1",
+  "text": "On the Michigan Medicine network, a Windows policy can stop Docker's virtual machine from starting. If that happens, the installer says so, and offers to fix it now. Windows asks for administrator permission once, and the right is given back. Or you can restart Windows, and run the installer again."
+}

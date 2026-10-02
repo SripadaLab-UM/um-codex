@@ -1,0 +1,139 @@
+1
+00:00:00,800 --> 00:00:04,440
+This video is a first walk through UM-Codex on Windows.
+
+2
+00:00:04,440 --> 00:00:08,540
+You'll open its window, choose a folder, and watch Codex open on it.
+
+3
+00:00:08,540 --> 00:00:12,536
+Then you'll ask Codex to do something, and stop and start again.
+
+4
+00:00:13,736 --> 00:00:18,156
+Open UM-Codex from your Desktop, and its window opens in your browser.
+
+5
+00:00:18,156 --> 00:00:20,536
+Docker is running and your key is saved.
+
+6
+00:00:20,536 --> 00:00:24,496
+The first time, there's one button: Choose a folder and start.
+
+7
+00:00:24,496 --> 00:00:26,576
+Under it is what Codex gets.
+
+8
+00:00:26,576 --> 00:00:29,656
+It starts in a Terminal window, working in your folder,
+
+9
+00:00:29,656 --> 00:00:34,696
+and it can change and delete files there: they're your real files, with no undo.
+
+10
+00:00:34,696 --> 00:00:38,696
+And the internet is on, so Codex could send what it reads anywhere.
+
+11
+00:00:38,696 --> 00:00:40,688
+You can change any of that later.
+
+12
+00:00:41,188 --> 00:00:44,708
+Press it, and choose a folder in Windows' own folder picker.
+
+13
+00:00:44,708 --> 00:00:48,108
+For this video, it's a demo folder of made-up files.
+
+14
+00:00:48,108 --> 00:00:53,308
+For anything important, work in a copy, or in a folder that's a git repository.
+
+15
+00:00:54,508 --> 00:00:55,728
+That's all you do.
+
+16
+00:00:55,728 --> 00:00:59,008
+The folder is now a setup, a card named after it.
+
+17
+00:00:59,008 --> 00:01:02,188
+Its line goes from Starting, to Running in Terminal.
+
+18
+00:01:02,688 --> 00:01:06,028
+Codex opens in a Terminal window, working in your folder.
+
+19
+00:01:06,028 --> 00:01:07,908
+This is where you talk to Codex.
+
+20
+00:01:07,908 --> 00:01:10,488
+It's running in the sealed environment on your computer,
+
+21
+00:01:10,488 --> 00:01:13,368
+and the folder you chose is what it can reach.
+
+22
+00:01:13,868 --> 00:01:16,308
+Now ask Codex for something in the folder.
+
+23
+00:01:16,308 --> 00:01:20,508
+Here, it summarizes the spreadsheet and writes a short note about it.
+
+24
+00:01:20,508 --> 00:01:25,388
+Codex works inside the sealed environment, and the note lands in your real folder.
+
+25
+00:01:25,888 --> 00:01:30,168
+Back in the window, the card always says what Codex can do with this setup:
+
+26
+00:01:30,168 --> 00:01:35,320
+the folder, and that changes there are real; the internet; and the model it's using.
+
+27
+00:01:36,520 --> 00:01:38,460
+When you're finished, press Stop.
+
+28
+00:01:38,460 --> 00:01:39,740
+It asks first.
+
+29
+00:01:39,740 --> 00:01:42,580
+Codex stops and its sandbox is removed.
+
+30
+00:01:42,580 --> 00:01:47,488
+Files it already changed in your folder stay as they are, and its history is kept.
+
+31
+00:01:47,988 --> 00:01:53,128
+Next time, the button at the top is Start, with your folder's name.
+
+32
+00:01:53,128 --> 00:01:53,128
+One click.
+
+33
+00:01:53,128 --> 00:01:57,308
+Edit shows three sections: Folder, Access and Codex.
+
+34
+00:01:57,308 --> 00:02:01,812
+That's where you add a folder Codex can only read, or turn the internet off.
+
+35
+00:02:02,312 --> 00:02:03,872
+That's your first launch.

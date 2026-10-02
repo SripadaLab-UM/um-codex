@@ -1,0 +1,207 @@
+1
+00:00:00,800 --> 00:00:05,000
+This video shows how to install UM-Codex on a Windows computer.
+
+2
+00:00:05,000 --> 00:00:07,080
+First, what to have ready.
+
+3
+00:00:07,080 --> 00:00:10,520
+Then, the one command that installs it.
+
+4
+00:00:10,520 --> 00:00:15,160
+Then, Docker Desktop, the administrator step, and your key.
+
+5
+00:00:15,160 --> 00:00:17,240
+And last, how to open UM-Codex.
+
+6
+00:00:18,440 --> 00:00:22,600
+UM-Codex runs Codex in a sealed environment on your own computer.
+
+7
+00:00:22,600 --> 00:00:27,780
+You need a Windows computer, your key for the University of Michigan's GPT Toolkit,
+
+8
+00:00:27,780 --> 00:00:30,580
+which is in Aman's email, shared on Dropbox,
+
+9
+00:00:30,580 --> 00:00:34,080
+and Docker Desktop, which runs the sealed environment.
+
+10
+00:00:34,080 --> 00:00:38,192
+If Docker Desktop isn't installed, setup installs it for you.
+
+11
+00:00:38,692 --> 00:00:42,852
+Installing Docker Desktop needs administrator permission, just once.
+
+12
+00:00:42,852 --> 00:00:47,672
+On a Michigan Medicine computer, you request temporary administrator access first.
+
+13
+00:00:47,672 --> 00:00:51,412
+It's turned on from your profile page, under administrator access.
+
+14
+00:00:51,412 --> 00:00:53,332
+Give it at least thirty minutes.
+
+15
+00:00:54,532 --> 00:00:58,172
+Open the Start menu, type PowerShell, and press Enter.
+
+16
+00:00:58,172 --> 00:01:01,332
+Open it the ordinary way, not as administrator.
+
+17
+00:01:01,332 --> 00:01:05,716
+The installer asks for administrator permission itself, only if it needs it.
+
+18
+00:01:06,216 --> 00:01:11,136
+Paste the install command from UM-Codex's page on GitHub, and press Enter.
+
+19
+00:01:11,136 --> 00:01:12,496
+It's one command.
+
+20
+00:01:12,496 --> 00:01:16,248
+It works through seven steps, and each one says what it's doing.
+
+21
+00:01:17,448 --> 00:01:19,348
+Step one gets Windows ready.
+
+22
+00:01:19,348 --> 00:01:23,048
+Docker Desktop needs a Windows feature called WSL.
+
+23
+00:01:23,048 --> 00:01:28,752
+On this computer, WSL and Docker Desktop are already there, so it moves on.
+
+24
+00:01:29,252 --> 00:01:30,712
+On a computer without them,
+
+25
+00:01:30,712 --> 00:01:34,432
+step one lists what it needs to change, and asks if you're ready.
+
+26
+00:01:34,432 --> 00:01:39,212
+Windows then shows a box asking to allow changes to your device.
+
+27
+00:01:39,212 --> 00:01:39,212
+Click Yes.
+
+28
+00:01:39,212 --> 00:01:42,792
+A second window does the work, which can take ten minutes or more.
+
+29
+00:01:42,792 --> 00:01:43,852
+Leave it open.
+
+30
+00:01:43,852 --> 00:01:49,004
+Windows then restarts, and the installer carries on by itself after you sign in.
+
+31
+00:01:49,504 --> 00:01:51,164
+On the Michigan Medicine network,
+
+32
+00:01:51,164 --> 00:01:54,984
+a Windows policy can stop Docker's virtual machine from starting.
+
+33
+00:01:54,984 --> 00:01:59,164
+If that happens, the installer says so, and offers to fix it now.
+
+34
+00:01:59,164 --> 00:02:03,804
+Windows asks for administrator permission once, and the right is given back.
+
+35
+00:02:03,804 --> 00:02:07,480
+Or you can restart Windows, and run the installer again.
+
+36
+00:02:07,980 --> 00:02:10,180
+Step two starts Docker Desktop.
+
+37
+00:02:10,180 --> 00:02:13,520
+Steps three to five install UM-Codex itself,
+
+38
+00:02:13,520 --> 00:02:17,900
+with its own copy of Python, and download the sealed environment's image.
+
+39
+00:02:17,900 --> 00:02:20,916
+The download is the long part, the first time.
+
+40
+00:02:21,416 --> 00:02:23,516
+Step six asks for your key.
+
+41
+00:02:23,516 --> 00:02:27,196
+Copy it from Aman's email, paste it, and press Enter.
+
+42
+00:02:27,196 --> 00:02:32,216
+Each character shows as a star, and the key is saved in Windows Credential Manager.
+
+43
+00:02:32,216 --> 00:02:36,608
+It never goes into the sealed environment, and it isn't kept in any file.
+
+44
+00:02:37,108 --> 00:02:42,028
+Step seven adds UM-Codex to your Start menu, and a shortcut to your Desktop.
+
+45
+00:02:42,028 --> 00:02:45,004
+Then it's done, and it tells you how to open it.
+
+46
+00:02:46,204 --> 00:02:51,084
+To open UM-Codex, double-click the UM-Codex icon on your Desktop.
+
+47
+00:02:51,084 --> 00:02:54,700
+You can also open the Start menu, and type UM-Codex.
+
+48
+00:02:55,200 --> 00:02:57,940
+It opens UM-Codex's window in your browser.
+
+49
+00:02:57,940 --> 00:03:01,400
+That's a page running on your own computer, not a website.
+
+50
+00:03:01,400 --> 00:03:05,112
+The line at the top says Docker is running and your key is saved.
+
+51
+00:03:05,612 --> 00:03:07,632
+That's UM-Codex installed.
+
+52
+00:03:07,632 --> 00:03:12,524
+In the next video, Your first launch on Windows, you start Codex in a folder.

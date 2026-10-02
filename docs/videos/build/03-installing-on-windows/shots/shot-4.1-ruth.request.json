@@ -1,0 +1,6 @@
+{
+  "engine": "generative",
+  "voice": "Ruth",
+  "region": "us-east-1",
+  "text": "Step one gets Windows ready. Docker Desktop needs a Windows feature called WSL. On this computer, WSL and Docker Desktop are already there, so it moves on."
+}

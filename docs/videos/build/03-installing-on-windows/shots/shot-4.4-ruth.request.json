@@ -1,0 +1,6 @@
+{
+  "engine": "generative",
+  "voice": "Ruth",
+  "region": "us-east-1",
+  "text": "Step two starts Docker Desktop. Steps three to five install UM-Codex itself, with its own copy of Python, and download the sealed environment's image. The download is the long part, the first time."
+}

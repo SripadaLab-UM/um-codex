@@ -1,0 +1,6 @@
+{
+  "engine": "generative",
+  "voice": "Ruth",
+  "region": "us-east-1",
+  "text": "When you're finished, press Stop. It asks first. Codex stops and its sandbox is removed. Files it already changed in your folder stay as they are, and its history is kept."
+}

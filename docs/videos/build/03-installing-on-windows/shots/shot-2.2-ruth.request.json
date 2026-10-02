@@ -1,0 +1,6 @@
+{
+  "engine": "generative",
+  "voice": "Ruth",
+  "region": "us-east-1",
+  "text": "Installing Docker Desktop needs administrator permission, just once. On a Michigan Medicine computer, you request temporary administrator access first. It's turned on from your profile page, under administrator access. Give it at least thirty minutes."
+}

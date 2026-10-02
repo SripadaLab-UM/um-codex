@@ -1,0 +1,6 @@
+{
+  "engine": "generative",
+  "voice": "Ruth",
+  "region": "us-east-1",
+  "text": "Step six asks for your key. Copy it from Aman's email, paste it, and press Enter. Each character shows as a star, and the key is saved in Windows Credential Manager. It never goes into the sealed environment, and it isn't kept in any file."
+}

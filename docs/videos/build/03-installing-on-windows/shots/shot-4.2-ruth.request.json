@@ -1,0 +1,6 @@
+{
+  "engine": "generative",
+  "voice": "Ruth",
+  "region": "us-east-1",
+  "text": "On a computer without them, step one lists what it needs to change, and asks if you're ready. Windows then shows a box asking to allow changes to your device. Click Yes. A second window does the work, which can take ten minutes or more. Leave it open. Windows then restarts, and the installer carries on by itself after you sign in."
+}

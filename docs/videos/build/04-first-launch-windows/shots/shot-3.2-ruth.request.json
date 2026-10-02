@@ -1,0 +1,6 @@
+{
+  "engine": "generative",
+  "voice": "Ruth",
+  "region": "us-east-1",
+  "text": "Codex opens in a Terminal window, working in your folder. This is where you talk to Codex. It's running in the sealed environment on your computer, and the folder you chose is what it can reach."
+}

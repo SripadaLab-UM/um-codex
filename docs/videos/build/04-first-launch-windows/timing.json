@@ -1,0 +1,80 @@
+{
+  "script": "04-first-launch-windows.md",
+  "script_sha256": "f9758c7a4654bb80d65f1b2d6b4e9bd6c4160d54b53f97e009028a44f12d3fc8",
+  "voice": "Ruth",
+  "engine": "generative",
+  "duration": 124.872,
+  "caption_timing": "shot boundaries exact; breaks within a shot placed at pauses",
+  "shots": [
+    {
+      "shot": "1.1",
+      "chapter": 1,
+      "start": 0.8,
+      "end": 12.536,
+      "text": "This video is a first walk through UM-Codex on Windows. You'll open its window, choose a folder, and watch Codex open on it. Then you'll ask Codex to do something, and stop and start again."
+    },
+    {
+      "shot": "2.1",
+      "chapter": 2,
+      "start": 13.736,
+      "end": 40.688,
+      "text": "Open UM-Codex from your Desktop, and its window opens in your browser. Docker is running and your key is saved. The first time, there's one button: Choose a folder and start. Under it is what Codex gets. It starts in a Terminal window, working in your folder, and it can change and delete files there: they're your real files, with no undo. And the internet is on, so Codex could send what it reads anywhere. You can change any of that later."
+    },
+    {
+      "shot": "2.2",
+      "chapter": 2,
+      "start": 41.188,
+      "end": 53.308,
+      "text": "Press it, and choose a folder in Windows' own folder picker. For this video, it's a demo folder of made-up files. For anything important, work in a copy, or in a folder that's a git repository."
+    },
+    {
+      "shot": "3.1",
+      "chapter": 3,
+      "start": 54.508,
+      "end": 62.188,
+      "text": "That's all you do. The folder is now a setup, a card named after it. Its line goes from Starting, to Running in Terminal."
+    },
+    {
+      "shot": "3.2",
+      "chapter": 3,
+      "start": 62.688,
+      "end": 73.368,
+      "text": "Codex opens in a Terminal window, working in your folder. This is where you talk to Codex. It's running in the sealed environment on your computer, and the folder you chose is what it can reach."
+    },
+    {
+      "shot": "3.3",
+      "chapter": 3,
+      "start": 73.868,
+      "end": 85.388,
+      "text": "Now ask Codex for something in the folder. Here, it summarizes the spreadsheet and writes a short note about it. Codex works inside the sealed environment, and the note lands in your real folder."
+    },
+    {
+      "shot": "3.4",
+      "chapter": 3,
+      "start": 85.888,
+      "end": 95.32,
+      "text": "Back in the window, the card always says what Codex can do with this setup: the folder, and that changes there are real; the internet; and the model it's using."
+    },
+    {
+      "shot": "4.1",
+      "chapter": 4,
+      "start": 96.52,
+      "end": 107.488,
+      "text": "When you're finished, press Stop. It asks first. Codex stops and its sandbox is removed. Files it already changed in your folder stay as they are, and its history is kept."
+    },
+    {
+      "shot": "4.2",
+      "chapter": 4,
+      "start": 107.988,
+      "end": 121.812,
+      "text": "Next time, the button at the top is Start, with your folder's name. One click. Edit shows three sections: Folder, Access and Codex. That's where you add a folder Codex can only read, or turn the internet off."
+    },
+    {
+      "shot": "4.3",
+      "chapter": 4,
+      "start": 122.312,
+      "end": 123.872,
+      "text": "That's your first launch."
+    }
+  ]
+}

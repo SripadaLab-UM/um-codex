@@ -1,0 +1,6 @@
+{
+  "engine": "generative",
+  "voice": "Ruth",
+  "region": "us-east-1",
+  "text": "Press it, and choose a folder in Windows' own folder picker. For this video, it's a demo folder of made-up files. For anything important, work in a copy, or in a folder that's a git repository."
+}

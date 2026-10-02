@@ -1,0 +1,6 @@
+{
+  "engine": "generative",
+  "voice": "Ruth",
+  "region": "us-east-1",
+  "text": "Open the Start menu, type PowerShell, and press Enter. Open it the ordinary way, not as administrator. The installer asks for administrator permission itself, only if it needs it."
+}

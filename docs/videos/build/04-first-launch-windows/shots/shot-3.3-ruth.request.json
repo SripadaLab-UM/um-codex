@@ -1,0 +1,6 @@
+{
+  "engine": "generative",
+  "voice": "Ruth",
+  "region": "us-east-1",
+  "text": "Now ask Codex for something in the folder. Here, it summarizes the spreadsheet and writes a short note about it. Codex works inside the sealed environment, and the note lands in your real folder."
+}
