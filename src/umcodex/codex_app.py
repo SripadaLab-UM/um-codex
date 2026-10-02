@@ -63,8 +63,8 @@ from pathlib import Path
 
 import tomli_w
 
+from umcodex import chrome_link, locks
 from umcodex import codex_app_windows as win
-from umcodex import locks
 from umcodex.containers import APP, APP_LABEL, INSTANCE_LABEL, Docker, DockerError, instance_of
 from umcodex.paths import data_dir, default_data_dir
 from umcodex.setups import SETUP_ID, Setup
@@ -1416,6 +1416,13 @@ def local_config(
         }
     )
     config.setdefault("model", model)
+    # Chrome control off in this copy: its plugin would take the person's Chrome
+    # connection over (chrome_link.py; the launch also keeps their manifest).
+    plugins = config.get("plugins")
+    plugins = plugins if isinstance(plugins, dict) else {}
+    entry = plugins.get("chrome@openai-bundled")
+    plugins["chrome@openai-bundled"] = {**(entry if isinstance(entry, dict) else {}), "enabled": False}
+    config["plugins"] = plugins
     if catalog is not None:
         # No upgrade offers or new-model announcements on the copy's own side.
         config["model_catalog_json"] = str(catalog)
@@ -1962,11 +1969,21 @@ class AppHold:
             self.say("Ending the launch...")
             return 0
         finally:
+            # The copy may stay open after the launch: the backup then stays for its next write.
+            self._keep_chrome(
+                final=self.app is None or running_copy(self.data, self.run, self.platform) is None
+            )
             responder.stop()
             # Only this launch's token (another launch may have written its own since).
             with contextlib.suppress(OSError):
                 if token_file.read_text(encoding="utf-8") == running.token:
                     token_file.unlink()
+
+    def _keep_chrome(self, *, final: bool) -> None:
+        """Put the person's Chrome manifest back if the copy took it
+        (chrome_link.py): at each poll, and when the launch ends."""
+        with contextlib.suppress(OSError):
+            chrome_link.restore(app_folder(self.data), final=final, platform=self.platform)
 
     def _reopen_for(self, running, setup: Setup) -> bool:
         """The copy is open but doesn't know this setup (made after it opened):
@@ -2062,6 +2079,7 @@ class AppHold:
         # host never connected: it adds the host switched off, so later it
         # would switch off a host that's on.
         link_arg = deep_link(setup_id, self.data) if link else None
+        chrome_link.remember(app_folder(self.data), platform=self.platform)  # restored by _keep_chrome
         if self.platform == "win32":
             return self._open_windows(link_arg)
         done = self.run(
@@ -2186,6 +2204,7 @@ class AppHold:
             if responder is not None and not self.local_chats:
                 with contextlib.suppress(OSError, RuntimeError):
                     responder.ensure()  # takes the port over if the process that had it ended
+            self._keep_chrome(final=False)
             if missing >= 2:
                 self.say("The sandbox was stopped.")
                 return 0

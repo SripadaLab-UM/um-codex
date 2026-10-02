@@ -868,26 +868,40 @@ modes, rigor, and the frontend.
      and that the token file is this person's and private; otherwise it
      prints nothing on stdout and exits 1 (Codex then waits for the
      network). So a program that took the port never gets the token.
-   - **The person's Chrome connection.** The app's Chrome plugin writes the
-     ChatGPT extension's native host manifest
-     (`~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.openai.codexextension.json`,
-     and Chromium's and Chrome for Testing's) for the whole macOS user, and
-     an entry in a shared registry
-     (`~/Library/Application Support/OpenAI/Codex/chrome-native-hosts-v2.json`,
-     per install: a hash of the host name, resources path and CODEX_HOME),
-     whenever it installs or reconciles the plugin, which it does at start
-     (26.928's bootstrap: `DF` writes both). The GUI round found the
-     manifest pointing into the local copy after it started, and the local
-     copy's own @Chrome unusable ("its Codex connection is unavailable").
-     So Chrome is off in the local copy, and around each launch UM-Codex
-     remembers the manifests before the copy opens
-     (`codex-app-local/chrome-manifests.json`, kept until restored, never
-     overwritten by a later start) and, after it quits and at uninstall,
-     puts back one that now leads into the local copy (or removes it if
-     there was none), leaves one that leads elsewhere (the person's own app
-     rewrote it), and takes the local copy's entries out of the shared
-     registry (only those whose paths lead into its folder; a file of
-     another shape is left).
+   - **The person's Chrome connection** (`chrome_link.py`; both UM-Codex
+     copies, this one and M6's). The app's Chrome plugin writes the ChatGPT
+     extension's native host manifest (`com.openai.codexextension.json`)
+     for the whole OS user and an entry in a shared registry
+     (`chrome-native-hosts-v2.json`, per install: a hash of the host name,
+     resources path and CODEX_HOME) whenever it installs or reconciles the
+     plugin, which it does at start and when its plugin cache changes
+     (26.928's bootstrap: `DF` → `JF`, `AF`). Its reconcile looks at
+     `installed`, not `enabled`, and installs the plugin when the ChatGPT
+     extension is in Chrome, so disabling it in config.toml doesn't stop
+     the write. On a Mac the manifest then points into that copy's plugin
+     folder: every UM-Codex copy took the person's Chrome connection over
+     when it started (found on the maintainer's Mac, 2026-10-02, with the
+     sandbox copy of the video agent's data folder; the local copy's own
+     @Chrome was unusable anyway). On Windows the manifest
+     (`%LOCALAPPDATA%\OpenAI\extension\…`, named by
+     `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.openai.codexextension`)
+     points at the app package's own host, the same for every copy; only
+     the registry entry is the copy's. So, in both copies:
+     - `chrome@openai-bundled` is off in config.toml ("not supported yet"
+       in the local form);
+     - before a copy opens, the manifests are remembered in its folder
+       (`chrome-manifests.json`, kept until the final restore, never
+       overwritten by a later start);
+     - at each poll of the launch, and when it ends, a manifest that leads
+       into the copy is put back (or removed if there was none), and one
+       that leads elsewhere (the person's own app rewrote it) is left;
+     - when the copy is gone, its entries leave the shared registry and the
+       backup goes (the sandbox copy often stays open after its launch: its
+       backup then stays for the next launch);
+     - uninstall restores from either copy's backup (one copy may have
+       backed up the other's), removes any other manifest leading into the
+       data folder, and takes the data folder's entries out of the
+       registry.
    - **Stop** in the launcher (its question: "Stop “<name>”? UM-Codex's
      Codex window on this computer closes. Chats are kept.") asks UM-Codex's local copy to quit
      (`stop_local`: the process whose arguments carry the copy's profile
@@ -1383,6 +1397,10 @@ modes, rigor, and the frontend.
        --bundled`, with no `availability_nux` or `upgrade`), so no model
        qualifies for an announcement; the remote side already has
        UM-Codex's catalog. Nothing switches the model.
+
+     **Chrome:** this copy keeps the `chrome` plugin off and the person's
+     Chrome manifest (see M4, "The person's Chrome connection"; released
+     versions up to alpha.4 let it take the person's Chrome connection).
 
      **Every Codex-app setup is set up at once** (the M4 GUI round: a
      second setup started while the copy was open stayed at "Opening

@@ -35,6 +35,7 @@ from pathlib import Path
 
 import tomli_w
 
+from umcodex import chrome_link
 from umcodex.codex_app import ATOMS, GLOBAL_STATE, StateUnknown, _private_write, _replace, read_state
 from umcodex.paths import data_dir
 from umcodex.relay import Relay, RelayServer, new_token
@@ -475,9 +476,17 @@ def local_token(data: Path | None = None, *, run: Runner = subprocess.run, uid: 
     return token
 
 
-def wait_while_running(pid: int, poll: float = 2.0, sleep: Callable[[float], None] = time.sleep) -> None:
-    """Return when the copy's main process has ended."""
+def wait_while_running(
+    pid: int,
+    poll: float = 2.0,
+    sleep: Callable[[float], None] = time.sleep,
+    tick: Callable[[], object] | None = None,
+) -> None:
+    """Return when the copy's main process has ended; `tick` runs at each poll."""
     while True:
+        if tick is not None:
+            with contextlib.suppress(OSError):
+                tick()
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
@@ -679,7 +688,8 @@ def run_local(
         say(f"Running on this computer, in UM-Codex's local Codex window ({setup.name}).")
         for line in NOTES:
             say(line)
-        wait_while_running(pid, poll, sleep)
+        # The copy may write Chrome's manifest at start (or later): put the person's back each poll.
+        wait_while_running(pid, poll, sleep, tick=lambda: restore_chrome_manifests(data, final=False))
         say("UM-Codex's local Codex window was closed.")
         return 0
     except KeyboardInterrupt:
@@ -863,147 +873,28 @@ def stop_local(data: Path, launch, run: Runner = subprocess.run) -> bool:
     return True
 
 
-def chrome_manifests(home: Path | None = None) -> list[Path]:
-    """The Chrome extension's native messaging manifests (the app's Chrome
-    plugin writes them for the whole macOS user)."""
-    home = home or Path.home()
-    support = home / "Library" / "Application Support"
-    folders = ("Google/Chrome", "Chromium", "Google/ChromeForTesting", "Google/Chrome for Testing")
-    return [support / f / "NativeMessagingHosts" / "com.openai.codexextension.json" for f in folders]
+# The person's Chrome connection (chrome_link.py): the local copy keeps Chrome
+# off, and UM-Codex keeps the person's manifest around each launch.
 
-
-def _inside(path: Path, folder: Path) -> bool:
-    """Whether `path` is `folder` or in it, letter case aside (a Mac's disk usually ignores it)."""
-    a, b = str(path).casefold().rstrip("/"), str(folder).casefold().rstrip("/")
-    return a == b or a.startswith(b + "/")
-
-
-def forget_chrome_manifests(data: Path, home: Path | None = None) -> list[str]:
-    """Remove the manifests that lead into the local copy's folder (which
-    uninstall removes): left, they'd point Chrome at a program that's gone.
-    A manifest of the person's own ChatGPT app is left alone."""
-    ours = local_folder(data).resolve()
-    removed = []
-    for path in chrome_manifests(home):
-        try:
-            target = Path(json.loads(path.read_text(encoding="utf-8"))["path"]).resolve()
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-        if _inside(target, ours):
-            with contextlib.suppress(OSError):
-                path.unlink()
-                removed.append(
-                    f"Removed Chrome's link to UM-Codex's local Codex window ({path.parent.parent.name})."
-                )
-    return removed
-
-
-# The person's Chrome connection. The app's Chrome plugin writes the ChatGPT
-# extension's native host manifest (`com.openai.codexextension.json`, for the
-# whole macOS user) and an entry in a shared registry
-# (~/Library/Application Support/OpenAI/Codex/chrome-native-hosts-v2.json)
-# when it installs or reconciles the plugin, which the app does at start
-# (26.928's bootstrap: DF → JF and AF). The local copy keeps Chrome off, but
-# UM-Codex still keeps what was there: before the copy opens, the manifests
-# are remembered (`chrome-manifests.json` in the local folder, kept until
-# restored, so a crash doesn't lose them); after it quits (and at uninstall),
-# a manifest that now leads into the local copy is put back, or removed if
-# there was none, and the registry's entries for the local copy are taken out.
-# A manifest that leads elsewhere (the person's own app rewrote it) is left.
-
-CHROME_BACKUP = "chrome-manifests.json"
-
-
-def chrome_registry(home: Path | None = None) -> Path:
-    home = home or Path.home()
-    return home / "Library" / "Application Support" / "OpenAI" / "Codex" / "chrome-native-hosts-v2.json"
-
-
-def _leads_into_local(path: Path, data: Path) -> bool:
-    try:
-        target = json.loads(path.read_text(encoding="utf-8"))["path"]
-    except (OSError, ValueError, KeyError, TypeError):
-        return False
-    return isinstance(target, str) and _inside(Path(target).resolve(), local_folder(data).resolve())
+CHROME_BACKUP = chrome_link.BACKUP
+chrome_manifests = chrome_link.manifests
+chrome_registry = chrome_link.registry
 
 
 def remember_chrome_manifests(data: Path, home: Path | None = None) -> None:
-    """Before the copy opens: what each manifest is now (None: there's none,
-    or it's already the local copy's). A backup from a launch that didn't
-    restore it is kept, never overwritten with the local copy's manifest."""
-    backup = local_folder(data) / CHROME_BACKUP
-    if backup.exists():
-        return
-    saved: dict[str, str | None] = {}
-    for path in chrome_manifests(home):
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            text = None
-        saved[str(path)] = None if text is None or _leads_into_local(path, data) else text
-    _private_folder(local_folder(data))
-    _private_write(backup, json.dumps(saved))
+    chrome_link.remember(local_folder(data), home)
 
 
-def restore_chrome_manifests(data: Path, home: Path | None = None) -> list[str]:
-    """After the copy quits (and at uninstall): put back the person's
-    manifests that the copy replaced, remove the copy's own, and take the
-    copy's entries out of the shared registry. Lines saying what changed."""
-    backup = local_folder(data) / CHROME_BACKUP
-    try:
-        saved = json.loads(backup.read_text(encoding="utf-8"))
-        saved = saved if isinstance(saved, dict) else {}
-    except (OSError, ValueError):
-        saved = {}
-    changed = []
-    for path in chrome_manifests(home):
-        if not _leads_into_local(path, data):
-            continue  # untouched, or the person's own app wrote it since
-        before = saved.get(str(path))
-        with contextlib.suppress(OSError):
-            if isinstance(before, str):
-                _replace(path, before.encode("utf-8"), mode=0o644)
-                changed.append(f"Put back Chrome's link to your own ChatGPT app ({path.parent.parent.name}).")
-            else:
-                path.unlink()
-                changed.append(
-                    f"Removed Chrome's link to UM-Codex's local Codex window ({path.parent.parent.name})."
-                )
-    forget_chrome_registry(data, home)
-    backup.unlink(missing_ok=True)
-    return changed
+def restore_chrome_manifests(data: Path, home: Path | None = None, *, final: bool = True) -> list[str]:
+    return chrome_link.restore(local_folder(data), home, final=final)
 
 
 def forget_chrome_registry(data: Path, home: Path | None = None) -> bool:
-    """Take the local copy's entries out of the app's shared Chrome registry
-    (only those whose paths lead into the local folder; the rest, and the
-    file's shape, are kept). False when nothing was changed."""
-    path = chrome_registry(home)
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    entries = raw.get("entries") if isinstance(raw, dict) else None
-    if not isinstance(entries, list):
-        return False
-    ours = local_folder(data).resolve()
+    return chrome_link.forget_registry(local_folder(data), home)
 
-    def local_entry(entry: object) -> bool:
-        paths = entry.get("paths") if isinstance(entry, dict) else None
-        if not isinstance(paths, dict):
-            return False
-        return any(
-            isinstance(paths.get(k), str) and _inside(Path(paths[k]).resolve(), ours)
-            for k in ("codexHome", "extensionHostPath")
-        )
 
-    kept = [e for e in entries if not local_entry(e)]
-    if len(kept) == len(entries):
-        return False
-    with contextlib.suppress(OSError):
-        _replace(path, (json.dumps({**raw, "entries": kept}, indent=2) + "\n").encode("utf-8"), mode=0o644)
-        return True
-    return False
+def forget_chrome_manifests(data: Path, home: Path | None = None) -> list[str]:
+    return chrome_link.forget(local_folder(data), home)
 
 
 # What uninstall always removes from the local copy, even when the data is

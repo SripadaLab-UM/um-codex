@@ -533,10 +533,15 @@ SIGTERM closing the copy; folders-only mode with `writable_roots`;
 once").
 
 Fixed since (see DESIGN M4 and M6):
-1. Chrome: the local copy's Chrome plugin is always off ("not supported
-   yet" in the form); the person's manifest is remembered before the copy
-   opens and put back after it quits (and at uninstall); the copy's entries
-   leave the shared registry.
+1. Chrome, in both copies (the sandbox copy took it too: the maintainer's
+   manifest led into the video agent's `UM-Codex-demo/codex-app`): the
+   `chrome` plugin is off in config.toml (not enough by itself: the app's
+   reconcile writes the manifest for an installed plugin even when it's
+   disabled); the person's manifest is remembered before a copy opens, put
+   back at each poll of the launch and when it ends (and at uninstall,
+   from either copy's backup); the copies' entries leave the shared
+   registry. Windows: the manifest there always points at the app package,
+   so only the registry entries are cleaned.
 2. Stop on this computer has its own question.
 3. "Ask before commands" really asks: Codex's untrusted behaviour, through
    the projects' trust level (config's `approval_policy = "untrusted"` is
@@ -552,7 +557,8 @@ Fixed since (see DESIGN M4 and M6):
    was most likely the automation (Duplicate, then Delete).
 
 **Before the re-test, restore the maintainer's own Chrome control** (the
-round left the manifest pointing into the scratch copy). Don't edit the
+round left the manifest pointing into a UM-Codex copy: the video agent's
+`UM-Codex-demo/codex-app` copy, found later). Don't edit the
 file by hand: quit the person's own ChatGPT app (Cmd-Q) and open it again.
 At start it reconciles its bundled plugins and, with its Chrome plugin
 installed, rewrites the manifest and its registry entry for itself
@@ -571,7 +577,10 @@ safe once the manifest no longer leads into it.
   `config.toml` has `chrome@openai-bundled` `enabled = false`; `@` offers
   no Chrome. Quit the window. Expect: the manifest's `path` is what it was
   before; `codex-app-local/chrome-manifests.json` is gone; the person's
-  own app's @Chrome still works (if it did before).
+  own app's @Chrome still works (if it did before). Then the same with a
+  sandbox setup opened in the Codex app: while it runs and after Stop, the
+  manifest's `path` stays the person's own; `codex-app/codex-home/config.toml`
+  has `chrome@openai-bundled` `enabled = false`.
 - R2, Stop's words. Start "here", Stop on its card. Expect "Stop “here”?
   UM-Codex's Codex window on this computer closes. Chats are kept."
 - R3, asking. "here" with full access and "Ask before commands" on. Ask

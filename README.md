@@ -150,7 +150,9 @@ is only the window you use. What to know:
   `umcodex-*` hosts under Settings → Connections too (switched off). You can
   leave them off there; use UM-Codex's copy.
 - The app's own browser runs on your computer, not in the sandbox. For
-  browsing inside the sandbox, turn on the setup's Browser tool.
+  browsing inside the sandbox, turn on the setup's Browser tool. Chrome
+  control is off in UM-Codex's copy, and UM-Codex keeps your own ChatGPT
+  app's connection to Chrome as it was.
 - The setup runs until you press **Stop** in the launcher; the app then says
   it can't reconnect, which is expected.
 - **Windows (experimental):** the same, with the ChatGPT app from the
