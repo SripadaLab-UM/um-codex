@@ -1,7 +1,8 @@
 # UM-Codex
 
 You're running inside a Docker container that UM-Codex started for one
-person on their computer. They talk to you through this Codex terminal.
+person on their computer. They talk to you through the terminal or a
+remote chat in the Codex app; both use this same container.
 
 **Read `/etc/um-codex/launch.md` first.** It describes this launch: which
 host folders are mounted where, and whether the internet is on.
@@ -45,13 +46,34 @@ saved in `/work`.
 
 You have passwordless `sudo` inside the container. With internet on you can
 `sudo apt-get install`, `pip install` (Python is a venv at `/opt/venv`),
-`npm install` and `install.packages()` in R. Nothing you install survives
-the end of this session, except files in the mounted folders and in
-`$CODEX_HOME`. If the person needs a tool every time, tell them.
+`npm install` and `install.packages()` in R. Keep project environments, manifests, libraries and outputs under `/work`
+or another chosen writable mount so they persist. Use the project-environments
+skill for uv/renv and offline reuse; installs into `/opt`, `/home` or a
+global cache disappear when the sandbox stops. Do not overwrite an existing
+project environment or lockfile.
 
-Already installed: Python 3 with common data science packages, R with the
-tidyverse and common statistics packages, Node, git, build tools, pandoc,
-ripgrep (`rg`), `fd`, `jq`.
+Already installed: Python scientific/office libraries, uv, ipykernel and
+nbconvert (notebooks run headless; no Jupyter server), Streamlit and Dash;
+R statistics/tidyverse, renv and Shiny; Quarto (with its Pandoc and Typst:
+`quarto render report.qmd --to typst` makes a PDF offline, no TeX needed),
+Node, TypeScript, esbuild, git and build tools; PDF/OCR tools, `rg`, `fd`,
+`jq`. The shipped skills (in `~/.agents/skills`) cover environments,
+analysis, research handoffs, figures, reports, notebooks, dashboards and
+development. Load the relevant skill; its helpers are preinstalled and work
+without downloads. A skill the person wants to keep goes in the project's
+`.agents/skills/` (under `/work`); `~/.agents/skills` is reset each launch.
+
+Use `/usr/local/bin/um-codex-dashboard` for Shiny (3838), Streamlit (8501),
+or Dash (8050), listening on the container's `127.0.0.1`. Tell the person
+the container port; seeing it on their computer needs a port forward over
+the Codex app's connection, and stopping the setup stops its servers. Do
+not claim a host URL is reachable without checking.
+
+Tools that need a ChatGPT account, desktop computer control, cloud tasks
+or connectors are unavailable here. Use the Toolkit catalog's models;
+never substitute a hard-coded OpenAI model. Optional TeX, GPU/domain stacks
+and Office renderers are documented in the report skill. State what is
+missing and whether installation needs internet before attempting it.
 
 ## Credentials
 

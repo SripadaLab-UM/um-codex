@@ -301,3 +301,50 @@ def test_the_smoke_test_starts_the_browser_the_same_way():
     dockerfile = (Path(__file__).parents[1] / "images" / "agent" / "Dockerfile").read_text()
     for name, value in BROWSER_ENV.items():
         assert f"ENV {name}={value}" in dockerfile
+
+
+@pytest.mark.parametrize("internet", [True, False])
+@pytest.mark.parametrize("app", [True, False])
+def test_codexs_bundled_skills_are_off_for_every_launch(internet, app):
+    config = parsed(internet=internet, app=app)
+    assert config["skills"] == {"bundled": {"enabled": False}}
+    # UM-Codex's own skills are found in the image's ~/.agents/skills, on by
+    # default: no per-skill entries (Codex 0.157.1 reads `skills.config` only
+    # from the person's config.toml and -c flags, not from this layer).
+    assert "config" not in config["skills"]
+
+
+def image_skills_list(image: str, managed_config: Path) -> subprocess.CompletedProcess | None:
+    """um-codex-skills-check in the agent image, with `managed_config` where a
+    launch mounts it; None without Docker or an image that has the check."""
+    if not shutil.which("docker"):
+        return None
+    try:
+        probe = subprocess.run(
+            ["docker", "run", "--rm", "--network", "none", "--label", "umcodex.app=um-codex-test", image,
+             "test", "-x", "/usr/local/bin/um-codex-skills-check"],
+            capture_output=True, timeout=60,
+        )  # fmt: skip
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if probe.returncode:
+        return None
+    return subprocess.run(
+        ["docker", "run", "--rm", "--network", "none", "--label", "umcodex.app=um-codex-test",
+         "--mount", f"type=bind,source={managed_config},target=/etc/codex/managed_config.toml,readonly",
+         image, "um-codex-skills-check", "--no-bundled"],
+        capture_output=True, text=True, timeout=180,
+    )  # fmt: skip
+
+
+def test_the_agent_images_codex_lists_only_um_codexs_skills(tmp_path):
+    """Codex in the image, with a launch's managed_config.toml: the eight
+    shipped skills, enabled, and none of Codex's bundled ones."""
+    from umcodex.containers import agent_image
+
+    managed = tmp_path / "managed_config.toml"
+    managed.write_text(render(model="gpt-5.6-terra", approvals="never", internet=False))
+    done = image_skills_list(agent_image(), managed)
+    if done is None:
+        pytest.skip("needs Docker and an agent image with um-codex-skills-check")
+    assert done.returncode == 0, done.stdout + done.stderr
