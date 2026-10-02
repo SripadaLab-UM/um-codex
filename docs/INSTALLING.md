@@ -99,8 +99,8 @@ Steps:
 
 `installer/macos/uninstall.sh` runs `um-codex uninstall` (which first asks
 "Uninstall UM-Codex? [y/N]", then about the images and the data; scoped to
-its data folder, see DESIGN: run with `UMCODEX_DATA_DIR` set, a development
-or test copy's, it keeps the key and the images; its options
+its data folder, see DESIGN) with `UMCODEX_DATA_DIR` unset: the program files
+go afterwards, so it must be the installed data folder's uninstall (its options
 are passed on, `--yes` included), reading `/dev/tty` when it can be opened
 (with no terminal a question reads end-of-input, which `um-codex` takes as
 no). If that stops or fails, it says "Nothing else was removed." and exits
@@ -389,7 +389,8 @@ the consent is the person's, not the one running the installer for them.
 Then "All done!" with a summary.
 
 `uninstall.ps1 [-DeleteData | -KeepData] [-Yes]` (both data options at once:
-refused, exit 2) runs `um-codex uninstall` (containers, networks, images, the
+refused, exit 2) runs `um-codex uninstall` with `UMCODEX_DATA_DIR` removed
+from its environment (put back afterwards) (containers, networks, images, the
 key, and the data if asked; see DESIGN for its scope: only the installed
 copy's data folder removes the key and the images, and no uninstall removes
 another data folder's containers). Only once that has succeeded does it remove uv,

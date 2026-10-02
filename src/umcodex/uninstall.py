@@ -5,12 +5,14 @@ its program files (the uninstaller scripts remove those after this returns)
 and the person's own folders, which are never touched.
 
 Its scope is its data folder (`UMCODEX_DATA_DIR`, or the default one).
-Containers, networks and volumes go by that data folder's instance label, so
-another data folder's (a development or test copy's) are never removed. Only
-the installed copy's data folder (paths.default_data_dir) also takes what
-every copy shares: the Toolkit key (there's one, in the keychain) and the
-Docker images, and those only when no other data folder's containers are
-here. Another data folder's uninstall keeps both and says so.
+Containers, networks and volumes go by that data folder's instance label;
+another data folder's (a development or test copy's) are kept unless the
+installed copy's uninstall is told to remove them (asked; never with --yes).
+Only the installed copy's data folder (paths.default_data_dir) removes the
+Toolkit key (there's one, in the keychain), and the images go only when no
+other data folder's containers are here (and, from another data folder,
+only when the installed UM-Codex is gone). The installed program refuses to
+uninstall another data folder: the scripts remove it afterwards.
 
 It first asks "Uninstall UM-Codex? [y/N]" (not with --yes); nothing is
 removed before that's answered yes. Then, found by label only:
@@ -33,6 +35,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -69,6 +72,16 @@ def uninstall(
             "uninstaller again."
         )
         return 1
+    if not is_installed_copy(data) and _program_is_installed():
+        # The uninstaller scripts remove the installed program afterwards:
+        # that would orphan the installed data folder's things.
+        say(
+            f"This is the installed UM-Codex, but UMCODEX_DATA_DIR points it at another data folder "
+            f"({data}). Nothing was removed. To uninstall UM-Codex, run the uninstaller without "
+            "UMCODEX_DATA_DIR set; to remove that data folder's things, run `um-codex uninstall` from "
+            "the copy that uses it."
+        )
+        return 1
 
     def confirm(question: str) -> bool:
         if yes:
@@ -93,13 +106,11 @@ def uninstall(
         )
     if docker_ok:
         say("Removing UM-Codex's containers and networks...")
-        _remove_owned(run, ["ps", "-a"], ["rm", "-f"], data)
-        _remove_owned(run, ["network", "ls"], ["network", "rm"], data)
-        if _others(run, data):
-            say(
-                "Left the containers of another UM-Codex data folder on this computer (a development "
-                "or test copy): that copy's own uninstall removes them."
-            )
+        listed = _remove_owned(run, ["ps", "-a"], ["rm", "-f"], data)
+        listed = _remove_owned(run, ["network", "ls"], ["network", "rm"], data) and listed
+        if not listed:
+            say("Docker couldn't list UM-Codex's containers or networks, so some may be left.")
+        _other_data_folders(run, say, ask, data, yes=yes, installed=installed)
     else:
         say("Docker isn't running, so UM-Codex's containers, volumes and images (if any) were left.")
 
@@ -172,47 +183,106 @@ def _running(data: Path) -> bool:
     return any(launch_is_live(data, entry.name) for entry in folder.iterdir() if entry.is_dir())
 
 
+def _program_is_installed() -> bool:
+    """Whether this program is the installed UM-Codex's (a version in
+    app_dir(), which the uninstaller scripts remove afterwards)."""
+    try:
+        Path(sys.prefix).resolve().relative_to(app_dir().resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def is_installed_copy(data: Path) -> bool:
     """Whether `data` is the installed UM-Codex's data folder (the default
     one), not a development or test copy's (`UMCODEX_DATA_DIR`)."""
     return _key(data.resolve()) == _key(default_data_dir().resolve())
 
 
-def _owned(run: Run, kind: list[str], data: Path) -> tuple[list[str], list[str]]:
+def _owned(run: Run, kind: list[str], data: Path) -> tuple[list[str], list[str]] | None:
     """UM-Codex's containers, networks or volumes (`kind`: ["ps", "-a"],
     ["network", "ls"], ["volume", "ls"]): this data folder's, and other
-    data folders'. By label only."""
+    data folders'. By label only. None: Docker couldn't list them."""
     field = "{{.Name}}" if kind[0] == "volume" else "{{.ID}}"
     shape = f'{field}|{{{{.Label "{INSTANCE_LABEL}"}}}}'
     listing = _docker(run, *kind, "--filter", f"label={APP_LABEL}={APP}", "--format", shape)
+    if listing is None:
+        return None
     instance = instance_of(data)
     mine: list[str] = []
     others: list[str] = []
-    for line in (listing or "").splitlines():
+    for line in listing.splitlines():
         name, owner = ([*line.split("|"), ""])[:2]
         if name.strip():
             (mine if owner.strip() == instance else others).append(name.strip())
     return mine, others
 
 
-def _remove_owned(run: Run, kind: list[str], then: list[str], data: Path) -> None:
-    mine, _ = _owned(run, kind, data)
-    if mine:
-        _docker(run, *then, *mine)
+def _remove_owned(run: Run, kind: list[str], then: list[str], data: Path) -> bool:
+    """Remove this data folder's; False if Docker couldn't list them."""
+    owned = _owned(run, kind, data)
+    if owned is None:
+        return False
+    if owned[0]:
+        _docker(run, *then, *owned[0])
+    return True
 
 
-def _others(run: Run, data: Path) -> bool:
-    """Whether another data folder has containers here (running or not)."""
-    return bool(_owned(run, ["ps", "-a"], data)[1])
+def _others(run: Run, data: Path) -> bool | None:
+    """Whether another data folder has containers here (running or not);
+    None: unknown (Docker couldn't list them)."""
+    owned = _owned(run, ["ps", "-a"], data)
+    return None if owned is None else bool(owned[1])
+
+
+_KINDS = (
+    (["ps", "-a"], ["rm", "-f"]),
+    (["network", "ls"], ["network", "rm"]),
+    (["volume", "ls"], ["volume", "rm"]),
+)
+
+
+def _other_data_folders(run: Run, say: Say, ask: Ask, data: Path, *, yes: bool, installed: bool) -> None:
+    """Other data folders' containers, networks and volumes (a development or
+    test copy's, or one whose folder is gone): kept, but the installed
+    copy's uninstall offers to remove them (never with --yes)."""
+    found: list[tuple[list[str], list[str]]] = []
+    for kind, then in _KINDS:
+        owned = _owned(run, kind, data)
+        found.append((then, owned[1] if owned is not None else []))
+    count = sum(len(ids) for _, ids in found)
+    if not count:
+        return
+    what = f"{count} UM-Codex containers, networks and volumes from other data folders on this computer"
+    if installed and not yes:
+        question = f"Also remove {what} (a development or test copy's; a launch of theirs stops)?"
+        if ask(f"{question} [y/N] ").strip().lower() in ("y", "yes"):
+            for then, ids in found:
+                if ids:
+                    _docker(run, *then, *ids)
+            say("Removed them.")
+            return
+    if installed:
+        how = "Docker Desktop can remove them (Containers, Volumes, Networks)"
+    else:
+        how = "the installed UM-Codex's uninstall offers to remove them"
+    say(f"Left {what} (a development or test copy's): {how}.")
 
 
 def _remove_images(run: Run, say: Say, confirm: Callable[[str], bool]) -> None:
     # The images are shared by every data folder on this computer.
     data = data_dir()
-    if not is_installed_copy(data):
+    if not is_installed_copy(data) and (app_dir() / "current").exists():
         say("Kept UM-Codex's Docker images: the installed UM-Codex uses them too.")
         return
-    if _others(run, data):
+    others = _others(run, data)
+    if others is None:
+        say(
+            "Kept UM-Codex's Docker images: Docker couldn't list UM-Codex's containers, so it couldn't "
+            "tell whether another UM-Codex data folder uses them."
+        )
+        return
+    if others:
         say("Kept UM-Codex's Docker images: another UM-Codex data folder's containers use them.")
         return
     agent_ids: list[str] = []

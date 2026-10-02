@@ -144,11 +144,13 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      a local `:dev` image that's already present is skipped, and so is an
      image pinned by digest that's already here (that exact version can't
      have changed). A failed `docker pull` is tried twice more (after 3 s,
-     then 10 s), and if the image turns out to be here by that digest
+     then 10 s; not after Docker stopped, the disk filled or the pull ran
+     out its hour), and if the image turns out to be here by that digest
      after all, that's success: a registry can answer "not found" for a
      moment (the Windows tester's update). Nonzero on failure, with a
      message that says which kind (Docker isn't running or stopped, the
-     registry or the network, the disk full) and quotes Docker's own line.
+     registry or the network, the disk full) and quotes Docker's own last
+     lines (up to 3).
      In a terminal Docker's progress is shown; otherwise (the launcher's
      Update writes to a file) `docker pull --quiet` and one line per image.
      Each line is flushed before a child process writes, and `update`'s
@@ -180,14 +182,25 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      (EOF), `um-codex` takes it as no and exits 1, without a traceback.
      **Scope.** Everything goes by the data folder's own instance label,
      so another data folder's containers, networks and volumes (a
-     development or test copy's, whose launch may be running) are never
-     removed; it says when some were left. The key (there's one, in the
-     keychain) and the images are shared by every data folder, so only the
-     installed copy's data folder (`paths.default_data_dir`, compared
-     resolved) removes them, and the images only when no other data
-     folder's containers are here. An uninstall of another data folder
-     (`UMCODEX_DATA_DIR`) keeps both and says so, and takes out only its
-     own ssh entries (the Include line stays while others use it).
+     development or test copy's, whose launch may be running) are kept and
+     counted: the installed copy's uninstall asks "Also remove N UM-Codex
+     containers, networks and volumes from other data folders on this
+     computer? [y/N]" (no by default; with `--yes` they're kept, and it
+     says so), another data folder's just says they were left. The key
+     (there's one, in the keychain) and the images are shared by every data
+     folder, so only the installed copy's data folder
+     (`paths.default_data_dir`, compared resolved) removes the key, and the
+     images only when no other data folder's containers are here. An
+     uninstall of another data folder (`UMCODEX_DATA_DIR`) keeps the key,
+     keeps the images unless the installed UM-Codex is gone (no
+     `app/current`) and nothing else uses them, says so, and takes out only
+     its own ssh entries (the Include line stays while others use it). When
+     Docker can't list the containers, it can't tell who uses the images,
+     so they're kept, and it says why. The installed program (running from
+     `app_dir()`) refuses to uninstall another data folder, since the
+     uninstaller scripts remove the program afterwards and the installed
+     data folder's things would be orphaned; the scripts themselves clear
+     `UMCODEX_DATA_DIR` before running it.
 
 ## How it runs (one launch)
 
@@ -431,8 +444,10 @@ um-codex (Python)                        network umcodex-<id>-int (internal: no 
     If `um-codex` itself is killed, the next launch removes leftovers by label.
     Each launch holds an OS file lock (`launches/<id>/lock`) while it runs, so
     cleanup tells a leftover from a launch that's still going; labels also
-    carry the data folder (`umcodex.instance`), so one data folder never
-    removes another's launches.
+    carry the data folder (`umcodex.instance`, a hash of it; newer
+    launches also `umcodex.data`, its resolved path, so a later
+    version can tell a data folder that's gone from one in use), so one data
+    folder never removes another's launches.
 - **Two launches at once** each get their own containers, network and token.
   Two launches of the *same* setup share its Codex home volume, which Codex
   handles: sessions are separate files.

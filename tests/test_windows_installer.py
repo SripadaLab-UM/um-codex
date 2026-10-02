@@ -580,6 +580,9 @@ def test_the_uninstaller_runs_um_codex_uninstall_first_and_stops_if_it_refuses()
     assert "if ($code -ne 0) {" in body[run : run + 400]
     assert '$choice += "--delete-data"' in body and '$choice += "--keep-data"' in body
     assert '$choice += "--yes"' in body
+    # The installed data folder's, whatever UMCODEX_DATA_DIR says (put back after).
+    unset = body.index("Remove-Item Env:UMCODEX_DATA_DIR -ErrorAction SilentlyContinue")
+    assert unset < run and "$Env:UMCODEX_DATA_DIR = $dataBefore" in body[run : run + 400]
     both = body.index("if ($DeleteData -and $KeepData) {")
     assert "Stop-Run 2" in body[both : both + 200] and both < body.index("Unregister-ScheduledTask")
 

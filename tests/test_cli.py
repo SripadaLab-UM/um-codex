@@ -107,6 +107,8 @@ class FakeRun:
         elif args[0] == "pull":
             outcome = self.pulls[min(self.pulled, len(self.pulls) - 1)]
             self.pulled += 1
+            if outcome == "timeout":
+                raise subprocess.TimeoutExpired(command, options["timeout"])
             code, err = (0, "") if outcome == "ok" else (1, f"Some progress\n{outcome}\n")
         return subprocess.CompletedProcess(command, code, "", err)
 
@@ -137,7 +139,7 @@ def test_a_pull_that_fails_once_is_tried_again():
     said, waits = [], []
     assert _pull(run, said, waits)
     assert run.pulled == 2 and waits == [3.0]
-    assert f"Docker said: {NOT_FOUND}" in "\n".join(said)
+    assert f"Docker said: Some progress / {NOT_FOUND}" in "\n".join(said)  # its last lines
 
 
 def test_a_failed_pull_of_an_image_thats_here_after_all_is_fine():
@@ -175,6 +177,14 @@ def test_a_full_disk_says_so_and_isnt_tried_again():
     assert not _pull(run, said, waits)
     assert run.pulled == 1 and waits == []
     assert "out of disk space" in said[-1] and full in said[-1]
+
+
+def test_a_pull_that_took_too_long_isnt_tried_again():
+    run = FakeRun(present={"um-codex-agent:dev"}, pulls=["timeout"])
+    said, waits = [], []
+    assert not _pull(run, said, waits)
+    assert run.pulled == 1 and waits == []
+    assert "it took more than an hour" in said[-1]
 
 
 def test_a_quiet_pull_says_one_line_instead_of_dockers_progress():
@@ -250,25 +260,30 @@ class UninstallDocker:
     """subprocess.run for `docker`, with listings in the shape `-q` and
     `--format '{{.ID}}|{{.Label "umcodex.instance"}}'` print (from a live
     run). `others`: another data folder's containers, networks and volumes
-    are here too."""
+    are here too. `listings_fail`: Docker can't list them."""
 
-    def __init__(self, others: bool = False):
-        self.others = others
+    def __init__(self, others: bool = False, listings_fail: bool = False):
+        self.listings_fail = listings_fail
         self.calls: list[list[str]] = []
+        mine = instance_of(data_dir())
+        self.objects = {
+            ("ps", "-a"): [("3f9c2a1b7d4e", mine)] + ([("9e8d7c6b5a4f", OTHER)] if others else []),
+            ("network", "ls"): [("0a1b2c3d4e5f", mine)] + ([("7a6b5c4d3e2f", OTHER)] if others else []),
+            ("volume", "ls"): [("umcodex-home-thesis-a1b2c3", mine)]
+            + ([("umcodex-home-dev-b2c3d4", OTHER)] if others else []),
+        }
 
     def __call__(self, command, **options):
         self.calls.append(command)
         args = command[1:]
         out, code = "", 0
-        mine = instance_of(data_dir())
-        listed = {
-            ("ps", "-a"): ("3f9c2a1b7d4e", "9e8d7c6b5a4f"),
-            ("network", "ls"): ("0a1b2c3d4e5f", "7a6b5c4d3e2f"),
-            ("volume", "ls"): ("umcodex-home-thesis-a1b2c3", "umcodex-home-dev-b2c3d4"),
-        }
-        if tuple(args[:2]) in listed and "label=umcodex.app=um-codex" in args and "--format" in args:
-            ours, theirs = listed[tuple(args[:2])]
-            out = f"{ours}|{mine}\n" + (f"{theirs}|{OTHER}\n" if self.others else "")
+        kind = tuple(args[:2])
+        if kind in self.objects and "label=umcodex.app=um-codex" in args and "--format" in args:
+            code = 1 if self.listings_fail else 0
+            out = "" if code else "".join(f"{name}|{owner}\n" for name, owner in self.objects[kind])
+        elif args[:1] == ["rm"] or args[1:2] == ["rm"]:
+            for listed in self.objects.values():
+                listed[:] = [(name, owner) for name, owner in listed if name not in args]
         elif args[0] == "images":
             out = "5d6e7f8a9b0c\n" if args[-1] == "um-codex-agent" else ""
         elif args[:2] == ["ps", "-aq"]:
@@ -285,6 +300,26 @@ def docker_here(monkeypatch):
 def installed_copy(monkeypatch, data_folder):
     """The test's data folder is the installed UM-Codex's (the default one)."""
     monkeypatch.setattr(uninstall, "default_data_dir", lambda: data_folder)
+
+
+@pytest.fixture(autouse=True)
+def installed_program(monkeypatch, tmp_path) -> Path:
+    """Where the installed UM-Codex's program files are (`app_dir()`): never
+    this computer's. Not installed unless a test writes its `current`."""
+    folder = tmp_path / "installed" / "app"
+    monkeypatch.setattr(uninstall, "app_dir", lambda: folder)
+    return folder
+
+
+def _removed(run: UninstallDocker) -> list[list[str]]:
+    return [c for c in run.calls if c[1] in ("rm", "rmi") or c[2:3] == ["rm"]]
+
+
+MINE_REMOVED = [
+    ["docker", "rm", "-f", "3f9c2a1b7d4e"],
+    ["docker", "network", "rm", "0a1b2c3d4e5f"],
+    ["docker", "volume", "rm", "umcodex-home-thesis-a1b2c3"],
+]
 
 
 def fill(data: Path) -> None:
@@ -313,32 +348,75 @@ def test_uninstall_keeping_data(data_folder, memory_keychain, docker_here, insta
 def test_uninstalling_the_installed_copy_leaves_a_development_copys_containers(
     data_folder, memory_keychain, docker_here, installed_copy
 ):
-    """A dev copy's launch may be running: its containers, networks and
-    volumes stay, and so do the images it uses. The key goes."""
+    """A dev copy's launch may be running: with --yes its containers,
+    networks and volumes stay, and so do the images it uses. The key goes."""
     fill(data_folder)
     credentials.save_api_key(FAKE_KEY)
     run = UninstallDocker(others=True)
     said: list[str] = []
     assert uninstall.uninstall(delete_data=True, yes=True, say=said.append, run=run) == 0
     assert not credentials.has_api_key()
-    removed = [c for c in run.calls if c[1] in ("rm", "rmi") or c[2:3] == ["rm"]]
-    assert removed == [
-        ["docker", "rm", "-f", "3f9c2a1b7d4e"],
-        ["docker", "network", "rm", "0a1b2c3d4e5f"],
-        ["docker", "volume", "rm", "umcodex-home-thesis-a1b2c3"],
-    ]
+    assert _removed(run) == MINE_REMOVED
     text = "\n".join(said)
-    assert "Left the containers of another UM-Codex data folder" in text
+    assert "Left 3 UM-Codex containers, networks and volumes from other data folders" in text
     assert "Kept UM-Codex's Docker images: another UM-Codex data folder's containers use them." in text
 
 
+def test_the_installed_copys_uninstall_asks_about_other_data_folders_leftovers(
+    data_folder, docker_here, installed_copy
+):
+    fill(data_folder)
+    run = UninstallDocker(others=True)
+    asked: list[str] = []
+    answers = iter(["y", "y", "y", "y"])  # uninstall, the others' leftovers, images, data
+
+    def ask(question: str) -> str:
+        asked.append(question)
+        return next(answers)
+
+    said: list[str] = []
+    assert uninstall.uninstall(delete_data=None, say=said.append, ask=ask, run=run) == 0
+    assert asked[1].startswith(
+        "Also remove 3 UM-Codex containers, networks and volumes from other data folders on this computer"
+    )
+    assert asked[1].endswith("[y/N] ")
+    assert ["docker", "rm", "-f", "9e8d7c6b5a4f"] in run.calls
+    assert ["docker", "network", "rm", "7a6b5c4d3e2f"] in run.calls
+    assert ["docker", "volume", "rm", "umcodex-home-dev-b2c3d4"] in run.calls
+    assert ["docker", "rmi", "-f", "5d6e7f8a9b0c"] in run.calls  # nothing else uses them now
+
+
+def test_no_to_other_data_folders_leftovers_keeps_them(data_folder, docker_here, installed_copy):
+    fill(data_folder)
+    run = UninstallDocker(others=True)
+    answers = iter(["y", "", "n"])  # uninstall; the others' leftovers: Enter (no); data: no
+    said: list[str] = []
+    assert uninstall.uninstall(delete_data=None, say=said.append, ask=lambda q: next(answers), run=run) == 0
+    assert _removed(run) == MINE_REMOVED[:2]
+    assert any(line.startswith("Left 3 UM-Codex containers") for line in said)
+
+
+def test_a_failed_docker_listing_keeps_the_images(data_folder, docker_here, installed_copy):
+    """Unknown isn't "nobody else uses them": the images stay, and it says why."""
+    fill(data_folder)
+    run = UninstallDocker(listings_fail=True)
+    said: list[str] = []
+    assert uninstall.uninstall(delete_data=True, yes=True, say=said.append, run=run) == 0
+    assert _removed(run) == []
+    text = "\n".join(said)
+    assert "Docker couldn't list UM-Codex's containers or networks" in text
+    assert "Kept UM-Codex's Docker images: Docker couldn't list UM-Codex's containers" in text
+
+
 def test_uninstalling_another_data_folder_keeps_what_the_installed_copy_shares(
-    data_folder, memory_keychain, docker_here, ssh_home
+    data_folder, memory_keychain, docker_here, ssh_home, installed_program
 ):
     """UMCODEX_DATA_DIR (a development or test copy): only that folder's own
     things go. The one Toolkit key and the images are the installed copy's too."""
     from umcodex import codex_app
 
+    installed_program.mkdir(parents=True)
+    (installed_program / "current").write_text("0.1.0a4\n")
     assert not uninstall.is_installed_copy(data_folder)
     fill(data_folder)
     credentials.save_api_key(FAKE_KEY)
@@ -349,18 +427,44 @@ def test_uninstalling_another_data_folder_keeps_what_the_installed_copy_shares(
     assert uninstall.uninstall(delete_data=True, yes=True, say=said.append, run=run) == 0
     assert credentials.has_api_key()
     assert not any(c[1] in ("rmi", "images") for c in run.calls)
-    removed = [c for c in run.calls if c[1] == "rm" or c[2:3] == ["rm"]]
-    assert removed == [
-        ["docker", "rm", "-f", "3f9c2a1b7d4e"],
-        ["docker", "network", "rm", "0a1b2c3d4e5f"],
-        ["docker", "volume", "rm", "umcodex-home-thesis-a1b2c3"],
-    ]
+    assert _removed(run) == MINE_REMOVED
     assert not install.exists()
     assert sorted(p.name for p in data_folder.iterdir()) == ["app"]
     text = "\n".join(said)
     assert "which isn't the installed one" in text
     assert "Kept the Toolkit key in the keychain" in text
+    assert "Left 3 UM-Codex containers, networks and volumes from other data folders" in text
     assert "Kept UM-Codex's Docker images: the installed UM-Codex uses them too." in text
+
+
+def test_a_development_copys_uninstall_removes_the_images_when_nothing_else_uses_them(
+    data_folder, memory_keychain, docker_here
+):
+    """No installed UM-Codex (no `current`) and no other data folder's
+    containers: the images are this copy's alone. The key still stays."""
+    fill(data_folder)
+    credentials.save_api_key(FAKE_KEY)
+    run = UninstallDocker()
+    assert uninstall.uninstall(delete_data=False, yes=True, say=[].append, run=run) == 0
+    assert ["docker", "rmi", "-f", "5d6e7f8a9b0c"] in run.calls
+    assert credentials.has_api_key()
+
+
+def test_the_installed_program_wont_uninstall_another_data_folder(
+    data_folder, memory_keychain, docker_here, installed_program, monkeypatch
+):
+    """The uninstaller scripts remove the program afterwards, which would
+    orphan the installed data folder's containers, key and setups."""
+    monkeypatch.setattr(uninstall.sys, "prefix", str(installed_program / "versions" / "0.1.0a4"))
+    fill(data_folder)
+    credentials.save_api_key(FAKE_KEY)
+    run = UninstallDocker()
+    said: list[str] = []
+    assert uninstall.uninstall(delete_data=True, yes=True, say=said.append, run=run) == 1
+    assert "UMCODEX_DATA_DIR points it at another data folder" in said[0]
+    assert "Nothing was removed." in said[0]
+    assert run.calls == [] and credentials.has_api_key()
+    assert (data_folder / "setups.toml").exists()
 
 
 def test_uninstall_takes_out_the_codex_apps_ssh_entries(data_folder, docker_here, ssh_home):

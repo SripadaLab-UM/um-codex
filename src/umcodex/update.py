@@ -57,6 +57,7 @@ from typing import Protocol
 import httpx
 
 from umcodex import __version__
+from umcodex.containers import say_now
 from umcodex.launch import LaunchLock, launch_is_live, launches_dir
 from umcodex.paths import app_dir, data_dir, default_data_dir
 from umcodex.releases import (
@@ -90,12 +91,6 @@ NOTICE_WAIT_SECONDS = 3.0
 NO_CHECK_ENV = "UMCODEX_NO_UPDATE_CHECK"
 
 Say = Callable[[str], None]
-
-
-def say_now(line: str) -> None:
-    """print, flushed: each line is out before the next step's child process
-    writes, and the launcher's Update reads its progress from the file."""
-    print(line, flush=True)
 
 
 class Runner(Protocol):

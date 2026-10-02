@@ -35,6 +35,10 @@ LAUNCH_LABEL = "umcodex.launch"
 # Which UM-Codex data folder owns it, so tests (or a second data folder)
 # never remove another's launches.
 INSTANCE_LABEL = "umcodex.instance"
+# The data folder itself (resolved), beside its instance: the instance is a
+# hash, so this lets a later version tell the objects of a data folder that's
+# gone from those of one still in use.
+DATA_LABEL = "umcodex.data"
 SETUP_LABEL = "umcodex.setup"
 # An unroutable address (TEST-NET-1): with the internet off, containers can
 # resolve only names Docker knows (the gateway), and nothing else.
@@ -132,6 +136,8 @@ class LaunchSpec:
     # Codex app has `umcodex.ssh=<setup>`, which `um-codex ssh-proxy` finds
     # its agent by (codex_app.py).
     extra_labels: tuple[tuple[str, str], ...] = ()
+    # The data folder that owns the launch (DATA_LABEL); empty: no label.
+    data_folder: str = ""
 
     @property
     def prefix(self) -> str:
@@ -170,9 +176,13 @@ class LaunchSpec:
         return [
             "--label", f"{APP_LABEL}={APP}",
             "--label", f"{INSTANCE_LABEL}={self.instance}",
+            *self._data_label(),
             "--label", f"{LAUNCH_LABEL}={self.launch_id}",
             *(arg for name, value in self.extra_labels for arg in ("--label", f"{name}={value}")),
         ]  # fmt: skip
+
+    def _data_label(self) -> list[str]:
+        return ["--label", f"{DATA_LABEL}={self.data_folder}"] if self.data_folder else []
 
     def network_commands(self) -> list[list[str]]:
         commands = [
@@ -190,6 +200,7 @@ class LaunchSpec:
             "volume", "create",
             "--label", f"{APP_LABEL}={APP}",
             "--label", f"{INSTANCE_LABEL}={self.instance}",
+            *self._data_label(),
             "--label", f"{SETUP_LABEL}={self.setup_id}",
             self.volume,
         ]  # fmt: skip
@@ -461,6 +472,7 @@ def pull_image(
         sys.stdout.flush()
         sys.stderr.flush()
         command = ["docker", "pull", *(["--quiet"] if quiet else []), image]
+        timed_out = False
         try:
             done = run(
                 command,
@@ -474,7 +486,7 @@ def pull_image(
             say("Docker's `docker` command isn't installed or isn't on PATH.")
             return False
         except subprocess.TimeoutExpired:
-            said = "it took more than an hour"
+            said, timed_out = "it took more than an hour", True
         except OSError as error:
             said = f"{type(error).__name__}: {error}"
         else:
@@ -486,8 +498,8 @@ def pull_image(
         if pinned and _image_here(docker, image):
             say(f"  The {role} image is here (that exact version), so the error doesn't matter.")
             return True
-        if not _docker_running(docker) or "no space left" in said.lower():
-            break  # trying again won't help
+        if timed_out or not _docker_running(docker) or "no space left" in said.lower():
+            break  # trying again won't help (an hour gone, Docker stopped, the disk full)
     say(_pull_failed(role, said, running=_docker_running(docker)))
     return False
 
@@ -527,12 +539,10 @@ def _docker_running(docker: Docker) -> bool:
 
 
 def _docker_said(text: str | None) -> str:
-    """Docker's error, on one line: its last non-empty line, shortened."""
+    """Docker's error, on one line: its last 3 non-empty lines, shortened."""
     lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
-    if not lines:
-        return ""
-    line = lines[-1]
-    return line if len(line) <= 300 else line[:297] + "..."
+    said = " / ".join(lines[-3:])
+    return said if len(said) <= 500 else said[:497] + "..."
 
 
 def _is_terminal() -> bool:
