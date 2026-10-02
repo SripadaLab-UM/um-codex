@@ -31,6 +31,24 @@ from umcodex.secret_prompt import ask_secret
 from umcodex.setups import Setup, SetupStore, check, choose, manage, moved
 
 
+def stdin_is_terminal(platform: str = sys.platform) -> bool:
+    """Whether someone can answer at this process's input. On Windows,
+    isatty() is also true for NUL (a character device, as `< NUL` gives), so
+    the console itself is asked: only a console handle has a console mode."""
+    if platform != "win32":
+        return sys.stdin.isatty()
+    import ctypes
+    import msvcrt
+
+    try:
+        handle = msvcrt.get_osfhandle(sys.stdin.fileno())  # type: ignore[attr-defined]
+    except (OSError, ValueError, AttributeError):
+        return False  # no stdin at all
+    mode = ctypes.c_uint32()
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    return bool(kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="um-codex",
@@ -171,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "ssh-include":
             from umcodex import codex_app
 
-            if not sys.stdin.isatty():
+            if not stdin_is_terminal():
                 # The consent must be the person's: nothing to answer with, nothing added.
                 print("There's no terminal to answer in, so ~/.ssh/config wasn't changed.")
                 print(codex_app.INCLUDE_LATER)

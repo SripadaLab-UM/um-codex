@@ -1684,3 +1684,26 @@ def test_the_form_shows_a_moved_folder_and_can_confirm_it():
     script = (REPO / "src" / "umcodex" / "ui" / "static" / "app.js").read_text()
     assert "errors.moved ? movedInForm(draft, errors.moved) : null" in script
     assert "confirm_moved: (draft.moved || []).map((m) => m.now)" in script
+
+
+def test_choosing_terminal_after_a_fallback_clears_its_note(tmp_path):
+    """The card's "Open in Terminal instead" (a save with open_in terminal):
+    the Codex app's fallback note goes with it."""
+    credentials.save_api_key(FAKE_KEY)
+    from umcodex import codex_app
+
+    thesis = tmp_path / "thesis"
+    thesis.mkdir()
+
+    async def test(h: Harness) -> None:
+        await h.sign_in()
+        made = await (await h.post("/api/setups", {"working": str(thesis)})).json()
+        codex_app.record_fallback(made["id"], "The Codex app didn't connect.", data_dir())
+        state = await (await h.client.get("/api/state")).json()
+        assert next(s for s in state["setups"] if s["id"] == made["id"])["app_fallback"]
+        body = setup_body(thesis, name="", internet=True, open_in="terminal")
+        await h.put(f"/api/setups/{made['id']}", body)
+        state = await (await h.client.get("/api/state")).json()
+        assert next(s for s in state["setups"] if s["id"] == made["id"])["app_fallback"] is None
+
+    with_server(test, openers={"terminal": FakeOpener(), "codex-app": FakeAppOpener()})

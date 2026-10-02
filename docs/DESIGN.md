@@ -1432,10 +1432,14 @@ modes, rigor, and the frontend.
          - The fallback stops the copy only if no other setup's launch in
            the Codex app (this data folder's) is running: they share it. What
            it says depends on what became of the copy (`WINDOWS_FALLBACKS`:
-           stopped, shared, still open, never opened), and it's kept in
+           stopped, shared, still open, never opened, and already open: a
+           copy open from before, which this launch only brought forward, is
+           left open and only this launch's sandbox stops; found in the
+           Windows test round, 2026-10-02), and it's kept in
            `codex-app/fallbacks.json` for the setup's card (the launch's own
            folder is gone by then), which shows it with "Open in Terminal
-           instead" until the next Start or a connection. The card also
+           instead" until the next Start, a connection, or a save that
+           switches the setup to Terminal (that button). The card also
            shows a refused copy, and says "taskbar" on Windows (the launch's
            `icon`).
          - "Codex app" is unavailable on Windows without Windows' own ssh
