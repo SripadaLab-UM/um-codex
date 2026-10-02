@@ -60,7 +60,7 @@ import time
 import tomllib
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import tomli_w
 
@@ -513,10 +513,15 @@ _SYSTEM_SID = "S-1-5-18"
 _ADMINISTRATORS_SID = "S-1-5-32-544"
 
 
+def _system32() -> PureWindowsPath:
+    """Windows' System32, as a Windows path on any OS (so commands read the same in tests)."""
+    return PureWindowsPath(os.environ.get("SYSTEMROOT") or r"C:\Windows") / "System32"
+
+
 @functools.cache
 def _windows_user_sid() -> str | None:
     """The person's SID (whoami /user), or None if Windows can't say."""
-    whoami = Path(os.environ.get("SYSTEMROOT") or r"C:\Windows") / "System32" / "whoami.exe"
+    whoami = _system32() / "whoami.exe"
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         done = subprocess.run(
             [str(whoami), "/user", "/fo", "csv", "/nh"],
@@ -538,7 +543,7 @@ def _windows_owner_only(
     if sid is None:
         log.warning("couldn't find this account's SID; %s keeps the permissions it has", path)
         return False
-    icacls = Path(os.environ.get("SYSTEMROOT") or r"C:\Windows") / "System32" / "icacls.exe"
+    icacls = _system32() / "icacls.exe"
     flags = "(OI)(CI)F" if folder else "F"
     who = (sid, _SYSTEM_SID, _ADMINISTRATORS_SID)
     grants = [part for one in who for part in ("/grant:r", f"*{one}:{flags}")]
