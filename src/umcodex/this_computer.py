@@ -113,7 +113,13 @@ def running_copy(data: Path | None = None, run: Callable[..., subprocess.Complet
     _, user_data = copy_paths(data)
     marker = f"--user-data-dir={user_data}"
     with contextlib.suppress(OSError, subprocess.SubprocessError):
-        done = run(["/bin/ps", "-axww", "-o", "pid=,args="], capture_output=True, text=True, timeout=10)
+        done = run(
+            ["/bin/ps", "-axww", "-o", "pid=,args="],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
         for line in (done.stdout or "").splitlines():
             pid, _, args = line.strip().partition(" ")
             program = args.split(" --", 1)[0]
@@ -433,7 +439,8 @@ def listeners(port: int, run: Runner = subprocess.run) -> list[dict[str, str]]:
     done = run(
         ["/usr/sbin/lsof", "-nP", "-a", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpun"],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=10,
     )
     found: list[dict[str, str]] = []
@@ -804,7 +811,8 @@ def ask_to_quit(pid: int, run: Runner = subprocess.run) -> None:
         done = run(
             ["/usr/bin/osascript", "-l", "JavaScript", "-e", _TERMINATE, str(pid)],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
         )
         if done.returncode == 0 and done.stdout.strip() in ("ok", "gone"):

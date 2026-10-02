@@ -348,7 +348,8 @@ def stop(pid: int, user_data: Path, run: Runner = subprocess.run, process: objec
     with contextlib.suppress(OSError, subprocess.SubprocessError):
         run(
             [str(system_dir() / "taskkill.exe"), "/PID", str(int(pid)), "/T", "/F"],
-            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=hidden(),
+            capture_output=True, encoding="utf-8", errors="replace",
+            timeout=30, stdin=subprocess.DEVNULL, creationflags=hidden(),
         )  # fmt: skip
     # taskkill's own code isn't enough: with /T it reports a helper that was
     # already ending as a failure though the copy itself ended (live test).
@@ -421,7 +422,8 @@ def saved_rules(folder: Path, run: Runner = subprocess.run) -> str | None:
         with contextlib.suppress(OSError, subprocess.SubprocessError):
             done = run(
                 [str(system_dir() / "icacls.exe"), str(folder), "/save", str(saved), "/Q"],
-                capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=hidden(),
+                capture_output=True, encoding="utf-8", errors="replace",
+                timeout=30, stdin=subprocess.DEVNULL, creationflags=hidden(),
             )  # fmt: skip
             if done.returncode == 0:
                 lines = saved.read_bytes().decode("utf-16", errors="replace").splitlines()

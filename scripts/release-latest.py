@@ -53,7 +53,7 @@ def published_tags(repository: str) -> list[str]:
             "gh", "release", "list", "--repo", repository, "--exclude-drafts",
             "--limit", "1000", "--json", "tagName",
         ],
-        capture_output=True, text=True, check=True,
+        capture_output=True, encoding="utf-8", errors="replace", check=True,
     )  # fmt: skip
     return [str(item["tagName"]) for item in json.loads(listed.stdout)]
 

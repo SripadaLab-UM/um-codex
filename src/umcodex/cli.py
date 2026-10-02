@@ -15,6 +15,7 @@ um-codex ssh-include   ask once to add the Codex app's line to ~/.ssh/config (th
 from __future__ import annotations
 
 import argparse
+import io
 import logging
 import logging.handlers
 import sys
@@ -24,6 +25,7 @@ from keyring.errors import KeyringError
 
 from umcodex import __version__, credentials, doctor, toolkit
 from umcodex.containers import Docker, DockerError, pull_images, volume_name
+from umcodex.docker_path import ensure_docker_on_path
 from umcodex.folders import FolderRefused, Layout
 from umcodex.paths import data_dir
 from umcodex.relay import UpstreamRefused
@@ -49,7 +51,21 @@ def stdin_is_terminal(platform: str = sys.platform) -> bool:
     return bool(kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
 
 
+def _console_never_fails() -> None:
+    """On Windows, output to a pipe or a file uses the locale's encoding
+    (cp1252), which has no "→" or "✓": print those as "?" rather than fail.
+    From DataLab's cli.py."""
+    for stream in (sys.stdout, sys.stderr):
+        encoding = (getattr(stream, "encoding", None) or "").lower().replace("-", "")
+        if encoding != "utf8" and isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _console_never_fails()
+    # Docker Desktop's `docker`, when its link isn't on PATH (docker_path.py),
+    # for every command: pull, update and uninstall run docker too.
+    ensure_docker_on_path()
     parser = argparse.ArgumentParser(
         prog="um-codex",
         description="Codex on U-M GPT Toolkit, in a Docker container. With no command, it launches.",
