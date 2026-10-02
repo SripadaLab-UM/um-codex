@@ -153,10 +153,12 @@ It follows ITS's "Codex Setup" articles for the model settings (the
      `--delete-data`, each setup's Codex home volume), the key, the images
      (asked first; the gateway's nginx only if no container uses it) and,
      with `--delete-data`, the data folder's contents. It also takes the
-     Codex app's ssh entries out (M6): the `Include ~/.ssh/um-codex/config`
-     line at the top of `~/.ssh/config` (and its backup, if the file is now
-     the same as it; a file UM-Codex made for that one line goes whole) and
-     `~/.ssh/um-codex`. It never removes the
+     Codex app's ssh entries out (M6): its own data folder's
+     (`~/.ssh/um-codex/installs/<id>`), then, unless another UM-Codex data
+     folder on this computer still has hosts there, the `Include
+     ~/.ssh/um-codex/config` line at the top of `~/.ssh/config` (and its
+     backup, if the file is now the same as it; a file UM-Codex made for that
+     one line goes whole) and `~/.ssh/um-codex`. It never removes the
      program files (`<data folder>/app`, which the installers own and their
      uninstall scripts remove afterwards). From DataLab's `setup.uninstall`,
      with the #36 fixes. `--yes` asks nothing: images go, and data stays
@@ -926,12 +928,35 @@ modes, rigor, and the frontend.
      the launch token file. `smoke.sh` checks `sshd -t`, the login shell's
      `CODEX_HOME` and `codex`, and the helper.
    - **This computer's ssh files:**
-     - `~/.ssh/um-codex/` (0700): a key pair per setup
-       (`<setup>_ed25519`, 0600, kept between launches) and `config` (0600),
-       rewritten whole (through a temporary file and a rename) at each
-       launch in the app: one `Host` per **saved** setup that has a key here
-       (a key that belongs to no saved setup, such as the spike's
-       `app-test`, is removed then), with `User agent`, its `IdentityFile`,
+     - `~/.ssh/um-codex/` (0700) is shared by every UM-Codex data folder on
+       the computer (the installed copy's, a development copy's
+       `UMCODEX_DATA_DIR`). Each one keeps its own files in
+       `installs/<install id>/` (0700; the id is the data folder's launch
+       instance label, `containers.instance_of`): a key pair per setup
+       (`<setup>_ed25519`, 0600, kept between launches), `hosts` (its Host
+       blocks) and `owner` (its data folder's path). At each launch in the
+       app it rewrites its own `hosts`: one `Host` per **saved** setup that
+       has a key there (its own keys that belong to no saved setup are
+       removed then). Then `config` (0600) is written whole (a temporary
+       file and a rename) as all data folders' `hosts` together. Every change
+       there is made under one lock (`~/.ssh/um-codex/.lock`, `locks.held`),
+       so launches of different data folders at once can't lose each other's
+       hosts. A data folder never touches another's files, except removing
+       all of one whose `owner` folder no longer exists (logged). The
+       installed copy's hosts keep the plain alias `umcodex-<setup>`; another
+       data folder's carry its install id, `umcodex-<setup>_<first 8 of the
+       id>` (a setup id never has `_`), so two data folders' hosts never
+       share a name; the seeded app state, the local-chats provider and the
+       launch's state use the same alias. Up to 0.1.0a3 each data folder
+       kept its keys straight in `~/.ssh/um-codex` and each launch rewrote
+       `config` from its own setups, removing every other key and Host
+       (another data folder's too: found in the M7 check). The first launch
+       now moves this data folder's flat keys into its own folder; any
+       other flat key is left alone, and the Hosts in `config` that use a
+       flat key still there (an older UM-Codex's) are kept after the others.
+       The app follows Includes in included files too (its bundle, 26.928:
+       each file's top-level `Include`s, with globs), but one plain file
+       doesn't rely on that. Each `Host` has `User agent`, its `IdentityFile`,
        `IdentitiesOnly`, `IdentityAgent none`, `ForwardAgent no`,
        `ForwardX11 no`, `ForwardX11Trusted no`, `Tunnel no`, `ControlMaster
        no`, `ControlPath none`, `GSSAPIAuthentication no`, `UpdateHostKeys
@@ -974,9 +999,10 @@ modes, rigor, and the frontend.
        onto the real path, so a `~/.ssh/config` that's a link stays one), with
        its permissions kept, or created 0600 if there was none. A file that
        isn't UTF-8 text is left alone, with a plain message.
-       `um-codex uninstall` removes the line, the backup when the file is
-       then the same as it, and `~/.ssh/um-codex`. Deleting a setup removes
-       its key and Host.
+       `um-codex uninstall` removes its own data folder's ssh files; then,
+       when no other data folder has any there, the line, the backup when
+       the file is then the same as it, and `~/.ssh/um-codex`. Deleting a
+       setup removes its key and Host.
    - **The container:** a launch as any other (relay, gateway, token,
      folders, internet on or off), labelled `umcodex.ssh=<setup>`. Then, as
      root through `docker exec`: a host key, the setup's public key in
@@ -1354,7 +1380,9 @@ modes, rigor, and the frontend.
      `~/.ssh/um-codex`, and each launch in the app rewrites its `config`
      from its own setups, removing the others' keys and hosts (the scratch
      launch removed the installed copy's; they were restored from a copy
-     taken first). Not changed here.
+     taken first). Fixed after M7: each data folder has its own folder
+     there, and `config` is all of them together (M6, "This computer's ssh
+     files").
    - **Not checked:** Windows; the real native picker (it needs a person);
      a real update from the launcher (it needs two published releases);
      the installers' question in a real install (the installer tests run

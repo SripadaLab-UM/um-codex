@@ -129,6 +129,10 @@ Labels:
     `Host`/`Match` block isn't, and in OpenSSH an Include after a `Host` line
     belongs to that block anyway. So our `Include` must go at the top of
     `~/.ssh/config`.
+  - Correction (2026-10-02, the bundle of app 26.928): "top-level" is per
+    file. The discovery walks each included file the same way, so a
+    top-level `Include` inside an included file is followed too (globs
+    included; each file once). UM-Codex still writes one plain file.
   - It takes the first concrete alias of each `Host` line and skips pattern
     hosts, `colima`, and anything resolving to `github.com`.
   - Each alias is resolved with `ssh -G -F ~/.ssh/config <alias>` (HostName,
@@ -296,7 +300,8 @@ risks:
    which do nothing without an agent.
 5. **Editing `~/.ssh/config`:** this is the person's own file.
    - We need one top-level `Include ~/.ssh/um-codex/config` line, inserted
-     **at the top** (VERIFIED: nested Includes aren't followed), with the
+     **at the top** (VERIFIED: an Include inside a Host block isn't
+     followed; one at the top of an included file is, see 3a), with the
      person's consent and an uninstall step.
    - It's absent on Windows until we create `%USERPROFILE%\.ssh\config`.
    - Our folder rules already refuse `~/.ssh` as a mount, which is good.

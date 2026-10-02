@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from tests.conftest import FAKE_KEY
 from umcodex import cli, credentials, toolkit, uninstall
 from umcodex.containers import images, pull_images
 from umcodex.launch import LaunchLock
+from umcodex.setups import Setup, SetupStore
 
 
 @pytest.fixture
@@ -180,6 +182,8 @@ def test_uninstall_takes_out_the_codex_apps_ssh_entries(data_folder, docker_here
     ssh.mkdir()
     (ssh / "config").write_text("Host mine\n  User me\n")
     codex_app.add_include()
+    # This data folder's setup, with its key in the layout before 0.1.0a4 (flat).
+    SetupStore().save(Setup(id="thesis-a1b2c3", name="Thesis", working="/tmp"))
     (ssh / "um-codex").mkdir()
     (ssh / "um-codex" / "config").write_text("Host umcodex-thesis-a1b2c3\n")
     (ssh / "um-codex" / "thesis-a1b2c3_ed25519").write_text("key")
@@ -189,6 +193,34 @@ def test_uninstall_takes_out_the_codex_apps_ssh_entries(data_folder, docker_here
     assert not (ssh / "config.um-codex-backup").exists()  # the file is as it was before
     assert not (ssh / "um-codex").exists()
     assert any("Include ~/.ssh/um-codex/config" in line for line in said)
+
+
+def test_uninstall_keeps_another_data_folders_ssh_entries(data_folder, docker_here, ssh_home, tmp_path):
+    """Another UM-Codex data folder on this computer (a development copy's)
+    keeps its hosts, its keys and the Include line."""
+    from umcodex import codex_app
+
+    if not shutil.which("ssh-keygen"):
+        pytest.skip("no ssh-keygen here")
+    ssh = ssh_home / ".ssh"
+    ssh.mkdir()
+    (ssh / "config").write_text("Host mine\n  User me\n")
+    codex_app.add_include()
+    other = tmp_path / "other-data"
+    other.mkdir()
+    proxy = lambda s: ["/x/um-codex", "ssh-proxy", s]  # noqa: E731
+    codex_app.ensure_key("dev-b2", data=other)
+    codex_app.write_config(proxy, setup_ids=["dev-b2"], data=other)
+    codex_app.ensure_key("thesis-a1")
+    codex_app.write_config(proxy, setup_ids=["thesis-a1"])
+    said: list[str] = []
+    assert uninstall.uninstall(delete_data=False, yes=True, say=said.append, run=UninstallDocker()) == 0
+    assert codex_app.include_present()
+    assert not codex_app.install_ssh_dir().exists()
+    assert codex_app.known_setups(data=other) == ["dev-b2"]
+    text = (ssh / "um-codex" / "config").read_text()
+    assert f"Host {codex_app.alias('dev-b2', other)}" in text and "umcodex-thesis-a1" not in text
+    assert any("another UM-Codex data folder" in line for line in said)
 
 
 def test_uninstall_with_no_ssh_entries_says_nothing_about_them(data_folder, docker_here, ssh_home):
