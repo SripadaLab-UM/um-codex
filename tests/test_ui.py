@@ -430,9 +430,9 @@ def test_a_folder_that_moved_needs_confirming_before_a_start(folders_here, tmp_p
     credentials.save_api_key(FAKE_KEY)
     link = tmp_path / "link"
     link.symlink_to(folders_here["thesis"])
-    setup = Setup(id=new_id("linked"), name="linked", working=str(link / "."))
+    setup = Setup(id=new_id("linked"), name="linked", working=str(link / "."), open_in="terminal")
     # Saved as the link's path, which now leads to another folder.
-    setup = Setup(id=setup.id, name="linked", working=str(link))
+    setup = Setup(id=setup.id, name="linked", working=str(link), open_in="terminal")
     SetupStore().save(setup)
 
     async def test(h: Harness) -> None:
@@ -1040,11 +1040,12 @@ def test_the_page_shows_the_package_mark_and_builds_with_text_only():
 
 def test_setups_keep_open_in(tmp_path):
     store = SetupStore()
-    store.save(Setup(id="a-1", name="a", working=str(tmp_path), open_in="codex-app"))
-    assert store.get("a-1").open_in == "codex-app"  # type: ignore[union-attr]
-    raw = store.path.read_text().replace('open_in = "codex-app"', 'open_in = "elsewhere"')
-    store.path.write_text(raw)
+    store.save(Setup(id="a-1", name="a", working=str(tmp_path), open_in="terminal"))
     assert store.get("a-1").open_in == "terminal"  # type: ignore[union-attr]
+    raw = store.path.read_text(encoding="utf-8").replace('open_in = "terminal"', 'open_in = "elsewhere"')
+    store.path.write_text(raw, encoding="utf-8")
+    # Not understood (or not saved at all): the Codex app, the default.
+    assert store.get("a-1").open_in == "codex-app"  # type: ignore[union-attr]
 
 
 # --- Review fixes ----------------------------------------------------------------
@@ -1373,7 +1374,7 @@ def test_a_card_knows_its_moved_folders_and_start_says_so(folders_here, tmp_path
     credentials.save_api_key(FAKE_KEY)
     link = tmp_path / "link"
     link.symlink_to(folders_here["thesis"])
-    SetupStore().save(Setup(id="linked-a1", name="linked", working=str(link)))
+    SetupStore().save(Setup(id="linked-a1", name="linked", working=str(link), open_in="terminal"))
 
     async def test(h: Harness) -> None:
         await h.sign_in()
@@ -1683,7 +1684,7 @@ def test_saving_a_moved_folder_again_needs_the_same_confirmation(folders_here, t
     credentials.save_api_key(FAKE_KEY)
     link = tmp_path / "link"
     link.symlink_to(folders_here["thesis"])
-    SetupStore().save(Setup(id="linked-a1", name="linked", working=str(link)))
+    SetupStore().save(Setup(id="linked-a1", name="linked", working=str(link), open_in="terminal"))
     body = setup_body(link, name="linked")
 
     async def test(h: Harness) -> None:
@@ -1709,7 +1710,7 @@ def test_saving_a_moved_folder_again_needs_the_same_confirmation(folders_here, t
 def test_choosing_the_folder_again_replaces_a_moved_one(folders_here, tmp_path):
     link = tmp_path / "link"
     link.symlink_to(folders_here["thesis"])
-    SetupStore().save(Setup(id="linked-a1", name="linked", working=str(link)))
+    SetupStore().save(Setup(id="linked-a1", name="linked", working=str(link), open_in="terminal"))
 
     async def test(h: Harness) -> None:
         await h.sign_in()

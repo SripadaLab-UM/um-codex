@@ -117,7 +117,8 @@ code, .path { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere
 main { padding-top: 8px; }
 section.block { padding: 18px 0 6px; }
 section.block + section.block { border-top: 1px solid var(--line); }
-.block-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.block-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.block-head .help { margin: 0; }
 
 /* Running launches */
 .running-row {
@@ -142,16 +143,22 @@ section.block + section.block { border-top: 1px solid var(--line); }
 .radios .help { display: block; color: var(--muted); font-size: 13px; }
 .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
 
-/* The one main action */
-.hero { padding: 22px 0 18px; border-bottom: 1px solid var(--line); }
-.hero h2 { margin-bottom: 12px; }
-.hero .help { margin-top: 8px; max-width: 64ch; }
-.hero .message { margin-top: 8px; }
-.hero button.link { margin-top: 2px; padding-left: 0; }
-.hero-status { display: flex; align-items: center; gap: 8px; font-size: 15px; margin: 0; }
-.hero-status.ok { color: var(--ok); }
-.hero-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0; }
-.head-actions { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+/* The first time: what's ready, and the next step */
+.intro { padding: 24px 0 8px; }
+.intro .lead { color: var(--muted); max-width: 62ch; margin: 2px 0 18px; }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; border-top: 1px solid var(--line); }
+.step { display: grid; grid-template-columns: 28px 1fr; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); counter-increment: step; }
+.step .tick {
+  width: 24px; height: 24px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--edge); font-size: 13px; font-weight: 700; color: var(--muted);
+}
+.step:not(.done) .tick::before { content: counter(step); }
+.step.done .tick { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+.step.done strong { color: var(--muted); font-weight: 500; }
+.step .help { margin: 2px 0 0; max-width: 62ch; }
+.step button { margin-top: 10px; }
+.steps { counter-reset: step; }
 
 /* Setups */
 .cards { display: grid; gap: 12px; }
@@ -180,7 +187,20 @@ button.small { font-size: 12.5px; color: var(--muted); }
 .inline-note { font-size: 13.5px; color: var(--muted); margin: 8px 0 0; max-width: 70ch; }
 .inline-note p { margin: 0; }
 .inline-note button.link, .warning button.link { padding-left: 0; }
-.card .actions { margin-top: 12px; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card-start { flex: none; }
+.card-start button { min-width: 84px; }
+.tag { font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
+.card-sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin: 4px 0 0; font-size: 13.5px; color: var(--muted); }
+.card-sum .sep { color: var(--edge); }
+details.card-facts { margin: 10px 0 0; }
+details.card-facts > summary { cursor: pointer; font-size: 13.5px; color: var(--muted); width: max-content; }
+details.card-facts > summary:hover { color: var(--ink); }
+details.card-facts .facts { margin-top: 8px; padding: 8px 0 2px 12px; border-left: 2px solid var(--line); }
+.card-foot { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.card-foot button.link { padding: 2px 0; font-size: 13.5px; color: var(--muted); text-decoration-color: var(--line); }
+.card-foot button.link:hover { color: var(--ink); text-decoration-color: currentColor; }
+.card-foot button.link.danger { color: var(--danger); }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
 .chip {
@@ -329,7 +349,6 @@ button.danger-solid { background: var(--danger); border-color: var(--danger); co
 .masked { -webkit-text-security: disc; font-family: var(--mono); }
 .status .stale { flex-basis: 100%; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-#quick-help p { margin: 0 0 4px; }
 
 /* M4, "On this computer": a setup that runs outside the sandbox says so plainly. */
 .badge.local {

@@ -2,10 +2,11 @@
 // textContent (never innerHTML), and every request is a same-origin JSON
 // fetch (the server refuses anything else; see ui/protection.py).
 //
-// M7, "one click": a returning person presses one Start; the first time, one
-// "Choose a folder and start" and Codex starts with the defaults. No summary
-// page and no pop-ups on the way: what a setup gives Codex is always on its
-// card, problems and questions show on the card, and a pop-up question is
+// The first time, a short list: what's ready, and New setup… (the form, with
+// the Codex app and the other defaults chosen). After that, one list of
+// setups, each with its own Start. No summary page and no pop-ups on the way:
+// a card says what its setup gives Codex (in full under "What Codex can do
+// here"), problems and questions show on the card, and a pop-up question is
 // kept only before Stop and Delete (and Windows' administrator prompt).
 "use strict";
 
@@ -20,10 +21,10 @@ let polling = true;
 // { phase: "starting" | "docker" | "key" | "include" | "failed", since, text }
 const cards = new Map();
 let pending = null; // a Start waiting for the key or Docker: { id, extra }
-let hero = null; // the first-run button's own line: { text, bad }
 const renaming = new Map(); // setup id -> the name being typed on its card (kept across redraws)
 const warned = new Map(); // setup id -> the folder notes from choosing it (a network drive, ...)
 const said = new Map(); // setup id -> its status line as last announced
+const openFacts = new Set(); // setup ids whose "What Codex can do here" is open (kept across redraws)
 const shownSteps = new Set(); // launch ids whose Codex app steps were opened by hand
 
 // ---------------------------------------------------------------- helpers
@@ -556,25 +557,18 @@ function redraw() {
 
 function renderHome() {
   const parts = [];
-  if (!state.setups.length) parts.push(firstRun());
+  if (!state.setups.length) parts.push(getStarted());
   else {
-    parts.push(lastHero());
     parts.push(
       el(
         "section",
-        { class: "block", "aria-label": "Your setups" },
+        { class: "block", "aria-labelledby": "setups-title" },
         el(
           "div",
           { class: "block-head" },
-          el("h2", { class: "label", text: "Your setups" }),
-          el(
-            "span",
-            { class: "head-actions" },
-            el("button", { key: "another", onclick: quickStart, "aria-describedby": "another-help", text: "Choose another folder…" }),
-            el("button", { class: "quiet", key: "new", onclick: () => showForm(null), text: "New setup with options…" }),
-          ),
+          el("div", {}, el("h2", { id: "setups-title", text: "Your setups" }), el("p", { class: "help", text: "Each setup is a folder for Codex to work in. Start one to open Codex there." })),
+          el("button", { class: "primary", key: "new", onclick: () => showForm(null), text: "New setup…" }),
         ),
-        el("p", { class: "help", id: "another-help", text: `Choose another folder: it starts at once, as the first one did. ${WORDS.writes} Internet on.` }),
         el("div", { class: "cards" }, state.setups.map(card)),
       ),
     );
@@ -601,58 +595,35 @@ function renderHome() {
   render(...parts);
 }
 
-// The first time: one button. The folder chosen, Codex starts with the defaults.
-function firstRun() {
-  const where = state.default_open_in === "codex-app" ? "the Codex app" : "a Terminal window";
-  return el(
-    "section",
-    { class: "hero", "aria-label": "Start" },
-    el("h2", { text: "Work with Codex in a folder" }),
-    el("button", {
-      class: "primary big",
-      key: "choose",
-      onclick: quickStart,
-      "aria-describedby": "quick-help",
-      text: "Choose a folder and start…",
-    }),
-    hero ? el("p", { class: hero.bad ? "message" : "help", text: hero.text }) : null,
+// The first time: what's ready, and the one thing to do next (a setup).
+function getStarted() {
+  const keyReady = state.key.saved;
+  const dockerReady = state.docker.state === "ready";
+  const where = state.default_open_in === "codex-app" ? "the Codex app (a separate copy set up for UM-Codex)" : "a Terminal window";
+  const step = (done, title, detail, action) =>
     el(
-      "div",
-      { class: "help", id: "quick-help" },
-      el("p", { text: `Codex starts in ${where}, working in the folder you choose. ${WORDS.writes}` }),
-      el("p", { text: `${WORDS.internetOn} Change any of it later with Edit.` }),
-    ),
-    el("button", { class: "link", key: "options", onclick: () => showForm(null), text: "Choose options first…" }),
-  );
-}
-
-// Returning: the last setup used, one click away (while it runs, its status).
-function lastHero() {
-  const s = setupOf(state.last_used) || state.setups[0];
-  const run = runningOf(s.id);
-  const status = statusOf(s, run);
-  const blocked = Boolean(s.problem) || s.moved.length > 0;
+      "li",
+      { class: `step${done ? " done" : ""}` },
+      el("span", { class: "tick", "aria-hidden": "true", text: done ? "✓" : "" }),
+      el("div", {}, el("strong", { text: title }), detail ? el("p", { class: "help", text: detail }) : null, action || null),
+    );
   return el(
     "section",
-    { class: "hero", "aria-label": "Start the last setup" },
-    run
-      ? el(
-          "p",
-          { class: `hero-status${status?.ok ? " ok" : ""}` },
-          el("span", { class: "pulse", "aria-hidden": "true" }),
-          el("strong", { text: `“${s.name}”: ` }),
-          status?.text || "Running.",
-        )
-      : el("button", {
-          class: "primary big",
-          key: "start-last",
-          disabled: blocked || Boolean(status?.busy),
-          onclick: () => startSetup(s.id, needsInclude(s) ? { allow_ssh_include: true } : {}),
-          text: status?.busy ? `Starting “${s.name}”…` : needsInclude(s) ? `Add the line and start “${s.name}”` : `Start “${s.name}”`,
-        }),
-    el("p", { class: "help hero-line" }, pathView(s.working, { copy: false }), el("span", { text: ` · ${codexLine(s)}` })),
-    !run && blocked ? el("p", { class: "note", text: "It needs a look on its card below first." }) : null,
-    !run && !blocked && needsInclude(s) ? el("p", { class: "help", text: INCLUDE_REASON }) : null,
+    { class: "intro", "aria-labelledby": "intro-title" },
+    el("h2", { id: "intro-title", text: "Get started" }),
+    el("p", { class: "lead", text: "UM-Codex runs Codex on the U-M GPT Toolkit in a sandbox: Codex sees only the folders you give it." }),
+    el(
+      "ol",
+      { class: "steps" },
+      step(keyReady, keyReady ? "Toolkit key saved" : "Add your Toolkit key", keyReady ? null : "Paste it in the box above. It stays in this computer's keychain."),
+      step(dockerReady, dockerReady ? "Docker is running" : "Docker Desktop", dockerReady ? null : state.docker.words),
+      step(
+        false,
+        "Make your first setup",
+        `Choose a folder for Codex to work in, and what it may reach. Then start it: Codex opens in ${where}.`,
+        el("button", { class: "primary big", key: "new", disabled: !keyReady, onclick: () => showForm(null), text: "New setup…" }),
+      ),
+    ),
   );
 }
 
@@ -682,14 +653,15 @@ function card(s) {
   // Screen readers hear a card's line when it changes, not every redraw.
   if (status && said.get(s.id) !== status.text) announce(`${s.name}: ${status.text}`);
   said.set(s.id, status?.text);
-  const head = renaming.has(s.id)
+  const last = state.setups.length > 1 && s.id === (state.last_used || state.setups[0].id);
+  const title = renaming.has(s.id)
     ? renameField(s)
     : el(
         "div",
         { class: "card-title" },
         el("h3", { text: s.name }),
+        last ? el("span", { class: "tag", text: "Last used" }) : null,
         onThisComputer(s) ? el("span", { class: "badge local", title: WORDS.local, text: "On this computer · experimental" }) : null,
-        el("button", { class: "link small", key: `rename-${s.id}`, "aria-label": `Rename ${s.name}`, text: "Rename", onclick: () => startRename(s) }),
       );
   let start;
   if (run) {
@@ -722,7 +694,8 @@ function card(s) {
   return el(
     "article",
     { class: `card${run ? " live" : ""}${onThisComputer(s) ? " local" : ""}`, "aria-label": onThisComputer(s) ? `${s.name} (on this computer)` : s.name },
-    head,
+    el("div", { class: "card-head" }, title, el("div", { class: "card-start" }, start)),
+    summaryLine(s),
     status
       ? el(
           "p",
@@ -740,15 +713,38 @@ function card(s) {
     (warned.get(s.id) || []).map((w) => el("p", { class: "note", text: w })),
     s.moved.length ? movedBlock(s) : null,
     !run && needsInclude(s) ? includeBlock(s) : null,
-    facts(s, { key: s.id }),
+    el(
+      "details",
+      { class: "card-facts", key: `facts-${s.id}`, open: openFacts.has(s.id), ontoggle: (e) => (e.target.open ? openFacts.add(s.id) : openFacts.delete(s.id)) },
+      el("summary", { text: "What Codex can do here" }),
+      facts(s, { key: s.id }),
+    ),
     el(
       "div",
-      { class: "actions" },
-      start,
-      el("button", { key: `edit-${s.id}`, onclick: () => showForm(s), text: "Edit" }),
-      el("button", { class: "quiet", key: `dup-${s.id}`, onclick: () => duplicate(s), text: "Duplicate" }),
-      el("button", { class: "quiet danger", key: `del-${s.id}`, onclick: () => remove(s), text: "Delete" }),
+      { class: "card-foot" },
+      el("button", { class: "link", key: `edit-${s.id}`, onclick: () => showForm(s), "aria-label": `Edit ${s.name}`, text: "Edit" }),
+      el("button", { class: "link", key: `rename-${s.id}`, "aria-label": `Rename ${s.name}`, text: "Rename", onclick: () => startRename(s) }),
+      el("button", { class: "link", key: `dup-${s.id}`, "aria-label": `Duplicate ${s.name}`, onclick: () => duplicate(s), text: "Duplicate" }),
+      el("button", { class: "link danger", key: `del-${s.id}`, "aria-label": `Delete ${s.name}`, onclick: () => remove(s), text: "Delete" }),
     ),
+  );
+}
+
+// A card's one line: the folder, where Codex opens, the internet, the model.
+function summaryLine(s) {
+  const bits = [
+    onThisComputer(s) ? "UM-Codex's local Codex window" : openerLabel(s.open_in),
+    onThisComputer(s) ? null : s.internet ? (s.browser ? "Internet on + browser" : "Internet on") : "Internet off",
+    s.model,
+    s.approvals === "never" ? null : "asks before commands",
+  ].filter(Boolean);
+  return el(
+    "p",
+    { class: "card-sum" },
+    s.working ? pathView(s.working, { copy: false }) : el("span", { class: "faint", text: "No folder" }),
+    (s.folders || []).length ? el("span", { class: "faint", text: ` + ${s.folders.length} more` }) : null,
+    el("span", { class: "sep", "aria-hidden": "true", text: "·" }),
+    el("span", { text: bits.join(" · ") }),
   );
 }
 
@@ -912,45 +908,6 @@ async function pickFolder(start) {
   } catch (error) {
     return { error: error.message };
   }
-}
-
-// "Choose a folder and start": the computer's own folder picker, then a
-// setup with the defaults (named after the folder), started at once.
-let quickStarting = false; // one quick start at a time: a second click (or event) does nothing
-
-async function quickStart() {
-  if (quickStarting) return;
-  quickStarting = true;
-  try {
-    await quickStartOnce();
-  } finally {
-    quickStarting = false;
-  }
-}
-
-async function quickStartOnce() {
-  notice("");
-  hero = { text: "Choose the folder in the window that opened (it may be behind this one)." };
-  redraw();
-  const chosen = await pickFolder();
-  hero = null;
-  if (!chosen) return redraw();
-  if (chosen.error) {
-    hero = { text: chosen.error, bad: true };
-    if (state.setups.length) notice(chosen.error, true);
-    return redraw();
-  }
-  let made;
-  try {
-    made = await api("POST", "/api/setups", { working: chosen.path });
-  } catch (error) {
-    hero = { text: error.message, bad: true };
-    if (state.setups.length) notice(error.message, true);
-    return redraw();
-  }
-  if (chosen.warnings?.length) warned.set(made.id, chosen.warnings);
-  await refresh();
-  startOrAsk(made);
 }
 
 // ---------------------------------------------------------------- the form
