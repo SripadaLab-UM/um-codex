@@ -35,6 +35,11 @@ JSON.stringify(chosen.map(String));
 # window where the mouse is, brought to the front. Windows lets it come
 # forward while its input is joined to the window in front (the browser) for a
 # moment. If that isn't allowed here, the dialog still opens, maybe behind.
+#
+# The picker is Windows' own folder dialog (IFileOpenDialog), with its address
+# bar and a box to type or paste a path: the old Browse For Folder tree hid
+# the local Documents on a managed laptop whose My Documents was an unreachable
+# network share (found 2026-10-02). If it can't be made, the old one opens.
 _WINDOWS = r"""
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
@@ -77,10 +82,108 @@ public static extern bool AttachThreadInput(uint from, uint to, bool attach);
     } catch { }
     $owner.Activate()
     $owner.BringToFront()
-    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dialog.Description = 'Choose a folder for UM-Codex'
-    if ($env:UMCODEX_PICK_START) { $dialog.SelectedPath = $env:UMCODEX_PICK_START }
-    if ($dialog.ShowDialog($owner) -eq 'OK') { $paths = @($dialog.SelectedPath) }
+    $modern = $false
+    try {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace UmCodexPicker {
+    [ComImport, Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7")] class FileOpenDialogClass { }
+    [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellItem {
+        void BindToHandler(IntPtr bindContext, ref Guid handler, ref Guid riid, out IntPtr result);
+        void GetParent(out IShellItem parent);
+        void GetDisplayName(uint form, [MarshalAs(UnmanagedType.LPWStr)] out string name);
+        void GetAttributes(uint mask, out uint attributes);
+        void Compare(IShellItem other, uint hint, out int order);
+    }
+    [ComImport, Guid("d57c7288-d4ad-4768-be02-9d969532d960")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IFileOpenDialog {
+        [PreserveSig] int Show(IntPtr owner);
+        void SetFileTypes(uint count, IntPtr specs);
+        void SetFileTypeIndex(uint index);
+        void GetFileTypeIndex(out uint index);
+        void Advise(IntPtr events, out uint cookie);
+        void Unadvise(uint cookie);
+        void SetOptions(uint options);
+        void GetOptions(out uint options);
+        void SetDefaultFolder(IShellItem folder);
+        void SetFolder(IShellItem folder);
+        void GetFolder(out IShellItem folder);
+        void GetCurrentSelection(out IShellItem item);
+        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string name);
+        void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string name);
+        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string title);
+        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+        void GetResult(out IShellItem item);
+        void AddPlace(IShellItem item, int where);
+        void SetDefaultExtension([MarshalAs(UnmanagedType.LPWStr)] string extension);
+        void Close(int result);
+        void SetClientGuid(ref Guid guid);
+        void ClearClientData();
+        void SetFilter(IntPtr filter);
+        void GetResults(out IntPtr items);
+        void GetSelectedItems(out IntPtr items);
+    }
+    public static class Folder {
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+        static extern void SHCreateItemFromParsingName(
+            string path, IntPtr bindContext, ref Guid riid, out IShellItem item);
+        static IFileOpenDialog Make(string title, string start) {
+            IFileOpenDialog dialog = (IFileOpenDialog)new FileOpenDialogClass();
+            uint options;
+            dialog.GetOptions(out options);
+            dialog.SetOptions(options | 0x20 | 0x40 | 0x800);  // pick folders, file system only, must exist
+            dialog.SetTitle(title);
+            if (!String.IsNullOrEmpty(start)) {
+                try {
+                    Guid shellItem = typeof(IShellItem).GUID;
+                    IShellItem folder;
+                    SHCreateItemFromParsingName(start, IntPtr.Zero, ref shellItem, out folder);
+                    dialog.SetFolder(folder);
+                } catch (Exception) { }
+            }
+            return dialog;
+        }
+        // The dialog's options, made but not shown (Windows CI checks this).
+        public static uint Check(string start) {
+            uint options;
+            Make("Check", start).GetOptions(out options);
+            return options;
+        }
+        // The folder chosen, or null if the person cancelled.
+        public static string Pick(IntPtr owner, string title, string start) {
+            IFileOpenDialog dialog = Make(title, start);
+            int shown = dialog.Show(owner);
+            if (shown == unchecked((int)0x800704C7)) return null;  // cancelled
+            Marshal.ThrowExceptionForHR(shown);
+            IShellItem chosen;
+            dialog.GetResult(out chosen);
+            string path;
+            chosen.GetDisplayName(0x80058000, out path);  // its file system path
+            return path;
+        }
+    }
+}
+'@
+        $modern = $true
+    } catch { }
+    if ($modern) {
+        try {
+            $title = 'Choose a folder for UM-Codex'
+            $chosen = [UmCodexPicker.Folder]::Pick($owner.Handle, $title, $env:UMCODEX_PICK_START)
+            if ($chosen) { $paths = @($chosen) }
+        } catch { $modern = $false }
+    }
+    if (-not $modern) {
+        $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+        $dialog.Description = 'Choose a folder for UM-Codex'
+        if ($env:UMCODEX_PICK_START) { $dialog.SelectedPath = $env:UMCODEX_PICK_START }
+        if ($dialog.ShowDialog($owner) -eq 'OK') { $paths = @($dialog.SelectedPath) }
+    }
 } finally {
     $owner.Close()
     $owner.Dispose()
