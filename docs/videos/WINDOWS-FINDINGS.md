@@ -87,3 +87,25 @@ and WSL already installed. Read with [RECORDING-FINDINGS.md](RECORDING-FINDINGS.
   (`footage/record-windows-launch.ps1`, after every window was minimized). The
   full-screen recording holds the whole desktop and is not in the repository.
 - The demo folder is `C:\Demo\UM-Codex demo`, whose parent holds nothing else.
+
+## Clean-install test (2026-10-04, v0.1.0-alpha.6, Windows 11, Michigan Medicine computer)
+
+Done after removing UM-Codex (its own uninstaller, `-KeepData`), then Docker Desktop and WSL
+(`footage/remove-docker-wsl.ps1`, elevated), then running the published install command in a
+window whose PATH had no git.
+
+14. **The installer never calls git** (nothing in `install.ps1` or `uninstall.ps1` runs it), so a
+    machine without git is not a risk for UM-Codex. The install ran start to finish: the
+    administrator part (WSL and Docker Desktop installed), a restart, the automatic resume after
+    sign-in, the key prompt, the shortcuts. `um-codex doctor` then said "Everything needed for a
+    launch is there" (Docker, both images, the key saved, the Toolkit accepting it).
+15. **The window shows nothing after the restart question** if the person looks at the log: with
+    `irm | iex` the planned stop throws `UM-Codex installer stopped` (visible in a transcript as
+    `TerminatingError`). On screen the installer has already said why (the restart message), so
+    it is not a silent failure, but a transcript or a pasted log reads like an error.
+16. **The resumed half ran after sign-in with the person's normal PATH**, not the git-free one, so
+    steps 2 to 7 were re-checked separately without git (see the note below if that was done).
+17. **The uninstaller leaves things behind** that the person can't easily see: `~/.ssh/um-codex/.lock`
+    ("delete it yourself", though it is UM-Codex's own), `UM-Codex\app\update.lock`, saved setups'
+    Docker volumes (`umcodex-home-*`, with `-KeepData`), and containers/volumes from a demo data
+    folder ("from other data folders"). The Docker/WSL removal is manual by design.
