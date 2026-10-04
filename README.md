@@ -81,22 +81,24 @@ Spotlight; Windows: the Desktop shortcut or the Start menu). It opens
 UM-Codex's window in your web browser. The page runs on your own computer
 (at `127.0.0.1`, signed in by the link the app opens) and isn't on the web.
 
-- **The first time:** press **Choose a folder and start…**, pick the folder
-  in your computer's own folder picker, and Codex starts there: in the Codex
-  app if you have it (Mac), otherwise in a terminal window. It starts with
-  the internet on, running commands without asking, on `gpt-5.6-terra`. (If
-  no key is saved yet, the page asks for it right there first.)
-- **Next time:** press **Start "<your folder>"** at the top. That's it.
-- Each folder you've used is a **setup**, shown as a card named after its
-  folder (**Rename** changes that). The card always says what Codex can do
-  with it: the folders (and that changes there are real, with no undo), the
-  internet on or off, the browser tool, where it opens, the model. A line on
-  the card follows a start: Starting… → Opening Codex… → Connected ✓.
+- **The first time:** the page shows what's ready (your Toolkit key,
+  Docker) and the next step: **New setup…**. Choose the folder Codex works
+  in with your computer's own folder picker, check the defaults (internet
+  on, running commands without asking, the newest model, opening in the
+  Codex app), and press **Save and start**. (If no key is saved yet, the page
+  asks for it right there first.)
+- Each setup is a card: its name and **Start** at the top, then one line with
+  its folder, where Codex opens, the internet and the model. **What Codex can
+  do here** opens the full wording: the folders (and that changes there are
+  real, with no undo), the internet, the browser tool. A line on the card
+  follows a start: Starting… → Opening Codex… → Connected ✓. The last one
+  used is first, marked **Last used**.
 - **Edit** a setup for more: more folders (each read only, or read &
   write), the internet and the browser tool, the model (newest first), where
   it opens, and, under More options, "Ask before commands", its name and
-  where Codex runs (below: On this computer).
-  **New setup with options…** starts from that form.
+  where Codex runs (below: On this computer). **New setup…** opens the same
+  form for another folder; **Rename**, **Duplicate** and **Delete** are under
+  each card.
 - **Stop** ends a running setup (it asks first, as **Delete** does).
 - The strip at the top says whether Docker is running and your key is saved
   (**Replace**), and offers an **Update** when a new version is out. If

@@ -58,9 +58,9 @@ class Setup:
     # it existed have neither key, which means off.
     browser: bool = False
     browser_asks: bool = True  # approve each browser action
-    # Where Codex opens when started from the launcher window (M5): only
-    # "terminal" for now; "codex-app" is being tried on another branch.
-    open_in: str = "terminal"
+    # Where Codex opens when started from the launcher window (M5): the Codex
+    # app by default (its card offers Terminal if the app can't be used).
+    open_in: str = "codex-app"
     # M4, "On this computer": setups saved before it have none of these
     # keys, which means the sandbox.
     runs_on: str = "sandbox"
@@ -113,7 +113,7 @@ class Setup:
             approvals=approvals,
             browser=internet and raw.get("browser", False) is True,
             browser_asks=raw.get("browser_asks", True) is not False,
-            open_in=str(raw["open_in"]) if raw.get("open_in") in OPEN_IN else "terminal",
+            open_in=str(raw["open_in"]) if raw.get("open_in") in OPEN_IN else "codex-app",
             runs_on=str(raw["runs_on"]) if raw.get("runs_on") in RUNS_ON else "sandbox",
             local_access=str(raw["local_access"]) if raw.get("local_access") in LOCAL_ACCESS else "full",
             computer_use=raw.get("computer_use", True) is not False,
@@ -437,7 +437,7 @@ def ask_setup(
         approvals=approvals,
         browser=browser,
         browser_asks=browser_asks,
-        open_in=base.open_in if base else "terminal",
+        open_in=base.open_in if base else "codex-app",
         # Where it runs is chosen in the launcher window (M4); the terminal keeps it.
         runs_on=base.runs_on if base else "sandbox",
         local_access=base.local_access if base else "full",

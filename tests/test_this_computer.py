@@ -947,15 +947,13 @@ def test_run_local_puts_the_chrome_manifest_back_after_the_copy(tmp_path: Path) 
     assert code == 0 and manifest.read_text() == PERSONS
 
 
-def test_stop_on_this_computer_has_its_own_words_and_quick_start_runs_once() -> None:
+def test_stop_on_this_computer_has_its_own_words() -> None:
     static = Path(__file__).resolve().parents[1] / "src" / "umcodex" / "ui" / "static"
-    script = (static / "app.js").read_text()
+    script = (static / "app.js").read_text(encoding="utf-8")
     stop = script[script.index("async function stopLaunch") :]
     stop = stop[: stop.index("\n}\n")]
     assert "UM-Codex's Codex window on this computer closes. Chats are kept." in stop
     assert stop.index("run.app?.local") < stop.index("can't reconnect")
-    quick = script[script.index("async function quickStart()") :]
-    assert quick.index("if (quickStarting) return;") < quick.index("quickStartOnce()")
     assert "Control of your own Chrome isn't supported yet." in script
 
 
