@@ -3,104 +3,281 @@ WEBVTT
 00:00.800 --> 00:04.440
 This video is a first walk through UM-Codex on Windows.
 
-00:04.440 --> 00:08.540
-You'll open its window, choose a folder, and watch Codex open on it.
+00:04.440 --> 00:06.800
+You'll open its window, make a setup,
 
-00:08.540 --> 00:12.536
-Then you'll ask Codex to do something, and stop and start again.
+00:06.800 --> 00:10.160
+and see every choice in it, including where Codex runs.
 
-00:13.736 --> 00:18.156
+00:10.160 --> 00:15.224
+Then you'll start Codex, ask Codex to do something, and stop and start again.
+
+00:16.424 --> 00:20.844
 Open UM-Codex from your Desktop, and its window opens in your browser.
 
-00:18.156 --> 00:20.536
-Docker is running and your key is saved.
+00:20.844 --> 00:24.244
+It's a page running on your own computer, not a website.
 
-00:20.536 --> 00:24.496
-The first time, there's one button: Choose a folder and start.
+00:24.244 --> 00:27.864
+The line at the top says Docker is running and your key is saved.
 
-00:24.496 --> 00:26.576
-Under it is what Codex gets.
+00:27.864 --> 00:31.924
+Under it is Get started, a short list: your key is saved,
 
-00:26.576 --> 00:29.656
-It starts in a Terminal window, working in your folder,
+00:31.924 --> 00:35.424
+Docker is running, and the last step is Make your first setup.
 
-00:29.656 --> 00:34.696
-and it can change and delete files there: they're your real files, with no undo.
+00:35.424 --> 00:39.800
+A setup is a folder, plus what Codex may reach and where it runs.
 
-00:34.696 --> 00:38.696
-And the internet is on, so Codex could send what it reads anywhere.
+00:41.000 --> 00:42.300
+Press New setup.
 
-00:38.696 --> 00:40.688
-You can change any of that later.
+00:42.300 --> 00:44.040
+The first part is Folder.
 
-00:41.188 --> 00:44.708
-Press it, and choose a folder in Windows' own folder picker.
+00:44.040 --> 00:46.480
+The working folder is where Codex starts.
 
-00:44.708 --> 00:48.108
+00:46.480 --> 00:49.420
+It can read, change and delete files there.
+
+00:49.420 --> 00:52.260
+They're your real files, with no undo.
+
+00:52.260 --> 00:54.540
+Under it, you can add more folders,
+
+00:54.540 --> 00:58.616
+and say for each one whether Codex can only read it, or read and write.
+
+00:59.116 --> 01:01.136
+Access has the internet switch.
+
+01:01.136 --> 01:03.956
+With it on, Codex can reach the whole internet,
+
+01:03.956 --> 01:06.036
+so it could send what it can read anywhere,
+
+01:06.036 --> 01:09.316
+including programs on your computer and your local network.
+
+01:09.316 --> 01:12.276
+With it off, Codex can reach only the model.
+
+01:12.276 --> 01:14.116
+Under it is the browser tool,
+
+01:14.116 --> 01:19.228
+which gives Codex a fresh browser inside the sealed environment, with none of your logins.
+
+01:19.728 --> 01:20.908
+Then Codex.
+
+01:20.908 --> 01:22.948
+Pick the model, newest first.
+
+01:22.948 --> 01:26.128
+And pick where Codex opens: in a Terminal window,
+
+01:26.128 --> 01:28.788
+or in the Codex app, which is the default.
+
+01:28.788 --> 01:33.468
+The Codex app here is UM-Codex's own copy of it, with its own settings.
+
+01:33.468 --> 01:36.288
+Your own ChatGPT app isn't touched.
+
+01:36.788 --> 01:40.488
+Under More options, Ask before commands is off by default.
+
+01:40.488 --> 01:45.768
+Codex then runs commands without asking, and the sealed environment is what keeps it in.
+
+01:45.768 --> 01:48.620
+Turn it on if you want to approve each command yourself.
+
+01:49.120 --> 01:51.740
+The most important choice is Where Codex runs.
+
+01:51.740 --> 01:54.000
+The first choice is In the sandbox,
+
+01:54.000 --> 01:58.380
+which is what the screen calls the sealed environment, and it's the recommended one.
+
+01:58.380 --> 02:01.520
+Codex works in a sealed environment on your computer.
+
+02:01.520 --> 02:03.720
+It sees only the folders you gave it.
+
+02:03.720 --> 02:05.920
+Your Toolkit key stays outside it:
+
+02:05.920 --> 02:09.740
+a small relay on your computer adds the key to Codex's requests,
+
+02:09.740 --> 02:12.112
+so nothing Codex runs can read it.
+
+02:12.612 --> 02:16.392
+The second choice is On this computer, and it's experimental.
+
+02:16.392 --> 02:20.692
+Codex then runs on the computer itself, not in the sealed environment.
+
+02:20.692 --> 02:22.512
+It can do anything you can do.
+
+02:22.512 --> 02:25.552
+It can read, change and delete any of your files,
+
+02:25.552 --> 02:28.912
+use your apps and your browser, and act with your accounts.
+
+02:28.912 --> 02:33.612
+It might even be able to reach UM-Codex's own key, because it runs as you.
+
+02:33.612 --> 02:37.668
+Use it only when you need Codex to control the computer or the browser.
+
+02:38.168 --> 02:41.288
+On Windows, that choice is greyed out for now.
+
+02:41.288 --> 02:45.688
+The line under it says it works with the Codex app on a Mac only, for now.
+
+02:45.688 --> 02:48.896
+So everything in this video runs in the sealed environment.
+
+02:49.396 --> 02:53.316
+At the bottom, What Codex gets says it all in plain words:
+
+02:53.316 --> 02:56.496
+the folder, the access, and the Codex settings.
+
+02:56.496 --> 02:58.416
+It ends the same way every time:
+
+02:58.416 --> 03:02.776
+your Toolkit key stays on this computer, and the sandbox never sees it.
+
+03:02.776 --> 03:06.056
+Save and start saves the setup and opens Codex.
+
+03:06.056 --> 03:07.576
+Save only saves it.
+
+03:07.576 --> 03:09.484
+And Cancel throws it away.
+
+03:10.684 --> 03:14.804
+Press Choose folder, and pick a folder in Windows' own folder dialog.
+
+03:14.804 --> 03:18.204
 For this video, it's a demo folder of made-up files.
 
-00:48.108 --> 00:53.308
+03:18.204 --> 03:23.324
 For anything important, work in a copy, or in a folder that's a git repository.
 
-00:54.508 --> 00:55.728
+03:23.324 --> 03:25.324
+Then press Save and start.
+
+03:25.824 --> 03:27.044
 That's all you do.
 
-00:55.728 --> 00:59.008
+03:27.044 --> 03:30.324
 The folder is now a setup, a card named after it.
 
-00:59.008 --> 01:02.188
-Its line goes from Starting, to Running in Terminal.
+03:30.324 --> 03:34.248
+Its line goes from Starting, to Opening Codex, to Connected.
 
-01:02.688 --> 01:06.028
-Codex opens in a Terminal window, working in your folder.
+03:34.748 --> 03:37.828
+UM-Codex opens its own copy of the Codex app,
 
-01:06.028 --> 01:07.908
-This is where you talk to Codex.
+03:37.828 --> 03:40.568
+in a window of its own, with its own settings.
 
-01:07.908 --> 01:10.488
-It's running in the sealed environment on your computer,
+03:40.568 --> 03:43.288
+It opens on a project named after your folder.
 
-01:10.488 --> 01:13.368
-and the folder you chose is what it can reach.
+03:43.288 --> 03:48.068
+At the bottom, it says Remote, and the sandbox's name, with a green dot.
 
-01:13.868 --> 01:16.308
+03:48.068 --> 03:51.148
+A chat that says Remote runs in the sealed environment.
+
+03:51.148 --> 03:55.700
+A chat that doesn't would run on your computer itself, so UM-Codex blocks it.
+
+03:56.200 --> 03:59.540
+You may see the app's own banner, Full access is on.
+
+03:59.540 --> 04:01.000
+That's the app's wording.
+
+04:01.000 --> 04:06.352
+Inside UM-Codex it applies only within the sealed environment and the folders you chose.
+
+04:06.852 --> 04:09.292
 Now ask Codex for something in the folder.
 
-01:16.308 --> 01:20.508
+04:09.292 --> 04:13.492
 Here, it summarizes the spreadsheet and writes a short note about it.
 
-01:20.508 --> 01:25.388
+04:13.492 --> 04:18.292
 Codex works inside the sealed environment, and the note lands in your real folder.
 
-01:25.888 --> 01:30.168
-Back in the window, the card always says what Codex can do with this setup:
+04:18.292 --> 04:21.156
+View changes shows exactly what it changed.
 
-01:30.168 --> 01:35.320
-the folder, and that changes there are real; the internet; and the model it's using.
+04:21.656 --> 04:25.296
+Back in the window, the card sums the setup up in one line:
 
-01:36.520 --> 01:38.460
+04:25.296 --> 04:28.536
+where Codex opens, the internet, and the model.
+
+04:28.536 --> 04:33.008
+Open What Codex can do here for the full wording, the same as in the form.
+
+04:34.208 --> 04:36.148
 When you're finished, press Stop.
 
-01:38.460 --> 01:39.740
+04:36.148 --> 04:37.428
 It asks first.
 
-01:39.740 --> 01:42.580
+04:37.428 --> 04:40.268
 Codex stops and its sandbox is removed.
 
-01:42.580 --> 01:47.488
+04:40.268 --> 04:45.108
 Files it already changed in your folder stay as they are, and its history is kept.
 
-01:47.988 --> 01:53.128
-Next time, the button at the top is Start, with your folder's name.
+04:45.108 --> 04:47.948
+The Codex app then says it can't reconnect.
 
-01:53.128 --> 01:53.128
+04:47.948 --> 04:49.280
+That's expected.
+
+04:49.780 --> 04:52.620
+Next time, Start is at the top of the card.
+
+04:52.620 --> 04:53.620
 One click.
 
-01:53.128 --> 01:57.308
-Edit shows three sections: Folder, Access and Codex.
+04:53.620 --> 04:57.500
+Under the card are four links: Edit, to change the setup,
 
-01:57.308 --> 02:01.812
-That's where you add a folder Codex can only read, or turn the internet off.
+04:57.500 --> 04:59.960
+Rename, Duplicate, and Delete, which asks first.
 
-02:02.312 --> 02:03.872
+04:59.960 --> 05:06.052
+At the top of the window, Check for updates and Replace your key are always there.
+
+05:06.552 --> 05:08.012
 That's your first launch.
+
+05:08.012 --> 05:12.240
+Next, what each setting means, and the same window on a Mac.
