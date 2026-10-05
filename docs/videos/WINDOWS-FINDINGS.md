@@ -109,3 +109,52 @@ window whose PATH had no git.
     ("delete it yourself", though it is UM-Codex's own), `UM-Codex\app\update.lock`, saved setups'
     Docker volumes (`umcodex-home-*`, with `-KeepData`), and containers/volumes from a demo data
     folder ("from other data folders"). The Docker/WSL removal is manual by design.
+
+## Alpha.7 launcher, the Codex app on Windows, and the filming (2026-10-05)
+
+From recording "Your first launch on Windows" again on v0.1.0-alpha.7 (the launcher redesign,
+PR #32), on the same Michigan Medicine Windows 11 PC.
+
+18. **The first-run screen is "Get started"**: `✓ Toolkit key saved`, `✓ Docker is running`, then
+    `3 Make your first setup` with a **New setup…** button. The old "Choose a folder and start…"
+    is gone. The form is Folder (Choose folder…, More folders), Access (Internet, Browser tool),
+    Codex (Model, Open in: Terminal or Codex app, Codex app selected), More options (Ask before
+    commands, Name, Where Codex runs), then "What Codex gets", Save and start, Save, Cancel.
+19. **"On this computer (experimental)" is shown but greyed out on Windows**, with the line "On this
+    computer works with the Codex app on a Mac only, for now." Its help text, and the caution text
+    behind it (`this_computer.WARNING`), say "your Mac" even where the option can't be used.
+20. **The Codex app is the default on Windows when the Store package `OpenAI.Codex` is found**
+    (`WINDOWS_COPY = True`). The card's line goes `Starting…`, `Opening Codex… preparing the
+    sandbox for the Codex app.`, `Opening Codex… waiting for the Codex app to connect.`, `Connected ✓
+    The Codex app is working in the sandbox (umcodex-<setup>_<id>).` (about 30 s). The copy opens
+    on a project named after the folder with the chips "<folder>", "Remote" and, with a green dot,
+    "umcodex-um-codex-dem…". After Stop it says "Couldn't reconnect to umcodex-…" with a Reconnect
+    button, and a red dot on the project.
+21. **The app shows its own banner "Full access is on"** (edit any file, run commands with internet
+    access, no approval). Inside UM-Codex that is true only within the sandbox and the chosen
+    folders; the video says so. (Same as Mac finding 12.)
+22. **The Codex app made local Windows accounts and firewall rules on this PC**: users
+    `CodexSandboxOffline` and `CodexSandboxOnline`, and two firewall rules named "Codex". They are
+    the app's own Windows sandbox for local chats, set up with an administrator approval; they are
+    not used by UM-Codex's remote chats. It also left a folder under its data folder
+    (`codex-app\codex-home\sandbox…`) that the person's own account can't delete (access denied),
+    so a demo data folder holding one can't be removed; each filming uses a new data folder.
+    The uninstaller doesn't mention any of this.
+23. **The installer's last lines are out of date for alpha.7**: "Its window opens in your browser:
+    choose a folder to work in, and Codex starts there in a terminal." The launcher now says "New
+    setup…" and opens the Codex app by default.
+24. **A leftover Codex app copy keeps running after Stop** (its processes have no window), and a setup
+    that is still running (its container, `launch` and `ssh-proxy` processes) stops `um-codex update`
+    with "Quit Codex there first" even when the Codex window has been closed. The only way out was
+    to press Stop in the launcher.
+
+### Filming on this PC (not UM-Codex findings)
+
+- **Chrome and Edge both refuse to start a second instance** (exit code 21) while either is open,
+  because a managed policy forces their profile folder (`UserDataDir`). The page filming and the
+  render drive the installed Chrome headless, so Chrome and Edge must be closed first.
+- **The screen capture can fail for a few seconds** ("Failed to capture image (error 5)"), and key
+  presses can be refused ("Access is denied"), when Windows puts a permission box on its secure desktop.
+  `record-segments.ps1` records in segments and restarts at once; `Keys` retries.
+- **A bugcheck (0x50, a driver) happened once while a full-screen recording was being stopped**;
+  the cause is unknown.
