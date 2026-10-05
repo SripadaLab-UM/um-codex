@@ -1,9 +1,9 @@
 {
   "script": "03-installing-on-windows.md",
-  "script_sha256": "81d14aebd8d1a03a79531620bdff5764539b4c400f44e05daf2f760e3e56bbdd",
+  "script_sha256": "71c198de54c81c91042fdd5a916773e4e97e7bbac505385bbf24e7e75016d122",
   "voice": "Ruth",
   "engine": "generative",
-  "duration": 193.524,
+  "duration": 199.02,
   "caption_timing": "shot boundaries exact; breaks within a shot placed at pauses",
   "shots": [
     {
@@ -94,14 +94,14 @@
       "shot": "5.2",
       "chapter": 5,
       "start": 175.2,
-      "end": 185.112,
-      "text": "It opens UM-Codex's window in your browser. That's a page running on your own computer, not a website. The line at the top says Docker is running and your key is saved."
+      "end": 190.608,
+      "text": "It opens UM-Codex's window in your browser. That's a page running on your own computer, not a website. The line at the top says Docker is running and your key is saved. Under it, Get started lists what is left: make your first setup, which is the next video."
     },
     {
       "shot": "5.3",
       "chapter": 5,
-      "start": 185.612,
-      "end": 192.524,
+      "start": 191.108,
+      "end": 198.02,
       "text": "That's UM-Codex installed. In the next video, Your first launch on Windows, you start Codex in a folder."
     }
   ]

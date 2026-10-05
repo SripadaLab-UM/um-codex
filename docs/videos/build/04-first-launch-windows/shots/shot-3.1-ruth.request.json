@@ -2,5 +2,5 @@
   "engine": "generative",
   "voice": "Ruth",
   "region": "us-east-1",
-  "text": "That's all you do. The folder is now a setup, a card named after it. Its line goes from Starting, to Running in Terminal."
+  "text": "Press New setup. The first part is Folder. The working folder is where Codex starts. It can read, change and delete files there. They're your real files, with no undo. Under it, you can add more folders, and say for each one whether Codex can only read it, or read and write."
 }

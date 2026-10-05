@@ -2,5 +2,5 @@
   "engine": "generative",
   "voice": "Ruth",
   "region": "us-east-1",
-  "text": "That's your first launch."
+  "text": "UM-Codex opens its own copy of the Codex app, in a window of its own, with its own settings. It opens on a project named after your folder. At the bottom, it says Remote, and the sandbox's name, with a green dot. A chat that says Remote runs in the sealed environment. A chat that doesn't would run on your computer itself, so UM-Codex blocks it."
 }

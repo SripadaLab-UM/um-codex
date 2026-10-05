@@ -195,13 +195,17 @@ It opens UM-Codex's window in your browser.
 That's a page running on your own computer, not a website.
 
 50
-00:03:01,400 --> 00:03:05,112
+00:03:01,400 --> 00:03:05,020
 The line at the top says Docker is running and your key is saved.
 
 51
-00:03:05,612 --> 00:03:07,632
-That's UM-Codex installed.
+00:03:05,020 --> 00:03:10,608
+Under it, Get started lists what is left: make your first setup, which is the next video.
 
 52
-00:03:07,632 --> 00:03:12,524
+00:03:11,108 --> 00:03:13,128
+That's UM-Codex installed.
+
+53
+00:03:13,128 --> 00:03:18,020
 In the next video, Your first launch on Windows, you start Codex in a folder.

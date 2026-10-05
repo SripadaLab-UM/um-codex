@@ -2,5 +2,5 @@
   "engine": "generative",
   "voice": "Ruth",
   "region": "us-east-1",
-  "text": "This video is a first walk through UM-Codex on Windows. You'll open its window, choose a folder, and watch Codex open on it. Then you'll ask Codex to do something, and stop and start again."
+  "text": "This video is a first walk through UM-Codex on Windows. You'll open its window, make a setup, and see every choice in it, including where Codex runs. Then you'll start Codex, ask Codex to do something, and stop and start again."
 }

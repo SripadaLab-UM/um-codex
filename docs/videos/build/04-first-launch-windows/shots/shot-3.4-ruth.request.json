@@ -2,5 +2,5 @@
   "engine": "generative",
   "voice": "Ruth",
   "region": "us-east-1",
-  "text": "Back in the window, the card always says what Codex can do with this setup: the folder, and that changes there are real; the internet; and the model it's using."
+  "text": "Under More options, Ask before commands is off by default. Codex then runs commands without asking, and the sealed environment is what keeps it in. Turn it on if you want to approve each command yourself."
 }

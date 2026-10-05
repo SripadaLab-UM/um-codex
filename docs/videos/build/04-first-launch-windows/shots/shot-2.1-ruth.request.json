@@ -2,5 +2,5 @@
   "engine": "generative",
   "voice": "Ruth",
   "region": "us-east-1",
-  "text": "Open UM-Codex from your Desktop, and its window opens in your browser. Docker is running and your key is saved. The first time, there's one button: Choose a folder and start. Under it is what Codex gets. It starts in a Terminal window, working in your folder, and it can change and delete files there: they're your real files, with no undo. And the internet is on, so Codex could send what it reads anywhere. You can change any of that later."
+  "text": "Open UM-Codex from your Desktop, and its window opens in your browser. It's a page running on your own computer, not a website. The line at the top says Docker is running and your key is saved. Under it is Get started, a short list: your key is saved, Docker is running, and the last step is Make your first setup. A setup is a folder, plus what Codex may reach and where it runs."
 }

@@ -1,0 +1,6 @@
+{
+  "engine": "generative",
+  "voice": "Ruth",
+  "region": "us-east-1",
+  "text": "The most important choice is Where Codex runs. The first choice is In the sandbox, which is what the screen calls the sealed environment, and it's the recommended one. Codex works in a sealed environment on your computer. It sees only the folders you gave it. Your Toolkit key stays outside it: a small relay on your computer adds the key to Codex's requests, so nothing Codex runs can read it."
+}

@@ -1,80 +1,143 @@
 {
   "script": "04-first-launch-windows.md",
-  "script_sha256": "f9758c7a4654bb80d65f1b2d6b4e9bd6c4160d54b53f97e009028a44f12d3fc8",
+  "script_sha256": "c89f57e6e96489ada88c691f30a1c7ccf4a1fd6940c82136f1778b4619b61f6f",
   "voice": "Ruth",
   "engine": "generative",
-  "duration": 124.872,
+  "duration": 313.24,
   "caption_timing": "shot boundaries exact; breaks within a shot placed at pauses",
   "shots": [
     {
       "shot": "1.1",
       "chapter": 1,
       "start": 0.8,
-      "end": 12.536,
-      "text": "This video is a first walk through UM-Codex on Windows. You'll open its window, choose a folder, and watch Codex open on it. Then you'll ask Codex to do something, and stop and start again."
+      "end": 15.224,
+      "text": "This video is a first walk through UM-Codex on Windows. You'll open its window, make a setup, and see every choice in it, including where Codex runs. Then you'll start Codex, ask Codex to do something, and stop and start again."
     },
     {
       "shot": "2.1",
       "chapter": 2,
-      "start": 13.736,
-      "end": 40.688,
-      "text": "Open UM-Codex from your Desktop, and its window opens in your browser. Docker is running and your key is saved. The first time, there's one button: Choose a folder and start. Under it is what Codex gets. It starts in a Terminal window, working in your folder, and it can change and delete files there: they're your real files, with no undo. And the internet is on, so Codex could send what it reads anywhere. You can change any of that later."
-    },
-    {
-      "shot": "2.2",
-      "chapter": 2,
-      "start": 41.188,
-      "end": 53.308,
-      "text": "Press it, and choose a folder in Windows' own folder picker. For this video, it's a demo folder of made-up files. For anything important, work in a copy, or in a folder that's a git repository."
+      "start": 16.424,
+      "end": 39.8,
+      "text": "Open UM-Codex from your Desktop, and its window opens in your browser. It's a page running on your own computer, not a website. The line at the top says Docker is running and your key is saved. Under it is Get started, a short list: your key is saved, Docker is running, and the last step is Make your first setup. A setup is a folder, plus what Codex may reach and where it runs."
     },
     {
       "shot": "3.1",
       "chapter": 3,
-      "start": 54.508,
-      "end": 62.188,
-      "text": "That's all you do. The folder is now a setup, a card named after it. Its line goes from Starting, to Running in Terminal."
+      "start": 41.0,
+      "end": 58.616,
+      "text": "Press New setup. The first part is Folder. The working folder is where Codex starts. It can read, change and delete files there. They're your real files, with no undo. Under it, you can add more folders, and say for each one whether Codex can only read it, or read and write."
     },
     {
       "shot": "3.2",
       "chapter": 3,
-      "start": 62.688,
-      "end": 73.368,
-      "text": "Codex opens in a Terminal window, working in your folder. This is where you talk to Codex. It's running in the sealed environment on your computer, and the folder you chose is what it can reach."
+      "start": 59.116,
+      "end": 79.228,
+      "text": "Access has the internet switch. With it on, Codex can reach the whole internet, so it could send what it can read anywhere, including programs on your computer and your local network. With it off, Codex can reach only the model. Under it is the browser tool, which gives Codex a fresh browser inside the sealed environment, with none of your logins."
     },
     {
       "shot": "3.3",
       "chapter": 3,
-      "start": 73.868,
-      "end": 85.388,
-      "text": "Now ask Codex for something in the folder. Here, it summarizes the spreadsheet and writes a short note about it. Codex works inside the sealed environment, and the note lands in your real folder."
+      "start": 79.728,
+      "end": 96.288,
+      "text": "Then Codex. Pick the model, newest first. And pick where Codex opens: in a Terminal window, or in the Codex app, which is the default. The Codex app here is UM-Codex's own copy of it, with its own settings. Your own ChatGPT app isn't touched."
     },
     {
       "shot": "3.4",
       "chapter": 3,
-      "start": 85.888,
-      "end": 95.32,
-      "text": "Back in the window, the card always says what Codex can do with this setup: the folder, and that changes there are real; the internet; and the model it's using."
+      "start": 96.788,
+      "end": 108.62,
+      "text": "Under More options, Ask before commands is off by default. Codex then runs commands without asking, and the sealed environment is what keeps it in. Turn it on if you want to approve each command yourself."
+    },
+    {
+      "shot": "3.5",
+      "chapter": 3,
+      "start": 109.12,
+      "end": 132.112,
+      "text": "The most important choice is Where Codex runs. The first choice is In the sandbox, which is what the screen calls the sealed environment, and it's the recommended one. Codex works in a sealed environment on your computer. It sees only the folders you gave it. Your Toolkit key stays outside it: a small relay on your computer adds the key to Codex's requests, so nothing Codex runs can read it."
+    },
+    {
+      "shot": "3.6",
+      "chapter": 3,
+      "start": 132.612,
+      "end": 157.668,
+      "text": "The second choice is On this computer, and it's experimental. Codex then runs on the computer itself, not in the sealed environment. It can do anything you can do. It can read, change and delete any of your files, use your apps and your browser, and act with your accounts. It might even be able to reach UM-Codex's own key, because it runs as you. Use it only when you need Codex to control the computer or the browser."
+    },
+    {
+      "shot": "3.7",
+      "chapter": 3,
+      "start": 158.168,
+      "end": 168.896,
+      "text": "On Windows, that choice is greyed out for now. The line under it says it works with the Codex app on a Mac only, for now. So everything in this video runs in the sealed environment."
+    },
+    {
+      "shot": "3.8",
+      "chapter": 3,
+      "start": 169.396,
+      "end": 189.484,
+      "text": "At the bottom, What Codex gets says it all in plain words: the folder, the access, and the Codex settings. It ends the same way every time: your Toolkit key stays on this computer, and the sandbox never sees it. Save and start saves the setup and opens Codex. Save only saves it. And Cancel throws it away."
     },
     {
       "shot": "4.1",
       "chapter": 4,
-      "start": 96.52,
-      "end": 107.488,
-      "text": "When you're finished, press Stop. It asks first. Codex stops and its sandbox is removed. Files it already changed in your folder stay as they are, and its history is kept."
+      "start": 190.684,
+      "end": 205.324,
+      "text": "Press Choose folder, and pick a folder in Windows' own folder dialog. For this video, it's a demo folder of made-up files. For anything important, work in a copy, or in a folder that's a git repository. Then press Save and start."
     },
     {
       "shot": "4.2",
       "chapter": 4,
-      "start": 107.988,
-      "end": 121.812,
-      "text": "Next time, the button at the top is Start, with your folder's name. One click. Edit shows three sections: Folder, Access and Codex. That's where you add a folder Codex can only read, or turn the internet off."
+      "start": 205.824,
+      "end": 214.248,
+      "text": "That's all you do. The folder is now a setup, a card named after it. Its line goes from Starting, to Opening Codex, to Connected."
     },
     {
       "shot": "4.3",
       "chapter": 4,
-      "start": 122.312,
-      "end": 123.872,
-      "text": "That's your first launch."
+      "start": 214.748,
+      "end": 235.7,
+      "text": "UM-Codex opens its own copy of the Codex app, in a window of its own, with its own settings. It opens on a project named after your folder. At the bottom, it says Remote, and the sandbox's name, with a green dot. A chat that says Remote runs in the sealed environment. A chat that doesn't would run on your computer itself, so UM-Codex blocks it."
+    },
+    {
+      "shot": "4.4",
+      "chapter": 4,
+      "start": 236.2,
+      "end": 246.352,
+      "text": "You may see the app's own banner, Full access is on. That's the app's wording. Inside UM-Codex it applies only within the sealed environment and the folders you chose."
+    },
+    {
+      "shot": "4.5",
+      "chapter": 4,
+      "start": 246.852,
+      "end": 261.156,
+      "text": "Now ask Codex for something in the folder. Here, it summarizes the spreadsheet and writes a short note about it. Codex works inside the sealed environment, and the note lands in your real folder. View changes shows exactly what it changed."
+    },
+    {
+      "shot": "4.6",
+      "chapter": 4,
+      "start": 261.656,
+      "end": 273.008,
+      "text": "Back in the window, the card sums the setup up in one line: where Codex opens, the internet, and the model. Open What Codex can do here for the full wording, the same as in the form."
+    },
+    {
+      "shot": "5.1",
+      "chapter": 5,
+      "start": 274.208,
+      "end": 289.28,
+      "text": "When you're finished, press Stop. It asks first. Codex stops and its sandbox is removed. Files it already changed in your folder stay as they are, and its history is kept. The Codex app then says it can't reconnect. That's expected."
+    },
+    {
+      "shot": "5.2",
+      "chapter": 5,
+      "start": 289.78,
+      "end": 306.052,
+      "text": "Next time, Start is at the top of the card. One click. Under the card are four links: Edit, to change the setup, Rename, Duplicate, and Delete, which asks first. At the top of the window, Check for updates and Replace your key are always there."
+    },
+    {
+      "shot": "5.3",
+      "chapter": 5,
+      "start": 306.552,
+      "end": 312.24,
+      "text": "That's your first launch. Next, what each setting means, and the same window on a Mac."
     }
   ]
 }
