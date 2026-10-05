@@ -192,7 +192,8 @@ Status: **draft for review.**
 - **Narration:**
   > It opens UM-Codex's window in your browser. That's a page running on
   > your own computer, not a website. The line at the top says Docker is
-  > running and your key is saved.
+  > running and your key is saved. Under it, Get started lists what is left:
+  > make your first setup, which is the next video.
 
 **Shot 5.3**
 
