@@ -99,11 +99,14 @@ It opens UM-Codex's window in your browser.
 01:58.288 --> 02:01.528
 That's a page running on your own Mac, not a website.
 
-02:01.528 --> 02:05.244
-The line at the top says Docker is running and your key is saved.
+02:01.528 --> 02:05.008
+The line at the top says Docker is running and your key is saved,
 
-02:05.744 --> 02:07.764
+02:05.008 --> 02:08.100
+and under it, Get started leads to New setup.
+
+02:08.600 --> 02:10.620
 That's UM-Codex installed.
 
-02:07.764 --> 02:12.200
+02:10.620 --> 02:15.056
 In the next video, Your first launch, you start Codex in a folder.

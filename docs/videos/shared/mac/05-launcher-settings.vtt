@@ -18,116 +18,131 @@ Then, Codex.
 00:11.340 --> 00:14.288
 And last, the box that sums it all up.
 
-00:15.488 --> 00:18.068
-Press Edit on a setup's card to see them.
+00:15.488 --> 00:19.268
+Press Edit, a small link under a setup's card, to see them.
 
-00:18.068 --> 00:21.568
-For a new setup, press New setup with options instead.
+00:19.268 --> 00:22.028
+For a new setup, press New setup instead.
 
-00:21.568 --> 00:26.600
+00:22.028 --> 00:27.056
 It's all on one page, in three sections, and nothing changes until you press Save.
 
-00:27.800 --> 00:31.320
+00:28.256 --> 00:31.776
 Under Folder, the working folder is where Codex starts.
 
-00:31.320 --> 00:34.260
+00:31.776 --> 00:34.716
 It can read, change and delete files there.
 
-00:34.260 --> 00:38.200
+00:34.716 --> 00:38.656
 They're your real files, with no undo, so use a copy,
 
-00:38.200 --> 00:41.720
+00:38.656 --> 00:42.176
 or a folder that's a git repository, for anything important.
 
-00:41.720 --> 00:44.144
+00:42.176 --> 00:44.600
 Change opens your Mac's folder picker.
 
-00:44.644 --> 00:46.584
+00:45.100 --> 00:47.040
 More folders lets you add others.
 
-00:46.584 --> 00:49.304
+00:47.040 --> 00:49.760
 Each one is either Read only or Read and write.
 
-00:49.304 --> 00:52.604
+00:49.760 --> 00:53.060
 Read only means Codex can look but not change,
 
-00:52.604 --> 00:55.624
+00:53.060 --> 00:56.080
 even with administrator rights inside the sandbox.
 
-00:55.624 --> 00:58.804
+00:56.080 --> 00:59.260
 Read and write means it can change and delete there too.
 
-01:00.004 --> 01:03.604
+01:00.460 --> 01:04.060
 Under Access, Internet decides what Codex can reach.
 
-01:03.604 --> 01:05.344
+01:04.060 --> 01:05.800
 On means the whole internet,
 
-01:05.344 --> 01:09.624
+01:05.800 --> 01:10.080
 and also programs on this computer and your local network or VPN.
 
-01:09.624 --> 01:15.508
+01:10.080 --> 01:15.964
 Off means Codex can reach only the model: no downloads, no installs, no websites.
 
-01:16.008 --> 01:18.748
+01:16.464 --> 01:19.204
 With the internet on, there's a Browser tool.
 
-01:18.748 --> 01:20.488
+01:19.204 --> 01:20.944
 It's off until you turn it on.
 
-01:20.488 --> 01:25.188
+01:20.944 --> 01:25.644
 It gives Codex a fresh browser inside the sandbox, with none of your logins.
 
-01:25.188 --> 01:28.788
+01:25.644 --> 01:29.244
 When it's on, Approve each browser action is on too:
 
-01:28.788 --> 01:32.968
+01:29.244 --> 01:33.424
 Codex stops and asks before it opens a page, clicks, or types.
 
-01:32.968 --> 01:34.868
+01:33.424 --> 01:35.324
 Reading a page doesn't ask.
 
-01:34.868 --> 01:39.768
+01:35.324 --> 01:40.224
 Turn the internet off, and the Browser tool goes away, because it needs the internet.
 
-01:40.968 --> 01:47.128
+01:41.424 --> 01:47.584
 Under Codex, Model is the model Codex uses, newest first, with the setup's own selected.
 
-01:47.128 --> 01:50.628
+01:47.584 --> 01:51.084
 A new setup starts on gpt-5.6-terra.
 
-01:50.628 --> 01:54.028
+01:51.084 --> 01:54.484
 Open in is where Codex opens: in the Codex app,
 
-01:54.028 --> 01:56.880
+01:54.484 --> 01:57.336
 on a Mac that has it, or in a Terminal window.
 
-01:57.380 --> 02:01.220
+01:57.836 --> 02:01.676
 Under More options, Ask before commands is off by default:
 
-02:01.220 --> 02:05.600
+02:01.676 --> 02:06.056
 Codex runs commands without asking, and the sandbox is what keeps it in.
 
-02:05.600 --> 02:08.180
+02:06.056 --> 02:08.636
 Turn it on, and Codex asks first.
 
-02:08.180 --> 02:12.524
+02:08.636 --> 02:12.916
 Name is what the card, and the project in the Codex app, are called.
 
-02:13.724 --> 02:19.624
+02:12.916 --> 02:16.616
+Where Codex runs is In the sandbox, which is recommended.
+
+02:16.616 --> 02:20.736
+On this computer is experimental: Codex works directly on your Mac,
+
+02:20.736 --> 02:24.476
+with no sandbox around it, so it can do anything you can do there.
+
+02:24.476 --> 02:26.556
+It asks you to confirm first.
+
+02:26.556 --> 02:29.108
+Leave it on the sandbox unless you need that.
+
+02:30.308 --> 02:36.208
 At the bottom, What Codex gets sums up your choices in plain words, and changes as you do.
 
-02:19.624 --> 02:23.884
+02:36.208 --> 02:40.468
 Your Toolkit key stays on this computer: the sandbox never sees it.
 
-02:23.884 --> 02:26.824
+02:40.468 --> 02:43.408
 Then press Save and start, or just Save.
 
-02:26.824 --> 02:31.100
+02:43.408 --> 02:47.684
 If the setup is already running, changes apply the next time it starts.
 
-02:31.600 --> 02:32.940
+02:48.184 --> 02:49.524
 That's every setting.
 
-02:32.940 --> 02:35.416
+02:49.524 --> 02:52.000
 You can change any of them later, with Edit.
