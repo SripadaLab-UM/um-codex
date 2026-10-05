@@ -1,14 +1,15 @@
 # Walkthrough: Your first launch
 
-Status: **draft for review.**
+Status: **draft for review** (updated for v0.1.0-alpha.7: the first screen is a
+"Get started" list and the folder is chosen in the New setup form).
 
 | | |
 |---|---|
-| Subtitle | Choose a folder, and Codex opens on it |
-| Length | About 3:30 |
+| Subtitle | Make a setup, and Codex opens on your folder |
+| Length | About 3:00 |
 | For | Anyone who has installed UM-Codex and is opening it for the first time |
-| Closing line | More folders, and the internet switch: Edit, on each card |
-| Sources | The launcher window, filmed live on a demo data folder (release v0.1.0-alpha.4); the Mac's folder picker and UM-Codex's own copy of the Codex app, screen-recorded, cropped to their own windows. A demo folder of made-up files ("UM-Codex demo": a CSV and a short README). |
+| Closing line | More folders, and the internet switch: Edit, under each card |
+| Sources | The launcher window, filmed live on a demo data folder (release v0.1.0-alpha.7); the Mac's folder picker and UM-Codex's own copy of the Codex app, screen-recorded, cropped to their own windows (the Codex window shots, 3.2 and 3.3, are from the alpha.4 recording: that window didn't change). A demo folder of made-up files ("UM-Codex demo": a CSV and a short README). |
 
 ## Rules for this video
 
@@ -17,8 +18,8 @@ Status: **draft for review.**
 - The demo folder holds made-up files only. No real data, names or emails.
 - The Toolkit key is never shown: it is already saved, so the page never asks.
 - The narration says "the University of Michigan's GPT Toolkit", never "U-M".
-- Not shown: "On this computer" mode, the Codex app on Windows, the browser tool
-  (video 5), and a later start reconnecting by itself (not checked yet).
+- Not shown: "On this computer" mode, the Codex app on Windows, the browser tool,
+  and a later start reconnecting by itself (not checked yet).
 
 ## Script and storyboard
 
@@ -40,30 +41,50 @@ Status: **draft for review.**
 
 ---
 
-### Chapter 2: Open UM-Codex and choose a folder
+### Chapter 2: Make your first setup
 
 **Shot 2.1**
 
-- **Visual (launcher, filmed):** The first screen.
-  - `status` · "Docker is running" · Docker running, key saved
-  - `start` · "Choose a folder and start" · One button
-  - `help` · "your real files" · What Codex can do
+- **Visual (launcher, filmed):** The Get started list.
+  - `step1` · "Toolkit key is saved" · Toolkit key saved
+  - `step2` · "Docker is running" · Docker is running
+  - `step3` · "Make your first setup" · Make your first setup
+  - `newsetup` · "Press New setup" · New setup…
 - **Narration:**
   > Open UM-Codex from your Desktop, and its window opens in your browser.
-  > Docker is running and your key is saved. The first time, there's one
-  > button: Choose a folder and start. Under it is what Codex gets. It can
-  > change and delete files in that folder: they're your real files, with
-  > no undo. And the internet is on, so Codex could send what it reads
-  > anywhere. You can change any of that later.
+  > The first time, it shows a short Get started list. Your Toolkit key is
+  > saved, and Docker is running. Step three is Make your first setup. Press
+  > New setup.
 
 **Shot 2.2**
+
+- **Visual (launcher, filmed):** The New setup form, with its defaults.
+  - `pickbtn` · "Choose folder" · Working folder
+  - `summary` · "What Codex gets" · What Codex gets
+- **Narration:**
+  > The form opens with everything already set. Under Folder, press Choose
+  > folder. At the bottom, What Codex gets says in plain words what the
+  > setup will allow.
+
+**Shot 2.3**
 
 - **Visual (the Mac's folder picker, recorded):** The picker; the demo folder chosen.
   - `picker` · "your Mac's own folder picker" · The folder picker
 - **Narration:**
-  > Press it, and choose a folder in your Mac's own folder picker. For this
-  > video, it's a demo folder of made-up files. For anything important,
-  > work in a copy, or in a folder that's a git repository.
+  > Choose the folder in your Mac's own folder picker. For this video, it's a
+  > demo folder of made-up files. For anything important, work in a copy, or
+  > in a folder that's a git repository.
+
+**Shot 2.4**
+
+- **Visual (launcher, filmed):** The form with the folder chosen; Save and start.
+  - `defaults` · "The rest is already set" · Internet, model, Open in
+  - `summary` · "your real files" · What Codex gets
+  - `save` · "Save and start" · Save and start
+- **Narration:**
+  > The rest is already set: the internet is on, the newest model, and Codex
+  > opens in the Codex app. Codex can change and delete files in that folder.
+  > They're your real files, with no undo. Press Save and start.
 
 ---
 
@@ -100,12 +121,13 @@ Status: **draft for review.**
 
 **Shot 3.4**
 
-- **Visual (launcher, filmed):** The card's facts.
-  - `facts` · "the card" · What this setup gives Codex
+- **Visual (launcher, filmed):** The card's summary line; What Codex can do here opened.
+  - `sum` · "one summary line" · Folder, Codex app, internet, model
+  - `facts` · "What Codex can do here" · The full list
 - **Narration:**
-  > Back in the window, the card always says what Codex can do with this
-  > setup: the folder, and that changes there are real; the internet; and
-  > the model it's using.
+  > Back in the window, the card has one summary line: the folder, where
+  > Codex opens, the internet, and the model. What Codex can do here opens
+  > the full list, in plain words.
 
 ---
 
@@ -118,22 +140,24 @@ Status: **draft for review.**
   - `dialog` · "It asks first" · What Stop does
   - `none` · "its history is kept"
 - **Narration:**
-  > When you're finished, press Stop. It asks first. Codex stops and its
-  > sandbox is removed. Files it already changed in your folder stay as they
-  > are, and its history is kept. The Codex app then says it can't
-  > reconnect. That's expected.
+  > When you're finished, press Stop, at the top right of the card. It asks
+  > first. Codex stops and its sandbox is removed. Files it already changed
+  > in your folder stay as they are, and its history is kept. The Codex app
+  > then says it can't reconnect. That's expected.
 
 **Shot 4.2**
 
-- **Visual (launcher, filmed):** The Start button, named after the folder; then Edit's three sections.
-  - `startlast` · "the button at the top" · Start "UM-Codex demo"
+- **Visual (launcher, filmed):** Start; the small links; then Edit's three sections.
+  - `startbtn` · "the same button" · Start
+  - `links` · "Under the card" · Edit, Rename, Duplicate, Delete
   - `sec1` · "Folder" · Folder
   - `sec2` · "Access" · Access
   - `sec3` · "Codex" · Codex
 - **Narration:**
-  > Next time, the button at the top is Start, with your folder's name. One
-  > click. Edit shows three sections: Folder, Access and Codex. That's where
-  > you add a folder Codex can only read, or turn the internet off.
+  > Next time, the same button says Start. One click. Under the card, Edit,
+  > Rename, Duplicate and Delete are small links. Edit shows three sections:
+  > Folder, Access and Codex. That's where you add a folder Codex can only
+  > read, or turn the internet off.
 
 **Shot 4.3**
 

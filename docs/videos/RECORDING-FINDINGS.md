@@ -100,3 +100,37 @@ screen showed; fix NOTES.md (or the app) as you judge.
 - The demo folder is `~/Demo/UM-Codex demo`, not `~/Documents/UM-Codex demo`:
   the picker shows the parent folder's listing, and Documents holds other
   things.
+
+## Re-recorded on v0.1.0-alpha.7 (2026-10-05)
+
+The launcher screens were re-filmed on alpha.7 (the installer steps and the
+Codex window are unchanged, so those takes were kept). What the screen showed:
+
+15. **First run:** a "Get started" list: the lead "UM-Codex runs Codex on the U-M
+    GPT Toolkit in a sandbox: Codex sees only the folders you give it.", then
+    "Toolkit key saved ✓", "Docker is running ✓", and "3 Make your first setup"
+    with the explanation and a **New setup…** button. The strip under the title
+    ("Docker running", "Toolkit key saved", the version) is still there.
+16. **New setup form:** titled "New setup", with a primary **Choose folder…**
+    button under Folder, the defaults already set (Internet on, Browser tool off,
+    the newest model, Open in: Codex app), "What Codex gets" at the bottom
+    ("FOLDER No folder yet" until one is chosen), and **Save and start**, **Save**,
+    **Cancel**. The picker opens where it was last used unless told otherwise
+    (the recording starts it inside the demo folder).
+17. **The card:** one **Start**/**Stop** at its top right; one summary line
+    (`~/Demo/UM-Codex demo · Codex app · Internet on · gpt-5.6-terra`); the status
+    line ("Starting…", "Opening Codex… waiting for the Codex app to connect.",
+    "Connected ✓ The Codex app is working in the sandbox (umcodex-…)"); a
+    collapsed **What Codex can do here** (Folder, Access, Codex, as before); and
+    **Edit**, **Rename**, **Duplicate**, **Delete** as small links at the bottom.
+    The "Last used" tag only shows when there is more than one setup. After the
+    first start in a fresh data folder, Connected came about 26 s after the card
+    appeared (16 s on alpha.4 in the earlier recording).
+18. **"Your setups"** has **New setup…** beside the heading, and one line:
+    "Each setup is a folder for Codex to work in. Start one to open Codex there."
+19. **More options** in the Edit form has a new field, **Where Codex runs**:
+    "In the sandbox (recommended)" or "On this computer (experimental)". The
+    settings video names it in one sentence, says there is no sandbox around the
+    experimental option and that it asks first, and does not demonstrate it.
+20. **Stop's question** is unchanged. The Stop button is the card's own, at its
+    top right.

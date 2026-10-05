@@ -12,7 +12,7 @@ const DIR = process.env.FILM_DIR;
 mkdirSync(DIR, { recursive: true });
 const view = { width: 1280, height: 1320 };
 const { browser, page } = await open({ view, scale: 1 });
-await page.getByRole("button", { name: /^Edit$/ }).first().click();
+await page.locator("article.card .card-foot button", { hasText: /^Edit$/ }).first().click();
 await page.waitForSelector("fieldset.section");
 await page.waitForTimeout(800);
 const stop = await record(page, path.join(DIR, "edit.mp4"), { fit: true });

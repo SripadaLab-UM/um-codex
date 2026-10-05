@@ -27,18 +27,24 @@ plain; no product pitch. These are separate from DataLab's users.
    each): the one install command, Docker Desktop (installed for you if
    missing; on Windows the one-time administrator step and the VM fix), the
    Toolkit key prompt, the UM-Codex app on the Desktop.
-4. **Your first launch** (about 2 min; M7 made it one button): open the
-   UM-Codex app and its window opens in the browser (the quiet line at the
-   top: Docker running, key saved). Press **Choose a folder and start…**,
-   pick a demo folder in the computer's own folder picker, and that's all:
-   Codex opens on it (in the Codex app on a Mac that has it, otherwise a
-   terminal window). Back in the browser, the folder is now a card named
-   after it; its line goes Starting… → Opening Codex… → Connected ✓. Pause
-   on the card: it says what Codex can do (it can change and delete files
-   in that folder, with no undo; the internet is on, so it could send what
-   it reads anywhere). Ask Codex to do something in the folder. Then Stop
-   (it asks first). Next time: one **Start "<folder>"** at the top.
-   Then, briefly, **Edit**: the Folder, Access and Codex sections (add a
+4. **Your first launch** (about 3 min): open the UM-Codex app and its window
+   opens in the browser (the quiet line at the top: Docker running, key
+   saved). The first time it shows a **Get started** list: Toolkit key saved
+   ✓, Docker is running ✓, then "3 Make your first setup" with **New
+   setup…** (greyed until a key is saved). Press it: the form opens with the
+   defaults already set (internet on, the newest model, Open in: Codex app).
+   Press **Choose folder…**, pick a demo folder in the computer's own folder
+   picker, and press **Save and start**; Codex opens on it (in the Codex app
+   on a Mac that has it, otherwise a terminal window). Back in the browser,
+   the folder is now a card named after it, with one Start/Stop button at its
+   top right; its line goes Starting… → Opening Codex… → Connected ✓. The
+   card has one summary line (folder · Codex app · Internet on · model) and a
+   collapsed **What Codex can do here**: open it and pause on it (it can
+   change and delete files in that folder, with no undo; the internet is on,
+   so it could send what it reads anywhere). Ask Codex to do something in the
+   folder. Then Stop (it asks first). Next time: the same button says
+   **Start**. Then, briefly, **Edit** (a small link under the card, with
+   Rename, Duplicate and Delete): the Folder, Access and Codex sections (add a
    read-only folder; turn the internet off), and More options.
 5. **Folders and internet, in practice** (about 2 min): read-only vs write
    folders, internet on vs off, what each means (see "What to say" below).
@@ -54,7 +60,7 @@ plain; no product pitch. These are separate from DataLab's users.
      line now? [Y/n]", with the reason), answered with Return (if it was
      skipped, the setup's card explains it and says "Add the line and
      start" instead);
-   - Start on the card (or "Choose a folder and start…" the first time);
+   - Start on the card (or **New setup…** the first time, then **Save and start**);
    - a second ChatGPT icon in the Dock: UM-Codex's own copy, which opens
      with no sign-in (say: your own ChatGPT app isn't touched);
    - the copy opening straight on a project named after the setup, with
@@ -102,14 +108,19 @@ plain; no product pitch. These are separate from DataLab's users.
   the internet on, nothing Codex runs can read or send your key. (This is
   a difference from ITS's setup articles, which put the key in a file.)
 - **The launcher window** (what the app opens): a page in your browser,
-  served by UM-Codex on your own computer, not a website. Usually one click:
-  the first time "Choose a folder and start…", after that "Start". A new
-  setup starts with: the folder you chose (Codex starts there; it can read,
-  change and delete in it), named after it; the internet on; commands
-  without asking; the model `gpt-5.6-terra`; and the Codex app (on a Mac
-  that has it) or a terminal. Each setup is a card that always says what
-  Codex can do with it, with Start, Edit, Duplicate, Delete and Rename, and
-  one line that follows a start (Starting… → Opening Codex… → Connected ✓).
+  served by UM-Codex on your own computer, not a website. The first time it
+  shows a "Get started" list (key saved ✓, Docker running ✓, "Make your
+  first setup" with **New setup…**); the form opens with the defaults set:
+  you choose the folder (Codex starts there; it can read, change and delete
+  in it) and press **Save and start**. The setup is named after the folder;
+  the internet is on; commands run without asking; the model is the newest
+  (`gpt-5.6-terra`); and it opens in the Codex app (a Mac that has it) or a
+  terminal. With setups, one list, "Your setups", with **New setup…** beside
+  the heading. Each setup is a card with a single Start/Stop at its top
+  right, a "Last used" tag on the most recent (when there are several), one
+  summary line, a collapsed "What Codex can do here" with the full safety
+  wording, and Edit, Rename, Duplicate and Delete as small links under it; a
+  line follows a start (Starting… → Opening Codex… → Connected ✓).
   Edit has three sections: Folder (more folders, each "Read only" or "Read
   & write"), Access (Internet; with it on, the Browser tool and "Approve
   each browser action") and Codex (the model, newest first; "Open in";
