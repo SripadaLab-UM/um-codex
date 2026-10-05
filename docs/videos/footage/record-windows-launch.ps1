@@ -16,7 +16,7 @@
 # no notifications. The full-screen recording ($Scratch\raw.mkv) holds the whole
 # desktop and stays out of the repository; only crops of it are used. Don't touch
 # the PC while a phase runs: it moves the mouse and types.
-param([Parameter(Mandatory)][ValidateSet("start", "picker", "type", "finish")][string]$Phase)
+param([Parameter(Mandatory)][ValidateSet("start", "picker", "codex", "type", "finish")][string]$Phase)
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "winui.ps1")
 $Scratch = "C:\umv-film"
@@ -57,45 +57,59 @@ if ($Phase -eq "start") {
     if (-not $link) { throw "The launcher printed no sign-in link: see $Scratch\ui.out" }
     # The page, filmed headless. Its click on "Choose a folder and start..." opens the real picker.
     $env:FILM_SIGN_IN = $link; $env:FILM_START = $Demo; $env:FILM_DIR = "$Scratch\film"
-    $film = Start-Process node -ArgumentList "footage\film-first-launch.mjs" -WorkingDirectory $Videos -PassThru -WindowStyle Hidden -RedirectStandardOutput "$Scratch\film.out" -RedirectStandardError "$Scratch\film.err"
+    $film = Start-Process node -ArgumentList "footage\film-first-launch-windows.mjs" -WorkingDirectory $Videos -PassThru -WindowStyle Hidden -RedirectStandardOutput "$Scratch\film.out" -RedirectStandardError "$Scratch\film.err"
     $film.Id | Set-Content "$Scratch\film.pid"
     Mark "page-film-started"
     Write-Host "The page is being filmed. Run -Phase picker once it has pressed the button."
 }
 
 if ($Phase -eq "picker") {
-    # Windows' folder picker: a dialog owned by an invisible WinForms window, so it
-    # is found among that window's descendants.
+    # Windows' folder dialog (IFileOpenDialog, "Select Folder"): a window owned by an invisible
+    # WinForms window, so it is looked for among the top-level windows and that owner's descendants.
     $picker = $null
-    for ($i = 0; $i -lt 400 -and -not $picker; $i++) {
-        $owner = $Desktop.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.ClassName -like "WindowsForms10*" } | Select-Object -First 1
-        if ($owner) { $picker = $owner.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.Name -eq "Browse For Folder" } | Select-Object -First 1 }
+    for ($i = 0; $i -lt 480 -and -not $picker; $i++) {
+        $picker = Find-Top "^Choose a folder for UM-Codex$" 0
+        if (-not $picker) {
+            $owner = $Desktop.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.ClassName -like "WindowsForms10*" } | Select-Object -First 1
+            if ($owner) { $picker = $Desktop.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.Name -eq "Choose a folder for UM-Codex" -and $_.Current.ClassName -eq "#32770" } | Select-Object -First 1 }
+        }
         if (-not $picker) { Start-Sleep -Milliseconds 250 }
     }
-    if (-not $picker) { throw "The folder picker didn't open." }
-    Start-Sleep -Milliseconds 1500
+    if (-not $picker) { throw "The folder dialog didn't open." }
+    Start-Sleep -Milliseconds 1800
     Front $picker.Current.NativeWindowHandle
     Mark "picker"
     (Rect-Of $picker) | ConvertTo-Json | Set-Content "$Scratch\picker-rect.json"
-    Start-Sleep -Milliseconds 3500
-    $ok = $owner.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.Name -eq "OK" -and $_.Current.ClassName -eq "Button" } | Select-Object -First 1
+    Start-Sleep -Milliseconds 4500
+    $ok = Find-In $picker $CT::Button "^Select Folder$" 5
+    if (-not $ok) { $ok = $picker.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.Name -eq "Select Folder" } | Select-Object -First 1 }
     $c = $ok.Current.BoundingRectangle
     Move-Mouse ([int]($c.X + $c.Width / 2)) ([int]($c.Y + $c.Height / 2)) 0.8
     Start-Sleep -Milliseconds 400
     Mark "picker-ok"
     Click
-    # Codex's Terminal window.
-    $term = Find-Top "CASCADIA_HOSTING_WINDOW_CLASS|ConsoleWindowClass" 90
-    if (-not $term) { throw "No Terminal window opened." }
+    [W]::SetCursorPos(1915, 1075) | Out-Null
+    Write-Host "Folder chosen. Run -Phase codex once the Codex app's window is up."
+}
+
+if ($Phase -eq "codex") {
+    # UM-Codex's own copy of the Codex app: ChatGPT.exe started with its own data folder.
+    $win = $null
+    for ($i = 0; $i -lt 720 -and -not $win; $i++) {
+        $win = Get-CimInstance Win32_Process -Filter "Name='ChatGPT.exe'" | Where-Object { $_.CommandLine -match "UM-Codex" } | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue } | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+        if (-not $win) { Start-Sleep -Milliseconds 250 }
+    }
+    if (-not $win) { throw "UM-Codex's Codex window didn't open." }
     Start-Sleep -Seconds 2
-    $h = [IntPtr]$term.Current.NativeWindowHandle
-    [W]::SetWindowPos($h, [IntPtr]::Zero, 160, 100, 1600, 820, 0x0040) | Out-Null
+    $h = $win.MainWindowHandle
+    [W]::SetWindowPos($h, [IntPtr]::Zero, 160, 60, 1600, 940, 0x0040) | Out-Null
     Front $h
     [W]::SetCursorPos(1915, 1075) | Out-Null
-    (Rect-Of $term) | ConvertTo-Json | Set-Content "$Scratch\terminal-rect.json"
+    $r = New-Object W+RECT; [W]::GetWindowRect($h, [ref]$r) | Out-Null
+    @{ x = $r.Left; y = $r.Top; w = $r.Right - $r.Left; h = $r.Bottom - $r.Top } | ConvertTo-Json | Set-Content "$Scratch\terminal-rect.json"
     $h.ToInt64() | Set-Content "$Scratch\terminal.hwnd"
     Mark "terminal"
-    Write-Host "Terminal is up. Check it on screen, then run -Phase type."
+    Write-Host "The Codex window is up ($($win.Id)). Check it on screen."
 }
 if ($Phase -eq "type") {
     $h = [IntPtr][int64](Get-Content "$Scratch\terminal.hwnd")
