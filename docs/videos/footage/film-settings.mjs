@@ -53,7 +53,8 @@ const now = () => Date.now() / 1000 - t0;
 
 const sw = (key) => page.locator("label.switch", { has: page.locator(`input[data-key="${key}"]`) });
 const targets = {
-  editbtn: () => page.locator("article.card .actions button", { hasText: /^Edit$/ }).first(),
+  editbtn: () => page.locator("article.card .card-foot button", { hasText: /^Edit$/ }).first(),
+  newbtn: () => page.locator("section.block .block-head button.primary").first(),
   sections: () => page.locator("form.setup"),
   working: () => page.locator(".field", { has: page.locator("#label-working") }),
   more: () => page.locator(".field", { has: page.locator("#help-more") }),
@@ -65,6 +66,7 @@ const targets = {
   openin: () => page.locator(".field", { has: page.locator(".radios") }),
   moreopts: () => page.locator("details.more-options"),
   ask: () => sw("ask"),
+  where: () => page.locator(".field", { has: page.locator("#label-runs-on") }),
   name: () => page.locator(".field", { has: page.locator("#setup-name") }),
   summary: () => page.locator("#form-summary"),
   save: () => page.locator('button[data-key="save-start"]'),
@@ -95,7 +97,7 @@ const until = async (t) => { const w = t - now(); if (w > 0) await page.waitForT
 const log = (what) => console.log(now().toFixed(1).padStart(6), what);
 
 // ---- the script of clicks, in narration time ----
-await until(spoken("2.1", "It's all on one page") - 0.5);
+await until(spoken("2.1", "It's all on one page") + 0.5);
 log("Edit"); await targets.editbtn().click();
 await page.waitForSelector("fieldset.section");
 await until(spoken("3.1", "the working folder") - 0.6);
@@ -131,6 +133,8 @@ await until(spoken("5.2", "Turn it on") + 0.2);
 log("Ask on"); await sw("ask").click();
 await until(spoken("5.2", "Name is") + 0.9);
 log("Ask off"); await sw("ask").click();
+await until(spoken("5.2", "Where Codex runs is") - 0.6);
+log("to Where Codex runs"); await page.evaluate(() => scrollBy({ top: 150, behavior: "smooth" }));
 
 await until(timing.shots.find((x) => x.shot === "6.1").start - 0.3);
 log("to the end"); await scrollTo("end");

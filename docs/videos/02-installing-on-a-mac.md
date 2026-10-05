@@ -9,7 +9,7 @@ Status: **draft for review.**
 | For | Anyone installing UM-Codex on a Mac for the first time |
 | Closing line | Next: Your first launch |
 | Command | `curl -q -fsSL https://github.com/SripadaLab-UM/um-codex/releases/latest/download/install-macos.sh \| sh` |
-| Sources | The Desktop on a Mac, recorded (a crop with only the shortcut in it); Terminal is drawn from a recording of the real installer (release v0.1.0-alpha.4, the user's name in paths shown as "you"); the launcher window, filmed live. One moment is a labelled illustration: typing the key at its prompt (keys are never typed on camera). |
+| Sources | The Desktop on a Mac, recorded (a crop with only the shortcut in it); Terminal is drawn from a recording of the real installer (release v0.1.0-alpha.4, the user's name in paths shown as "you"); the launcher window, filmed live on alpha.7 (the installer steps are the same in alpha.7). One moment is a labelled illustration: typing the key at its prompt (keys are never typed on camera). |
 
 ## Rules for this video
 
@@ -138,13 +138,14 @@ Status: **draft for review.**
 
 **Shot 5.2**
 
-- **Visual (the launcher window):** The first screen, then the status line.
+- **Visual (the launcher window):** The first screen, then the status line, then Get started.
   - `window` · "UM-Codex's window" · UM-Codex
   - `status` · "The line at the top" · Docker running, key saved
+  - `getstarted` · "Get started leads" · Get started
 - **Narration:**
   > It opens UM-Codex's window in your browser. That's a page running on
   > your own Mac, not a website. The line at the top says Docker is running
-  > and your key is saved.
+  > and your key is saved, and under it, Get started leads to New setup.
 
 **Shot 5.3**
 

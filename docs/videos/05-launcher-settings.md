@@ -8,17 +8,17 @@ Status: **draft for review.**
 | Length | About 3:00 |
 | For | Anyone who has started Codex once and wants to change what it can see and do |
 | Closing line | Change any of it later, with Edit |
-| Sources | The launcher window, filmed live on a demo data folder (release v0.1.0-alpha.4), nothing saved. The folder shown under More folders is a second demo folder of made-up files, chosen without opening the Mac's picker (it was shown in "Your first launch"). |
+| Sources | The launcher window, filmed live on a demo data folder (release v0.1.0-alpha.7), nothing saved. The folder shown under More folders is a second demo folder of made-up files, chosen without opening the Mac's picker (it was shown in "Your first launch"). |
 
 ## Rules for this video
 
 - Launcher only: no Codex window, no desktop.
 - The words on screen are the app's own; the narration explains them and
-  doesn't contradict them (checked against `ui/static/app.js` at alpha.4).
+  doesn't contradict them (checked against `ui/static/app.js` at alpha.7).
 - Nothing is saved: every change is made in the form and thrown away with Cancel.
 - The narration says "the University of Michigan's GPT Toolkit", never "U-M",
   and "sealed environment" or "sandbox" as the screen does, never "safe".
-- Not shown: "On this computer" mode (not built), Windows.
+- "On this computer" is mentioned in one sentence, as the screen labels it (experimental); not demonstrated. Windows isn't shown.
 
 ## Script and storyboard
 
@@ -46,11 +46,12 @@ Status: **draft for review.**
 
 - **Visual (launcher):** The setup's card; Edit pressed; the whole page.
   - `editbtn` · "Press Edit" · Edit
+  - `newbtn` · "press New setup" · New setup…
   - `none` · "It's all on one page"
   - `sections` · "three sections" · Folder, Access, Codex
 - **Narration:**
-  > Press Edit on a setup's card to see them. For a new setup, press New
-  > setup with options instead. It's all on one page, in three sections, and
+  > Press Edit, a small link under a setup's card, to see them. For a new
+  > setup, press New setup instead. It's all on one page, in three sections, and
   > nothing changes until you press Save.
 
 ---
@@ -125,14 +126,19 @@ Status: **draft for review.**
 
 **Shot 5.2**
 
-- **Visual (launcher):** More options opened; Ask before commands on, then off; the Name field.
+- **Visual (launcher):** More options opened; Ask before commands on, then off; the Name field; Where Codex runs.
   - `ask` · "Ask before commands is off" · Ask before commands
   - `name` · "Name is" · Name
+  - `where` · "Where Codex runs is" · Where Codex runs
 - **Narration:**
   > Under More options, Ask before commands is off by default: Codex runs
   > commands without asking, and the sandbox is what keeps it in. Turn it
   > on, and Codex asks first. Name is what the card, and the project in the
-  > Codex app, are called.
+  > Codex app, are called. Where Codex runs is In the sandbox, which is
+  > recommended. On this computer is experimental: Codex works directly on
+  > your Mac, with no sandbox around it, so it can do anything you can do
+  > there. It asks you to confirm first. Leave it on the sandbox unless you
+  > need that.
 
 ---
 
