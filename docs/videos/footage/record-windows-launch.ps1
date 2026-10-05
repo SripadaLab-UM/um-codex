@@ -1,27 +1,26 @@
 # Records the desktop footage for 04-first-launch-windows on a Windows PC, in
 # phases (so each can be checked on screen before the next):
 #
-#   -Phase start   Starts a full-screen recording and the launcher on a demo data
-#                  folder, films its page headless (film-first-launch.mjs), presses
-#                  "Choose a folder and start...", answers Windows' folder picker
-#                  with the demo folder, and waits for Codex's Terminal window.
-#   -Phase picker  Answers Windows' folder picker with the demo folder and waits for\n#                  Codex's Terminal window.\n#   -Phase type    Types a request into Codex, slowly.
-#   -Phase finish  Lets the page go on to Stop, Start and Edit, then stops everything
-#                  and removes the demo setup.
-#
-#   powershell -NoProfile -ExecutionPolicy Bypass -File docs\videos\footage\record-windows-launch.ps1 -Phase start
+#   -Phase all     Everything below, in one go (no one touches the PC for about 8 minutes).
+#   -Phase start   Starts the segment recording (record-segments.ps1) and the launcher on a
+#                  demo data folder, and films its page headless (film-first-launch-windows.mjs).
+#   -Phase picker  Answers Windows' folder dialog with the demo folder.
+#   -Phase codex   Waits for UM-Codex's own copy of the Codex app and puts its window in place.
+#   -Phase type    Types a request into the Codex app, slowly.
+#   -Phase finish  Lets the page go on to Stop, then stops everything.
+##   powershell -NoProfile -ExecutionPolicy Bypass -File docs\videos\footage\record-windows-launch.ps1 -Phase start
 #
 # Needs: node and ffmpeg on PATH (set below), Google Chrome, Docker Desktop running
 # with UM-Codex installed and a key saved; a 1920x1080 main screen at 100% scaling;
-# no notifications. The full-screen recording ($Scratch\raw.mkv) holds the whole
+# no notifications. The full-screen recording ($Scratch\seg\seg-*.mkv) holds the whole
 # desktop and stays out of the repository; only crops of it are used. Don't touch
 # the PC while a phase runs: it moves the mouse and types.
-param([Parameter(Mandatory)][ValidateSet("start", "picker", "codex", "type", "finish")][string]$Phase)
+param([Parameter(Mandatory)][ValidateSet("all", "start", "picker", "codex", "type", "finish")][string]$Phase)
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "winui.ps1")
 $Scratch = "C:\umv-film"
 $Demo = "C:\Demo\UM-Codex demo"          # a short path; its parent holds nothing else
-$Data = "$Scratch\data"                  # the demo launcher's own data folder
+$Data = if (Test-Path "$Scratch\data-dir.txt") { (Get-Content "$Scratch\data-dir.txt").Trim() } else { "$Scratch\data" }   # the demo launcher's own data folder (new each run)
 $Videos = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $Tools = Get-ChildItem "C:\umv-tools" -Directory
 $env:Path = (($Tools | ForEach-Object { if (Test-Path "$($_.FullName)\bin") { "$($_.FullName)\bin" } else { $_.FullName } }) -join ";") + ";" + $env:Path
@@ -34,18 +33,20 @@ function Mark($name) {
     $m | ConvertTo-Json | Set-Content $Marks
 }
 
-if ($Phase -eq "start") {
-    Remove-Item -Recurse -Force $Data, "$Scratch\film", "$Scratch\marks.json", "$Scratch\raw.mkv" -ErrorAction SilentlyContinue
+if ($Phase -in "all", "start") {
+    # A new data folder each run: the Codex app's own sandbox folder inside one can't be deleted.
+    $Data = "$Scratch\data-" + (Get-Date -Format "MMddHHmmss"); $Data | Set-Content "$Scratch\data-dir.txt"
+    Remove-Item -Recurse -Force "$Scratch\film", "$Scratch\marks.json", "$Scratch\seg" -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force "$Scratch\film" | Out-Null
     # Win+D: every window out of the way, so only what is opened next is on the desktop.
     [W]::keybd_event(0x5B, 0, 0, [UIntPtr]::Zero); [W]::keybd_event(0x44, 0, 0, [UIntPtr]::Zero); [W]::keybd_event(0x44, 0, 2, [UIntPtr]::Zero); [W]::keybd_event(0x5B, 0, 2, [UIntPtr]::Zero)
     Start-Sleep -Milliseconds 800
     [W]::SetCursorPos(1915, 1075) | Out-Null
     # The full screen, 1920x1080, 30 fps.
-    $ff = Start-Process ffmpeg -PassThru -WindowStyle Hidden -ArgumentList "-v error -y -f gdigrab -framerate 30 -offset_x 0 -offset_y 0 -video_size 1920x1080 -i desktop -c:v libx264 -preset ultrafast -crf 14 -pix_fmt yuv420p `"$Scratch\raw.mkv`""
-    (Get-Date).AddSeconds(1.2).ToString("o") | Set-Content "$Scratch\ffmpeg-started.txt"
-    $ff.Id | Set-Content "$Scratch\ffmpeg.pid"
-    # The demo launcher.
+    $rec = Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "record-segments.ps1"), "-Dir", "$Scratch\seg"
+    $rec.Id | Set-Content "$Scratch\rec.pid"
+    for ($i = 0; $i -lt 60 -and -not (Test-Path "$Scratch\seg\segments.txt"); $i++) { Start-Sleep -Milliseconds 250 }
+    ((Get-Content "$Scratch\seg\segments.txt" | Select-Object -First 1) -split " ", 2)[1] | Set-Content "$Scratch\ffmpeg-started.txt"    # The demo launcher.
     $env:UMCODEX_DATA_DIR = $Data
     $ui = Start-Process um-codex -ArgumentList "ui", "--no-browser" -PassThru -WindowStyle Hidden -RedirectStandardOutput "$Scratch\ui.out" -RedirectStandardError "$Scratch\ui.err"
     $ui.Id | Set-Content "$Scratch\ui.pid"
@@ -63,7 +64,7 @@ if ($Phase -eq "start") {
     Write-Host "The page is being filmed. Run -Phase picker once it has pressed the button."
 }
 
-if ($Phase -eq "picker") {
+if ($Phase -in "all", "picker") {
     # Windows' folder dialog (IFileOpenDialog, "Select Folder"): a window owned by an invisible
     # WinForms window, so it is looked for among the top-level windows and that owner's descendants.
     $picker = $null
@@ -92,11 +93,11 @@ if ($Phase -eq "picker") {
     Write-Host "Folder chosen. Run -Phase codex once the Codex app's window is up."
 }
 
-if ($Phase -eq "codex") {
+if ($Phase -in "all", "codex") {
     # UM-Codex's own copy of the Codex app: ChatGPT.exe started with its own data folder.
     $win = $null
     for ($i = 0; $i -lt 720 -and -not $win; $i++) {
-        $win = Get-CimInstance Win32_Process -Filter "Name='ChatGPT.exe'" | Where-Object { $_.CommandLine -match "UM-Codex" } | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue } | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+        $win = Get-CimInstance Win32_Process -Filter "Name='ChatGPT.exe'" | Where-Object { $_.CommandLine -like "*$Data*" } | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue } | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
         if (-not $win) { Start-Sleep -Milliseconds 250 }
     }
     if (-not $win) { throw "UM-Codex's Codex window didn't open." }
@@ -111,29 +112,41 @@ if ($Phase -eq "codex") {
     Mark "terminal"
     Write-Host "The Codex window is up ($($win.Id)). Check it on screen."
 }
-if ($Phase -eq "type") {
+if ($Phase -eq "all") { Start-Sleep -Seconds 8 }
+if ($Phase -in "all", "type") {
+    # The Codex app's composer ("Do anything") sits near the bottom of its window.
     $h = [IntPtr][int64](Get-Content "$Scratch\terminal.hwnd")
+    $r = Get-Content "$Scratch\terminal-rect.json" -Raw | ConvertFrom-Json
     Front $h
     Start-Sleep -Milliseconds 800
+    Move-Mouse ([int]($r.x + $r.w * 0.70)) ([int]($r.y + $r.h * 0.90)) 0.7
+    Click
+    Start-Sleep -Milliseconds 600
     Mark "typing"
     Keys "Summarize plant-growth.csv and write a short note about it in summary.md" 45
     Start-Sleep -Milliseconds 700
     Keys "{ENTER}"
     Mark "sent"
+    [W]::SetCursorPos(1915, 1075) | Out-Null
     Write-Host "Sent. Wait for Codex to finish (summary.md appears in the demo folder), then run -Phase finish."
 }
-
-if ($Phase -eq "finish") {
+if ($Phase -eq "all") {
+    $until = (Get-Date).AddSeconds(150)
+    while (-not (Test-Path (Join-Path $Demo "summary.md")) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
+    Start-Sleep -Seconds 25   # Codex checks its work after writing the note
+}
+if ($Phase -in "all", "finish") {
     Mark "codex-done"
     New-Item -ItemType File "$Scratch\film\stop-now" -Force | Out-Null
     $film = Get-Process -Id ([int](Get-Content "$Scratch\film.pid")) -ErrorAction SilentlyContinue
     if ($film) { $film.WaitForExit(180000) | Out-Null }
     Mark "page-film-done"
     Start-Sleep -Seconds 1
-    Stop-Process -Id ([int](Get-Content "$Scratch\ffmpeg.pid")) -ErrorAction SilentlyContinue
+    New-Item -ItemType File "$Scratch\seg\stop" -Force | Out-Null
+    for ($i = 0; $i -lt 120 -and -not (Test-Path "$Scratch\seg\done"); $i++) { Start-Sleep -Milliseconds 500 }
     # Only the demo launcher this script started (never a real one), and what it started.
     $uiPid = [int](Get-Content "$Scratch\ui.pid")
     Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $uiPid } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Stop-Process -Id $uiPid -Force -ErrorAction SilentlyContinue
-    Write-Host "Done. Raw footage: $Scratch\raw.mkv, page film: $Scratch\film, marks: $Marks"
+    Write-Host "Done. Raw footage: $Scratch\seg (segments.txt lists them), page film: $Scratch\film, marks: $Marks"
 }

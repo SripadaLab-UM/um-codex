@@ -38,8 +38,17 @@ function Front($hwnd) {
     [W]::SetForegroundWindow([IntPtr]$hwnd) | Out-Null
 }
 function Keys($text, $gap = 0) {
-    if (-not $gap) { [Windows.Forms.SendKeys]::SendWait($text); return }
-    foreach ($c in $text.ToCharArray()) { [Windows.Forms.SendKeys]::SendWait("$c"); Start-Sleep -Milliseconds $gap }
+    # Windows refuses key presses ("Access is denied") while a permission box has the screen;
+    # each key is tried again for up to a minute.
+    $send = {
+        param($k)
+        for ($try = 0; $try -lt 40; $try++) {
+            try { [Windows.Forms.SendKeys]::SendWait($k); return } catch { Start-Sleep -Milliseconds 1500 }
+        }
+        throw "Windows kept refusing key presses (a permission box?)."
+    }
+    if (-not $gap) { & $send $text; return }
+    foreach ($c in $text.ToCharArray()) { & $send "$c"; Start-Sleep -Milliseconds $gap }
 }
 function Find-Top($pattern, $seconds = 10) {
     $until = (Get-Date).AddSeconds($seconds)

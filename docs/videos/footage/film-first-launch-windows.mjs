@@ -53,6 +53,17 @@ const targets = {
   summary: () => page.locator("article.card").first().locator("p").first(),
   facts: () => page.locator("article.card details.card-facts").first(),
   dialog: () => page.locator("#confirm-dialog"),
+  // The New setup form.
+  folderfield: () => page.locator(".field", { has: page.locator("#label-working") }).first(),
+  internet: () => page.getByText("Internet", { exact: true }).first(),
+  model: () => page.locator("#setup-model"),
+  openin: () => page.locator(".field", { hasText: "Open in" }).first(),
+  more: () => page.locator("details", { hasText: "More options" }).first(),
+  runson: () => page.locator(".field", { has: page.locator("#label-runs-on") }).first(),
+  sandboxopt: () => page.locator("label", { hasText: "In the sandbox" }).first(),
+  localopt: () => page.locator("label", { hasText: "On this computer" }).first(),
+  askcmd: () => page.locator(".field", { hasText: "Ask before commands" }).first(),
+  gets: () => page.locator("#form-summary"),
 };
 const rects = {};
 let sampling = true;
@@ -86,7 +97,27 @@ await targets.newsetup().hover();
 await pause(1.2);
 await targets.newsetup().click();
 log("newsetup");
-await pause(7);
+await pause(9);
+// The form, section by section, then More options and where Codex runs.
+await targets.internet().scrollIntoViewIfNeeded();
+await pause(5);
+log("access");
+await targets.more().locator("summary").scrollIntoViewIfNeeded();
+await targets.more().locator("summary").hover();
+await pause(1);
+await targets.more().locator("summary").click();
+log("more");
+await pause(5);
+await targets.runson().scrollIntoViewIfNeeded();
+await pause(2);
+log("runson");
+await targets.localopt().hover();
+await pause(16);
+await targets.gets().scrollIntoViewIfNeeded();
+log("gets");
+await pause(9);
+await page.evaluate(() => window.scrollTo(0, 0));
+await pause(1.5);
 await targets.folderbtn().hover();
 await pause(1.2);
 log("choose");
