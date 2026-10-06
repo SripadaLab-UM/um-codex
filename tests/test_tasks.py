@@ -88,7 +88,10 @@ def test_runs_count_down_and_expire(store, monkeypatch):
     task = tasks.request(task_file(max_runs=1, hours=1), store=store)
     state = tasks.decide(task, approve=True, via="launcher")
     assert state["state"] == "approved" and state["runs_left"] == 1
-    tasks.run(task.id, "do it", store=store, launcher=lambda *a, **k: 0)
+    launcher, seen = fake_codex({})
+    tasks.run(
+        task.id, "do it", store=store, launcher=launcher, run_exec=lambda *a, **k: seen["run_exec"](*a, **k)
+    )
     assert tasks.status(task)["state"] == "used up"
     with pytest.raises(tasks.TaskError, match="used all"):
         tasks.run(task.id, "do it", store=store, launcher=lambda *a, **k: 0)
@@ -245,3 +248,10 @@ def test_protected_paths_cover_task_setups_and_the_tasks_folder(store, study):
     paths = tasks.protected_paths(store=store)
     assert paths["study_folders"] == [str(study)]  # the plain setup's folder is the same one, once
     assert paths["umcodex_data"] == str(data_dir())
+
+
+def test_a_run_that_never_started_isnt_used_up(store):
+    task = approved(store)
+    result = tasks.run(task.id, "x", store=store, launcher=lambda *a, **k: 1)
+    assert result["status"] == "not started"
+    assert tasks.status(task)["runs_left"] == 10

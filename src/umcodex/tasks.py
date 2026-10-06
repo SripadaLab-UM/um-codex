@@ -31,6 +31,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -208,7 +209,7 @@ class Task:
 
 
 def get_task(task_id: str, data: Path | None = None) -> Task:
-    if not (task_id.isalnum() and task_id.islower() and len(task_id) == TASK_ID_BYTES * 2):
+    if not re.fullmatch(f"[0-9a-f]{{{TASK_ID_BYTES * 2}}}", task_id):
         raise TaskError(f"“{task_id}” isn't a task id.")
     folder = tasks_dir(data) / task_id
     if not (folder / "request.json").is_file():
@@ -304,6 +305,14 @@ def _take_run(task: Task) -> None:
         task.grant_file.write_text(json.dumps(grant, indent=2), encoding="utf-8")
 
 
+def _give_back_run(task: Task) -> None:
+    with locks.held(task.lock_file):
+        grant = task.grant()
+        if grant is not None and not grant.get("declined"):
+            grant["runs_left"] += 1
+            task.grant_file.write_text(json.dumps(grant, indent=2), encoding="utf-8")
+
+
 # --- Runs -------------------------------------------------------------------
 
 
@@ -394,9 +403,10 @@ def run(
     (folders.root / "brief.md").write_text(text, encoding="utf-8")
     audit("run started", data, task=task.id, run=run_id, setup=setup.id)
 
-    outcome: dict[str, object] = {"code": None, "timed_out": False}
+    outcome: dict[str, object] = {"code": None, "timed_out": False, "started": False}
 
     def session(running: launch.Running) -> int:
+        outcome["started"] = True
         with (
             (folders.meta / "events.jsonl").open("w", encoding="utf-8") as events,
             (folders.meta / "stderr.log").open("w", encoding="utf-8") as errors,
@@ -430,6 +440,8 @@ def run(
         code = 1
         outcome["error"] = type(error).__name__
 
+    if not outcome["started"]:
+        _give_back_run(task)  # Codex never ran (no image, Docker trouble): the run isn't used up
     verdicts = disclosure.apply(folders.out, folders.released, folders.held, min_cell=min_cell)
     # Codex's own words (and its event stream) are the person's only.
     for name in os.listdir(folders.meta):
@@ -441,11 +453,18 @@ def run(
     result = {
         "task": task.id,
         "run": run_id,
-        "status": "timed out" if outcome["timed_out"] else ("done" if code == 0 else "failed"),
+        "status": "timed out"
+        if outcome["timed_out"]
+        else "done"
+        if code == 0
+        else "failed"
+        if outcome["started"]
+        else "not started",
         "exit_code": code,
         "released_folder": str(folders.released),
         "released": [_verdict(v) for v in verdicts if v.released],
-        "held": [_verdict(v) for v in verdicts if not v.released],
+        # The manifest itself is held too, but isn't a result: not listed.
+        "held": [_verdict(v) for v in verdicts if not v.released and v.path != "manifest.json"],
         "note": (
             "Only released files may be read. Held files (and Codex's own messages) are for "
             "the person, in UM-Codex."
