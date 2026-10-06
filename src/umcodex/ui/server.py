@@ -41,7 +41,7 @@ from typing import Any
 from aiohttp import web
 from keyring.errors import KeyringError
 
-from umcodex import __version__, codex_app, credentials, folders, this_computer, toolkit, windows_vm
+from umcodex import __version__, codex_app, credentials, folders, tasks, this_computer, toolkit, windows_vm
 from umcodex.containers import Docker, DockerError, volume_name
 from umcodex.docker_path import ensure_docker_on_path
 from umcodex.folders import FolderRefused
@@ -132,6 +132,8 @@ def setup_json(setup: Setup, *, own_data: Path | None = None) -> dict[str, Any]:
         "runs_on": setup.runs_on,
         "local_access": setup.local_access,
         "computer_use": setup.computer_use,
+        # Tasks (tasks.py): an assistant may ask for headless runs here; internet stays off.
+        "tasks": setup.tasks,
         "problem": problem,
         # Saved folders that now lead somewhere else: Start needs a confirmation (on the card).
         "moved": [{"saved": saved, "now": str(now)} for saved, now in changed],
@@ -221,6 +223,14 @@ def setup_from(
     if local_access not in LOCAL_ACCESS:
         errors["local_access"] = "That choice of what Codex can change wasn't understood."
     computer_use = body.get("computer_use") is not False
+    # A setup that allows tasks holds study data: internet off and no browser tool, always.
+    allow_tasks = body.get("tasks") is True
+    if allow_tasks:
+        internet = browser = False
+        if runs_on == "this-computer":
+            errors["runs_on"] = (
+                "Tasks run only in the sandbox: turn off “Allow tasks”, or run it in the sandbox."
+            )
     if runs_on == "this-computer" and approvals == "never" and (local_access == "full" or computer_use):
         # On the Mac with nothing asked, with full access or with computer and browser control
         # (whose own permission questions would be turned down): refused (More options).
@@ -250,6 +260,7 @@ def setup_from(
         runs_on=runs_on,
         local_access=local_access,
         computer_use=computer_use,
+        tasks=allow_tasks,
     )
 
 
@@ -502,6 +513,8 @@ class Launcher:
             # The Codex app (M6): whether ~/.ssh/config has UM-Codex's line yet.
             "ssh_include": codex_app.include_present(self.ssh_home),
             "include_explained": codex_app.INCLUDE_EXPLAINED,
+            # Tasks an assistant asked for: waiting for an answer, and recent runs' results.
+            "tasks": self.tasks_state(),
             # M4: whether "On this computer" can be used here, and the caution dialog's words.
             "this_computer": {
                 "available": (local_reason := self.local_opener.reason()) is None,
@@ -509,6 +522,93 @@ class Launcher:
                 "warning": this_computer.WARNING,
             },
         }
+
+    # ----------------------------------------------------------- tasks
+
+    def tasks_state(self) -> list[dict[str, Any]]:
+        """The ten latest tasks: the request, its state, and each run's
+        released and held files (names and reasons: the person sees these)."""
+        names = {s.id: s for s in self.store.all()}
+        shown = []
+        for task in tasks.all_tasks(self.data)[:10]:
+            with contextlib.suppress(OSError, ValueError, KeyError):
+                asked = task.request()
+                setup = names.get(asked["setup_id"])
+                runs = []
+                for result_file in sorted((task.folder / "runs").glob("*/result.json"), reverse=True):
+                    result = json.loads(result_file.read_text(encoding="utf-8"))
+                    held_folder = result_file.parent / "held"
+                    runs.append(
+                        {
+                            "run": result["run"],
+                            "status": result["status"],
+                            "released": [r["path"] for r in result["released"]],
+                            "held": [h for h in result["held"] if (held_folder / h["path"]).is_file()],
+                            "folder": str(result_file.parent),
+                        }
+                    )
+                shown.append(
+                    {
+                        **tasks.status(task),
+                        "goal": asked["goal"],
+                        "steps": asked["steps"],
+                        "hours": asked["hours"],
+                        "requested_at": asked["requested_at"],
+                        "setup_name": setup.name if setup else asked["setup_id"],
+                        "setup_folders": [setup.working, *setup.writes, *setup.reads] if setup else [],
+                        "runs": runs,
+                    }
+                )
+        return shown
+
+    def answer_task(self, task_id: str, body: object) -> dict[str, Any]:
+        approve = isinstance(body, dict) and body.get("approve") is True
+        try:
+            return tasks.decide(
+                tasks.get_task(task_id, self.data), approve=approve, via="launcher", data=self.data
+            )
+        except tasks.TaskError as error:
+            raise Invalid(str(error), status=409) from None
+
+    def release_held(self, task_id: str, run_id: str, body: object) -> dict[str, Any]:
+        """The person releases one held file to the assistant: a deliberate
+        choice (the page asks first), recorded in the audit."""
+        try:
+            task = tasks.get_task(task_id, self.data)
+        except tasks.TaskError as error:
+            raise Invalid(str(error), status=404) from None
+        wanted = body.get("path") if isinstance(body, dict) else None
+        run = task.folder / "runs" / run_id
+        if (
+            not isinstance(wanted, str)
+            or "/" in run_id
+            or "\\" in run_id
+            or not (run / "result.json").is_file()
+        ):
+            raise Invalid("That held file wasn't found.", status=404)
+        held = (run / "held").resolve()
+        source = (held / wanted).resolve()
+        if not source.is_relative_to(held) or not source.is_file() or source.is_symlink():
+            raise Invalid("That held file wasn't found.", status=404)
+        target = run / "released" / source.relative_to(held)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(target))
+        tasks.audit("released by the person", self.data, task=task_id, run=run_id, file=wanted)
+        return {"released": wanted}
+
+    def show_held(self, task_id: str, run_id: str) -> dict[str, Any]:
+        """Open a run's held folder in Finder or File Explorer (the person's eyes only)."""
+        try:
+            task = tasks.get_task(task_id, self.data)
+        except tasks.TaskError as error:
+            raise Invalid(str(error), status=404) from None
+        held = task.folder / "runs" / run_id / "held"
+        if "/" in run_id or "\\" in run_id or not held.is_dir():
+            raise Invalid("That run wasn't found.", status=404)
+        opener = ["explorer", str(held)] if self.platform == "win32" else ["open", str(held)]
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            self.run(opener, capture_output=True, timeout=30)
+        return {"shown": True}
 
     def default_open_in(self) -> str:
         """The Codex app when it's installed and works here (a Mac), else Terminal."""
@@ -1087,6 +1187,20 @@ def make_app(
         await _body(request)
         return web.json_response(await blocking(launcher.fix_docker))
 
+    async def task_answer(request: web.Request) -> web.Response:
+        body = await _body(request)
+        return web.json_response(await blocking(launcher.answer_task, request.match_info["id"], body))
+
+    async def task_release(request: web.Request) -> web.Response:
+        body = await _body(request)
+        info = request.match_info
+        return web.json_response(await blocking(launcher.release_held, info["id"], info["run"], body))
+
+    async def task_show(request: web.Request) -> web.Response:
+        await _body(request)
+        info = request.match_info
+        return web.json_response(await blocking(launcher.show_held, info["id"], info["run"]))
+
     app.router.add_get("/", index)
     app.router.add_get("/static/{name}", static)
     app.router.add_get("/sign-in", sign_in)
@@ -1111,6 +1225,9 @@ def make_app(
     app.router.add_post("/api/update", update_start)
     app.router.add_post("/api/update/check", update_check)
     app.router.add_post("/api/codex-app/allow", allow_ssh)
+    app.router.add_post("/api/tasks/{id}/answer", task_answer)
+    app.router.add_post("/api/tasks/{id}/runs/{run}/release", task_release)
+    app.router.add_post("/api/tasks/{id}/runs/{run}/show", task_show)
     return app
 
 

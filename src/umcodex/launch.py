@@ -419,13 +419,19 @@ def run(
     run_exec: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     api_key: Callable[[], str] = credentials.api_key,
     hold: Hold | None = None,
+    extra_mounts: Sequence[BindMount] = (),
+    session: Callable[[Running], int] | None = None,
 ) -> int:
     """Run one launch to the end. Returns Codex's exit code (or 1 if it couldn't start).
 
     `hold` (a setup opened in the Codex app, codex_app.AppHold): its labels go
     on the containers, Codex's settings are the app's (the token from a
     command), and it's called with the running launch in place of
-    `docker exec codex`; the launch ends when it returns."""
+    `docker exec codex`; the launch ends when it returns.
+
+    `session` (a task, tasks.py): called with the running launch in place of
+    Codex's terminal interface, with the usual settings; `extra_mounts` go
+    on the agent beside the setup's folders."""
     docker = docker or Docker()
     data = data_dir()
     instance = instance_of(data)
@@ -475,7 +481,7 @@ def run(
             agent_image=image,
             gateway_image=gateway_image,
             internet=setup.internet,
-            folders=folder_mounts(layout),
+            folders=(*folder_mounts(layout), *extra_mounts),
             codex_etc=folder / "codex",
             launch_note=folder / "launch.md",
             gateway_conf=folder / "gateway.conf",
@@ -510,6 +516,10 @@ def run(
         if hold is not None:
             code = hold(Running(spec=spec, relay_port=port, token=token, folder=folder, setup=setup))
             log.info("launch %s: ended in the Codex app (code %s)", launch_id, code)
+            return code
+        if session is not None:
+            code = session(Running(spec=spec, relay_port=port, token=token, folder=folder, setup=setup))
+            log.info("launch %s: the task's Codex ended (code %s)", launch_id, code)
             return code
         interactive = sys.stdin.isatty() and sys.stdout.isatty() if tty is None else tty
         command = exec_command(

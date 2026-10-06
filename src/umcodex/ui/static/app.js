@@ -557,6 +557,8 @@ function redraw() {
 
 function renderHome() {
   const parts = [];
+  const asking = (state.tasks || []).filter((t) => t.state === "waiting");
+  if (asking.length) parts.push(taskRequests(asking));
   if (!state.setups.length) parts.push(getStarted());
   else {
     parts.push(
@@ -573,6 +575,8 @@ function renderHome() {
       ),
     );
   }
+  const withRuns = (state.tasks || []).filter((t) => t.state !== "waiting" && t.state !== "declined");
+  if (withRuns.length) parts.push(taskResults(withRuns));
   const loose = state.running.filter((run) => !setupOf(run.setup_id));
   if (loose.length) {
     parts.push(
@@ -593,6 +597,117 @@ function renderHome() {
     );
   }
   render(...parts);
+}
+
+// ---------------------------------------------------------------- tasks
+
+// An assistant (Claude) asked to run Codex here, headless: the person answers.
+function taskRequests(asking) {
+  return el(
+    "section",
+    { class: "block tasks-asking", "aria-labelledby": "asking-title" },
+    el("h2", { id: "asking-title", text: asking.length > 1 ? "Tasks waiting for you" : "A task is waiting for you" }),
+    asking.map((t) =>
+      el(
+        "article",
+        { class: "card task-card", "aria-label": `Task ${t.task}` },
+        el("p", { class: "help", text: `An assistant asks to run Codex on “${t.setup_name}”, on its own, for this:` }),
+        el("h3", { text: t.goal }),
+        el("ol", { class: "task-steps" }, t.steps.map((step) => el("li", { text: step }))),
+        el(
+          "p",
+          { class: "card-sum" },
+          el("span", { text: `Up to ${t.max_runs} runs within ${t.hours} hours · internet off · no browser tool · no questions` }),
+        ),
+        el("div", { class: "chips" }, t.setup_folders.map((f) => el("span", { class: "chip" }, el("span", { class: "path", title: f, text: shortHome(f) })))),
+        el("p", {
+          class: "help",
+          text: "Only aggregate tables that pass UM-Codex's disclosure check (no identifiers, groups of at least 11) go back to the assistant. Everything else, and Codex's own messages, wait here for you.",
+        }),
+        el(
+          "div",
+          { class: "actions" },
+          el("button", { class: "primary", key: `approve-${t.task}`, onclick: () => answerTask(t, true), text: "Approve" }),
+          el("button", { key: `decline-${t.task}`, onclick: () => answerTask(t, false), text: "Decline" }),
+        ),
+      ),
+    ),
+  );
+}
+
+async function answerTask(t, approve) {
+  if (approve) {
+    const yes = await confirmBox(
+      "Approve this task?",
+      `The assistant can run Codex on “${t.setup_name}” up to ${t.max_runs} times in the next ${t.hours} hours, without asking again.`,
+      "Approve",
+    );
+    if (!yes) return;
+  }
+  try {
+    await api("POST", `/api/tasks/${encodeURIComponent(t.task)}/answer`, { approve });
+    notice(approve ? "Approved. The assistant can run it now." : "Declined.");
+  } catch (error) {
+    notice(error.message, true);
+  }
+  refresh();
+}
+
+// Runs of answered tasks: what went back, and what waits here (held).
+function taskResults(shown) {
+  return el(
+    "section",
+    { class: "block", "aria-labelledby": "results-title" },
+    el("h2", { id: "results-title", text: "Task results" }),
+    el("p", { class: "help", text: "Held files never went to the assistant. Look at them here; release one only if it's safe for it to see." }),
+    shown.map((t) =>
+      el(
+        "article",
+        { class: "card task-card", "aria-label": `Task ${t.task}` },
+        el("div", { class: "card-head" }, el("h3", { text: t.goal }), el("span", { class: "tag", text: t.state })),
+        el("p", { class: "card-sum" }, el("span", { text: `“${t.setup_name}” · ${t.runs.length} run${t.runs.length === 1 ? "" : "s"}${t.runs_left !== undefined ? ` · ${t.runs_left} left` : ""}` })),
+        t.runs.map((r) =>
+          el(
+            "div",
+            { class: "task-run" },
+            el("p", { class: "strong", text: `${r.run} · ${r.status} · ${r.released.length} sent back, ${r.held.length} held` }),
+            r.held.length
+              ? el(
+                  "ul",
+                  { class: "held" },
+                  r.held.map((h) =>
+                    el(
+                      "li",
+                      {},
+                      el("code", { text: h.path }),
+                      el("span", { class: "help", text: ` ${h.reason}` }),
+                      el("button", { class: "link small", key: `release-${r.run}-${h.path}`, onclick: () => releaseHeld(t, r, h), text: "Release to the assistant…" }),
+                    ),
+                  ),
+                )
+              : null,
+            r.held.length ? el("button", { class: "link", key: `show-${r.run}`, onclick: () => api("POST", `/api/tasks/${encodeURIComponent(t.task)}/runs/${encodeURIComponent(r.run)}/show`, {}), text: "Show held files" }) : null,
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+async function releaseHeld(t, r, h) {
+  const yes = await confirmBox(
+    `Release ${h.path}?`,
+    `It was held because: ${h.reason} Release it only if you've looked at it and it's safe for the assistant (which isn't approved for study data) to see.`,
+    "Release",
+  );
+  if (!yes) return;
+  try {
+    await api("POST", `/api/tasks/${encodeURIComponent(t.task)}/runs/${encodeURIComponent(r.run)}/release`, { path: h.path });
+    notice(`${h.path} released.`);
+  } catch (error) {
+    notice(error.message, true);
+  }
+  refresh();
 }
 
 // The first time: what's ready, and the one thing to do next (a setup).
@@ -737,6 +852,7 @@ function summaryLine(s) {
     onThisComputer(s) ? null : s.internet ? (s.browser ? "Internet on + browser" : "Internet on") : "Internet off",
     s.model,
     s.approvals === "never" ? null : "asks before commands",
+    s.tasks ? "tasks allowed" : null,
   ].filter(Boolean);
   return el(
     "p",
@@ -940,6 +1056,7 @@ function bodyOf(s) {
     runs_on: s.runs_on || "sandbox",
     local_access: s.local_access || "full",
     computer_use: s.computer_use !== false,
+    tasks: Boolean(s.tasks),
   };
 }
 
@@ -961,6 +1078,7 @@ function showForm(existing) {
         runs_on: "sandbox",
         local_access: "full",
         computer_use: true,
+        tasks: false,
       };
   view = { name: "form", draft, errors: {}, more: Boolean(existing && (existing.approvals !== "never" || onThisComputer(existing))) };
   renderForm();
@@ -1245,11 +1363,19 @@ function renderForm() {
         )
       : section(
       "Access",
-      switchRow("internet", "Internet", "On: the whole internet. Off: Codex can reach only the model.", draft.internet, (e) => {
-        draft.internet = e.target.checked;
-        if (!draft.internet) draft.browser = false;
-        renderForm();
-      }),
+      switchRow(
+        "internet",
+        "Internet",
+        draft.tasks ? "Off: a setup that allows tasks holds study data, so Codex reaches only the model." : "On: the whole internet. Off: Codex can reach only the model.",
+        draft.internet && !draft.tasks,
+        (e) => {
+          draft.internet = e.target.checked;
+          if (!draft.internet) draft.browser = false;
+          renderForm();
+        },
+        "",
+        Boolean(draft.tasks),
+      ),
       draft.internet
         ? switchRow("browser", "Browser tool", "A fresh browser inside the sandbox; it has none of your logins.", draft.browser, (e) => {
             draft.browser = e.target.checked;
@@ -1266,6 +1392,20 @@ function renderForm() {
             "indent",
           )
         : null,
+      switchRow(
+        "tasks",
+        "Allow tasks from an assistant",
+        "For study data. An assistant such as Claude may ask to run Codex here on its own (headless); you approve each task in this window. Only aggregate results that pass a disclosure check go back to it; the rest wait here for you. Internet stays off.",
+        Boolean(draft.tasks),
+        (e) => {
+          draft.tasks = e.target.checked;
+          if (draft.tasks) {
+            draft.internet = false;
+            draft.browser = false;
+          }
+          renderForm();
+        },
+      ),
     ),
     section(
       "Codex",

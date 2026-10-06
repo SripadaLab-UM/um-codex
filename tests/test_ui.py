@@ -1427,7 +1427,8 @@ def test_the_page_starts_at_once_and_asks_only_before_stop_and_delete():
     assert "/prepare" not in script  # no summary page before a start
     # Its definition, Stop, Delete, Windows' fix, and choosing "On this computer" (M4: the one
     # deliberate pop-up when the choice is made; Start never asks).
-    assert script.count("confirmBox(") == 6  # and Stop on this computer (its own words)
+    # Tasks (tasks.py): approving one, and releasing a held file to the assistant.
+    assert script.count("confirmBox(") == 8  # and Stop on this computer (its own words)
     assert "/api/codex-app/allow" not in script and "allow_ssh_include: true" in script
     # The safety facts, short, on every card and under the form.
     for words in ("your real files, no undo", "could send what it can read anywhere", "only the model"):
@@ -1834,3 +1835,47 @@ def test_choosing_terminal_after_a_fallback_clears_its_note(tmp_path):
         assert next(s for s in state["setups"] if s["id"] == made["id"])["app_fallback"] is None
 
     with_server(test, openers={"terminal": FakeOpener(), "codex-app": FakeAppOpener()})
+
+
+# --- Tasks (tasks.py) in the launcher ------------------------------------------------
+
+
+def test_a_setup_that_allows_tasks_has_no_internet_and_stays_in_the_sandbox(folders_here):
+    launcher = launcher_for_tests()
+    made = launcher.create(setup_body(folders_here["thesis"], internet=True, browser=True, tasks=True))
+    assert made["tasks"] is True and made["internet"] is False and made["browser"] is False
+    with pytest.raises(server.Invalid, match="only in the sandbox"):
+        launcher.create(setup_body(folders_here["data"], name="local", tasks=True, runs_on="this-computer"))
+
+
+def test_the_person_answers_tasks_and_releases_held_files(folders_here):
+    from umcodex import tasks
+
+    launcher = launcher_for_tests()
+    made = launcher.create(setup_body(folders_here["thesis"], tasks=True))
+    task = tasks.request(f'goal = "g"\nsetup = "{made["id"]}"\nsteps = ["s"]\n')
+    shown = launcher.state()["tasks"]
+    assert [t["state"] for t in shown] == ["waiting"]
+    assert shown[0]["setup_folders"] == [made["working"]["path"]]
+    assert launcher.answer_task(task.id, {"approve": True})["state"] == "approved"
+    with pytest.raises(server.Invalid, match="already answered"):
+        launcher.answer_task(task.id, {"approve": False})
+
+    run = task.folder / "runs" / "r1"
+    (run / "held").mkdir(parents=True)
+    (run / "released").mkdir()
+    (run / "held" / "plot.png").write_bytes(b"png")
+    held = [{"path": "plot.png", "reason": "image"}]
+    result = {"run": "r1", "status": "done", "released": [], "held": held}
+    (run / "result.json").write_text(json.dumps(result), encoding="utf-8")
+    assert launcher.state()["tasks"][0]["runs"][0]["held"] == [{"path": "plot.png", "reason": "image"}]
+    for bad in ("../result.json", "/etc/passwd", "nothing.png"):
+        with pytest.raises(server.Invalid):
+            launcher.release_held(task.id, "r1", {"path": bad})
+    with pytest.raises(server.Invalid):
+        launcher.release_held(task.id, "../r1", {"path": "plot.png"})
+    launcher.release_held(task.id, "r1", {"path": "plot.png"})
+    assert (run / "released" / "plot.png").is_file() and not (run / "held" / "plot.png").exists()
+    assert launcher.state()["tasks"][0]["runs"][0]["held"] == []
+    audit = (data_dir() / "tasks" / "audit.jsonl").read_text(encoding="utf-8")
+    assert '"event": "released by the person"' in audit and '"via": "launcher"' in audit

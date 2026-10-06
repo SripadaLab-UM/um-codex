@@ -66,6 +66,9 @@ class Setup:
     runs_on: str = "sandbox"
     local_access: str = "full"  # "folder": Codex's commands change only the setup's folders
     computer_use: bool = True  # Computer Use, the in-app browser and Chrome control
+    # Tasks (tasks.py): an outside assistant may ask to run Codex here, headless,
+    # once the person approves each task. Its runs are locked to internet off.
+    tasks: bool = False
 
     @property
     def on_this_computer(self) -> bool:
@@ -87,6 +90,7 @@ class Setup:
             "runs_on": self.runs_on,
             "local_access": self.local_access,
             "computer_use": self.computer_use,
+            "tasks": self.tasks,
         }
 
     @classmethod
@@ -117,6 +121,7 @@ class Setup:
             runs_on=str(raw["runs_on"]) if raw.get("runs_on") in RUNS_ON else "sandbox",
             local_access=str(raw["local_access"]) if raw.get("local_access") in LOCAL_ACCESS else "full",
             computer_use=raw.get("computer_use", True) is not False,
+            tasks=raw.get("tasks", False) is True,
         )
 
 

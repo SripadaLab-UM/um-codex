@@ -73,7 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=f"UM-Codex {__version__}")
     # The metavar leaves out ssh-proxy, which only ssh runs.
     commands = parser.add_subparsers(
-        dest="command", metavar="{launch,ui,setups,key,pull,doctor,update,launchers,ssh-include,uninstall}"
+        dest="command",
+        metavar="{launch,ui,setups,key,pull,doctor,update,launchers,ssh-include,task,uninstall}",
     )
     launch = commands.add_parser("launch", help="choose a setup and open Codex (the default)")
     launch.add_argument(
@@ -103,6 +104,26 @@ def main(argv: list[str] | None = None) -> int:
         "--no-browser", action="store_true", help="don't open the browser: print the sign-in link instead"
     )
     commands.add_parser("setups", help="list, edit and delete saved setups")
+    task = commands.add_parser(
+        "task", help="headless runs an assistant asks for, once you approve (tasks.py)"
+    )
+    task_commands = task.add_subparsers(dest="task_command", required=True)
+    asked = task_commands.add_parser("request", help="ask for a task (a TOML file); it waits for approval")
+    asked.add_argument("file", type=Path)
+    shown = task_commands.add_parser("status", help="a task's state, as JSON")
+    shown.add_argument("task_id")
+    for name, words in (
+        ("approve", "approve a waiting task (asks you to type its id)"),
+        ("decline", "decline a waiting task"),
+    ):
+        answer = task_commands.add_parser(name, help=words)
+        answer.add_argument("task_id")
+    ran = task_commands.add_parser("run", help="one approved run: prints result.json")
+    ran.add_argument("--task", required=True, dest="task_id")
+    ran.add_argument("--brief", required=True, type=Path, help="the brief for Codex (a text file)")
+    ran.add_argument("--inbox", type=Path, help="a folder of files for Codex (read only, at /handoff/in)")
+    ran.add_argument("--timeout", type=float, default=60, help="minutes (default 60)")
+    task_commands.add_parser("protected-paths", help="paths an assistant must never read, as JSON")
     key = commands.add_parser("key", help="save or replace the Toolkit API key")
     key.add_argument(
         "--from-stdin", action="store_true", help="read the key from standard input (for the installers)"
@@ -190,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
             return server.main(open_browser=not args.no_browser)
         if args.command == "setups":
             return _setups()
+        if args.command == "task":
+            return _task(args)
         if args.command == "key":
             return _key_command(from_stdin=args.from_stdin)
         if args.command == "pull":
@@ -254,6 +277,73 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\nDocker problem: {error}")
         print("Run `um-codex doctor` for details.")
         return 1
+
+
+def _task(args: argparse.Namespace) -> int:
+    """`um-codex task ...`: JSON on stdout for the assistant; words on stderr."""
+    import json
+
+    from umcodex import tasks
+
+    def say(text: str) -> None:
+        print(text, file=sys.stderr)
+
+    def show(value: object) -> None:
+        print(json.dumps(value, indent=2, ensure_ascii=False))
+
+    try:
+        if args.task_command == "request":
+            made = tasks.request(args.file.read_text(encoding="utf-8"))
+            show(
+                tasks.status(made)
+                | {"approve_in": "the UM-Codex window (or `um-codex task approve` in a terminal)"}
+            )
+            return 0
+        if args.task_command == "status":
+            show(tasks.status(tasks.get_task(args.task_id)))
+            return 0
+        if args.task_command == "protected-paths":
+            show(tasks.protected_paths())
+            return 0
+        if args.task_command in ("approve", "decline"):
+            task = tasks.get_task(args.task_id)
+            if not (stdin_is_terminal() and sys.stdout.isatty()):
+                # The answer must be a person's, typed: nothing else can give it.
+                say("Approve or decline tasks in the UM-Codex window, or here in a terminal you type in.")
+                return 1
+            asked = task.request()
+            print(f"Task {task.id}, for the setup “{asked['setup_id']}”:")
+            print(f"  Goal: {asked['goal']}")
+            for number, step in enumerate(asked["steps"], 1):
+                print(f"  {number}. {step}")
+            print(
+                f"  Up to {asked['max_runs']} runs within {asked['hours']:g} hours;"
+                " no internet, no browser tool."
+            )
+            typed = input(f"Type the task id ({task.id}) to {args.task_command} it: ").strip()
+            if typed != task.id:
+                print("Not changed.")
+                return 1
+            show(tasks.decide(task, approve=args.task_command == "approve", via="terminal"))
+            return 0
+        if args.task_command == "run":
+            if not doctor.ensure_docker():
+                return 1
+            if not credentials.has_api_key():
+                say("UM-Codex needs its Toolkit API key first: the person runs `um-codex key`.")
+                return 1
+            brief = args.brief.read_text(encoding="utf-8")
+            result = tasks.run(args.task_id, brief, inbox=args.inbox, timeout_minutes=args.timeout, say=say)
+            show(result)
+            return 0 if result["status"] == "done" else 1
+    except tasks.TaskError as error:
+        say(str(error))
+        show({"error": str(error)})
+        return 1
+    except OSError as error:
+        say(f"Couldn't read a file: {error}")
+        return 1
+    return 2
 
 
 def _log_to_file() -> None:
