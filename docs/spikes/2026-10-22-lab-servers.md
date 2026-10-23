@@ -1,6 +1,7 @@
 # Proposal: UM-Codex on the lab's servers
 
-Date: 2026-10-22. **Not decided; nothing built.** Branch `lab-servers-plan`.
+Date: 2026-10-22. **The direction is decided ("Decisions" below), and the spike
+ran ("The spike"); nothing is built yet.** Branch `lab-servers-plan`.
 Question from the maintainer: move UM-Codex from people's own computers to
 the lab's servers, using the large compute server's resources, the way
 DataLab's "High compute" conversations now do. This note compares the ways
@@ -23,9 +24,11 @@ How it was checked:
   and the private server wiki's pages on the compute server and DataLab.
 - **Both servers, read only** (2026-10-22): the web server's Apache modules
   and sshd settings; the compute server's sshd, PAM, Podman, GPU use, home
-  folders and `/etc/subuid`. Nothing was changed on either. One side effect:
-  `podman info` run as the maintainer's own account may have made an empty
-  rootless store folder in that account's home.
+  folders and `/etc/subuid`. Nothing was changed on the web server. On the
+  compute server: the spike's containers (all removed) and UM-Codex's
+  folders (see "The spike"); also, `podman info` run as the maintainer's own
+  account may have made an empty rootless store folder in that account's
+  home.
 - **Docs:** learn.chatgpt.com (app server, remote connections).
 - **Open VSX:** the Codex extension's listing and its linux-x64 package,
   unpacked in a scratch folder and read (not run).
@@ -64,7 +67,7 @@ The three questions:
    Both tiers run on the compute server (the web server is too small, and
    hosts DataLab), with different limits; High adds the GPU. Changing it
    takes effect at the project's next start, since the files are on the
-   compute server either way. Administrators decide who may use High.
+   compute server either way. Anyone in the lab may use High (decided).
 
 ## What exists now
 
@@ -101,8 +104,8 @@ model and where it opens.
   folders there (remote desktops, their own Podman images). No `subuid`
   ranges are set for people, so rootless Podman isn't usable, and on cgroup
   v1 it couldn't enforce limits anyway. GPU at the time: 1.7 of 46 GB in use.
-- Both servers need the medical school network or VPN for SSH. **UNSURE:**
-  whether the web server's HTTPS is reachable off VPN.
+- Both servers need the medical school network or VPN, for SSH and (the
+  maintainer confirms) for the web server's HTTPS too.
 
 ## OpenAI's own remote and browser modes
 
@@ -186,11 +189,13 @@ compute server (rootful Podman)                                                 
   ownership check that answers 404 for anyone else's ids), with its own
   GitHub App callback or a second callback URL on the lab's App.
 - **Each person is mapped to their university account on the compute server**
-  (an administrator's table: GitHub id → uniqname; the uid and groups come
-  from the compute server's own directory). Containers run as that uid and
-  its groups, so a person can never reach a file through UM-Codex that their
-  own account couldn't. The alternative, U-M's single sign-on (giving the
-  uniqname directly), needs ITS to register the service.
+  by an administrator's table, GitHub id → uniqname (decided); the uid and
+  groups come from the compute server's own directory. Containers run as
+  that uid and its groups, so a person can never reach a file through
+  UM-Codex that their own account couldn't. (U-M's single sign-on would give
+  the uniqname directly, but needs ITS; not now.)
+- The web server is reachable only on the medical school network or VPN,
+  which the maintainer counts as a welcome extra layer.
 
 ### Projects (what "choose folders" becomes)
 
@@ -213,16 +218,33 @@ the compute tier.
 - Codex's home (history, its databases) stays per project on the compute
   server's local disk, not on the NAS (SQLite on NFS is a known trouble
   spot).
+- **Where project folders live (decided):** a `um-codex` folder on the lab's
+  NAS share (the share people already use for code and data), with
+  `users/<uniqname>/projects/<project>` inside. `users/` is group-writable
+  with the sticky bit, and each person's folder is theirs alone (0700), made
+  as their uid, since the NAS maps root to nobody. Made on 2026-10-22, with
+  the maintainer's folder in it.
 
 ### Compute
 
 | | Standard | High |
 |---|---|---|
-| CPUs | 4 (example) | 16, pinned to one processor, as DataLab |
-| Memory | 16 GB (example) | 64 to 128 GB |
+| CPUs | 2 | 10, pinned to cores of one processor |
+| Memory | 16 GB | 100 GB |
 | GPU | no | yes (through the GPU socket) |
-| At once | a few per person | 1 per person, 2 in all (example) |
+| At once | 2 per person | 1 per person, 2 in all |
+| Who | everyone | everyone (decided) |
 
+- High is the maintainer's 10 CPUs and 100 GB (tried in the spike: `nproc`
+  said 10, the memory limit was 100 GB). Memory is plentiful on this machine
+  (754 GB); CPUs are what's scarce (32). So the caps are on CPUs: two High
+  projects (20 CPUs) plus a few Standard ones, with DataLab's High (up to
+  2 × 16 CPUs, pinned to the two processors) beside them, already asks for
+  more than 32 at the busiest. Suggested: UM-Codex's containers in a cgroup
+  parent capped at 24 CPUs and 300 GB, and DataLab's High brought down to
+  the same 10 CPUs, so the lab's apps can't starve remote desktops. Standard
+  stays small because it's for editing, small analyses and Codex itself;
+  anything heavy is a reason to pick High.
 - Chosen per project (default from sign-in), changed between runs.
 - The agent is told its limits (instructions and `UMCODEX_CPUS` /
   `OMP_NUM_THREADS`-style variables), as DataLab does, because `nproc` and
@@ -242,23 +264,22 @@ the compute tier.
 - The relay listens on a Unix socket that the tunnel forwards to the compute
   server; each project's gateway mounts it (DataLab's High pattern). The
   relay checks the project's token as today.
-- **Whose key** is a decision: one lab key (as DataLab), or each person's own
-  Toolkit key entered once in the page and kept encrypted (as DataLab keeps
-  people's GitHub tokens). Per-person keys keep billing and limits per
-  person, as the desktop has it now.
+- **One lab key (decided)**, as DataLab. The audit log records who used it
+  for which project (counts, not content).
 
 ### Containers on the compute server: what changes
 
-- **No `sudo` in the server's containers.** Podman there is rootful with no
-  user namespace, so root in a container is root on every mounted folder: it
-  could leave a setuid-root program in a project folder that the person (who
-  also has a shell on that machine) could then run. So the agent runs as the
-  person's uid with `--cap-drop ALL` and `no-new-privileges`. Python, R and
-  Node packages still install into the project (uv, renv, npm); system
-  packages come from the image. This is the one real loss against the
-  desktop.
-- The image needs to run as any uid (writable home and caches per project),
-  as DataLab's agent already does.
+- **No `sudo` in the server's containers (decided: only if a real need
+  shows up).** Podman there is rootful with no user namespace, so root in a
+  container is root on every mounted folder: it could leave a setuid-root
+  program in a project folder that the person (who also has a shell on that
+  machine) could then run. So the agent runs as the person's uid with
+  `--cap-drop ALL` and `no-new-privileges` (in the spike, `sudo` then says
+  "no new privileges" and stops). Python, R and Node packages still install
+  into the project (uv, renv, npm); system packages come from the image.
+- The image runs as any uid: Podman adds the uid to the container's
+  `/etc/passwd` by itself, and `HOME` is set to a folder in the project's
+  Codex home (checked in the spike).
 - Networks as today (internal by default, a bridge when the internet is on),
   with `--add-host` instead of container names, and cleanup by container
   labels only (UM-Codex's `network ls` cleanup doesn't work through Podman's
@@ -286,8 +307,22 @@ the compute tier.
   included.
 - Dashboards (Shiny 3838, Streamlit 8501, Dash 8050) open through
   code-server's port proxy, under the same sign-in.
-- code-server can turn downloads off; for projects with identifiable data
-  that may be wanted (a decision).
+- **Internet and downloads are each person's switches, per project
+  (decided)**, like the desktop's internet switch. Downloads off starts
+  code-server with `--disable-file-downloads`. The page says plainly what
+  each switch means when a project has NAS folders.
+- Settings the image sets for the page (from the spike): the Codex
+  extension's `chatgpt.cliExecutable` in code-server's **User** settings
+  (its Machine settings were ignored, and the extension then ran its own
+  bundled Codex, 0.154.0-alpha, which showed a ChatGPT sign-in); VS Code's
+  own Chat panel turned off (`chat.disableAIFeatures`), since it opens by
+  default beside Codex; Codex's panel opened at start.
+- **The page's own calls out.** In the person's browser, the extension's
+  panel tries to reach OpenAI's feature-flag and event service
+  (`ab.chatgpt.com`, `chatgpt.com/ces`); in the spike those failed only
+  because the test browser had no route there. Apache can add a
+  Content-Security-Policy that keeps the page's connections to its own
+  address (to be checked that the panel still works with it).
 
 ### The Codex desktop app (step 6)
 
@@ -304,18 +339,14 @@ the compute tier.
 
 ## Migration steps, in order
 
-1. **Decide** the items below.
-2. **Spike on the compute server** (needs the maintainer's OK: it runs
-   containers there, under UM-Codex names, nothing of DataLab's touched):
-   the agent image as a person's uid through the tunnelled Podman API, with
-   code-server and the Codex extension and a stub upstream. Check: no sign-in
-   screen; the extension uses the image's `codex` and the enforced settings;
-   chats, approvals and diffs work; a dashboard through the port proxy; the
-   GPU socket; a NAS folder as the person's uid; that UM-Codex's own
-   container commands work on Podman (and fix those that don't).
-3. **Server image variant:** code-server and the extension (pinned), any-uid
-   support, no sudo; built and smoke-tested in release CI like the agent
-   image (amd64 only).
+1. ~~Decide~~ (done, below).
+2. ~~Spike on the compute server~~ (done, below). Left for the pilot:
+   internet on, the Content-Security-Policy, approvals ("ask before
+   commands") in the panel, idle stop, two people at once.
+3. **Server image variant:** code-server and the extension (pinned), the
+   page's settings above, any-uid support, no sudo; built and smoke-tested
+   in release CI like the agent image (amd64 only). The spike's version
+   added 1.6 GB to the 4.7 GB agent image.
 4. **Server set-up (the maintainer runs or approves each):** on the compute
    server, UM-Codex's folders, the router unit, the cgroup parent; on the
    web server, the UM-Codex unit (a service account, ideally), its tunnel
@@ -340,33 +371,95 @@ the compute tier.
 Rough size (focused work): spike 1–2 days; image 2 days; service 6–10 days;
 pilot fixes 2–4 days; the SSH gate 2–4 days.
 
-## What the maintainer must decide or provide
+## Decisions (the maintainer, 2026-10-22)
 
-1. **Go-ahead for the spike** on the compute server (step 2).
-2. **Whose Toolkit key:** one lab key, or each person's own (entered in the
-   page, kept encrypted). If per person: whether usage is billed per person
-   today.
-3. **Who may use it, and High:** the same GitHub team as DataLab? Who may
-   use High and the GPU?
-4. **Identity:** the GitHub → uniqname table kept by an administrator, or
-   U-M single sign-on (needs ITS).
-5. **Limits:** how much of the compute server the lab's apps may use in all
-   (CPUs, memory, GPU), and the Standard and High sizes.
-6. **Folders:** which roots people may add (the NAS share, a shared folder),
-   where project folders live (local disk is fast but not known to be backed
-   up; the NAS is large and slower), and whether either is backed up.
-7. **Internet with study data:** may a project with NAS (study-data) folders
-   have the internet on? Downloads allowed for such projects?
-8. **No sudo** in the server's containers (above): acceptable?
-9. **Service accounts:** DataLab's units and the tunnel run as the
-   maintainer's own account today. UM-Codex's could use a service account on
-   both servers (and a Podman-socket group under a neutral name).
-10. **Secrets to place** (the maintainer places them, as for DataLab): the
-    Toolkit key (if a lab key), the GitHub App client secret (or a second
-    callback on the lab's App), a token-encryption key, the router signing
-    secret.
-11. **Off-VPN:** is the web server's HTTPS reachable without the VPN, and
-    should UM-Codex be?
+1. **Spike on the compute server:** go ahead (done, below).
+2. **Toolkit key:** one lab key.
+3. **Who:** anyone in the lab may use it, High and the GPU included.
+4. **Identity:** GitHub sign-in, with an administrator's table GitHub id →
+   uniqname.
+5. **Limits:** High is 10 CPUs and 100 GB (the caps around it are a
+   suggestion under "Compute").
+6. **Folders:** projects live in a `um-codex` folder on the lab's NAS share
+   (made; see "Projects"). Codex's homes stay on the compute server's local
+   disk.
+7. **Internet and downloads:** each person decides, per project.
+8. **sudo:** none, unless a real need shows up.
+9. **Service accounts:** no preference; UM-Codex runs as the maintainer's
+   account like DataLab for now.
+10. **Off-VPN:** no. The web server needs the medical school VPN, and that
+    stays.
+
+Still to provide, when building (the maintainer places secrets himself):
+the lab key as UM-Codex's own systemd credential, a GitHub App client secret
+(or a second callback URL on the lab's App), a token-encryption key and the
+router's signing secret; and whether the NAS share is backed up.
+
+## The spike (2026-10-22)
+
+**What ran.** The maintainer's Mac stood in for the web server: UM-Codex's
+own relay (`relay.Relay`, the key from the Mac's keychain, sent only to the
+Toolkit) and an SSH tunnel to the compute server forwarding its two Podman
+sockets here and the relay's socket there (a socket in a 0700 folder; the
+gateway's nginx needs it 0666). Through that tunnel, the Docker CLI on the
+Mac started, on the compute server, under UM-Codex labels and names: an
+internal network, the pinned nginx gateway (proxying `/v1/` to the relay's
+socket) and the released agent image (0.1.0-alpha.7) plus code-server
+4.141.0 and the Codex extension 26.5908.31748 (checksum-pinned). Codex's
+settings were written by UM-Codex's own `codex_config` (with `app=True`:
+the token from `umcodex-token`, API login only, the model catalog from the
+image's Codex and the Toolkit's list). The agent ran as the maintainer's uid
+with `--cap-drop ALL`, `no-new-privileges`, `--cpus 10 --memory 100g
+--cpuset-cpus 0-9`, `/work` on the NAS `um-codex` folder, Codex's home on
+local disk, internet off. code-server listened on a Unix socket, forwarded
+to 127.0.0.1 on the Mac, and a headless Chromium drove the page.
+
+**What it showed (VERIFIED, live):**
+- UM-Codex's container commands work through Podman's Docker API: `network
+  create --internal`, `run` with labels, `--network-alias`, `inspect` of a
+  container, `rm -f` and `network rm` by name, cleanup by label. As the wiki
+  says, `--dns` stops name lookups, so the agent got `--add-host
+  gateway:<ip>`.
+- The relay through the forwarded socket: the gateway answered the
+  watchdog's `/v1/_umcodex/alive` with 204 and anything else with 404; real
+  model calls went through it. With the internet off, `https://example.com`
+  failed.
+- In the container: the person's uid and group, `sudo` refused,
+  `nproc` = 10, a 100 GB memory limit, `codex-cli 0.157.1`, files written to
+  the NAS as the person's uid.
+- **The page:** with the image's Codex (see "The page" for the setting),
+  Codex's panel opened with no sign-in, straight to its composer. A prompt
+  made `hello.py`, ran it and answered "4 10" (10 CPUs), with the edit shown
+  with Undo and Review. A second prompt wrote a Streamlit app and started it
+  with `um-codex-dashboard`; it rendered in Chromium through
+  `/proxy/8501/` (live updates over WebSocket included), and code-server's
+  Ports tab listed it. The terminal ran Codex's own terminal interface
+  (0.157.1, the provider's model, `/work`, full access).
+- **The GPU:** the same agent started through the GPU socket with a plain
+  `docker run`: Codex ran `nvidia-smi` and answered "Quadro RTX 8000, 46080
+  MiB | 10 100g".
+- Chats were kept in the project's Codex home across a restart of the
+  container.
+
+**Found along the way:**
+- The gateway's relay socket can't be mounted under `/run`: with the
+  gateway's tmpfs on `/var/run` (a link to `/run` in nginx's image) the
+  start failed once in two ("tmpcopyup … lchown … no such file"). Mounted at
+  `/umcodex/relay.sock` it was fine.
+- The Codex extension spawns its own bundled Codex (0.154.0-alpha) unless
+  `chatgpt.cliExecutable` is set in code-server's User settings; that one
+  showed a ChatGPT sign-in. With the image's 0.157.1 there's none.
+- The Claude desktop app's built-in browser can't register service workers,
+  so VS Code's panels (webviews) don't load there; Chrome, Edge and Firefox
+  do. Not a problem for people, only for testing from that pane.
+- Codex 0.157.1 tries to sync OpenAI's curated plugins from GitHub and
+  chatgpt.com at start; with the internet off that only logs warnings.
+  Worth turning off in the managed settings for the server.
+
+**Cleaned up:** containers, networks, sockets, the token, the spike image
+and the spike's folders were removed. Kept on the compute server: the
+pulled release agent and nginx images, an empty UM-Codex folder on local
+disk, and the NAS `um-codex` folder with the maintainer's empty `projects`.
 
 ## Risks
 
@@ -380,8 +473,8 @@ pilot fixes 2–4 days; the SSH gate 2–4 days.
   and gate narrow; people never near the socket.
 - **Study data and the internet.** A project with identifiable data and the
   internet on can send that data anywhere (or be told to by a web page's
-  prompt injection). The desktop accepts this for the person's own files;
-  on the approved server it needs a rule (decision 7).
+  prompt injection). The maintainer chose to leave it to each person
+  (decision 7), as on the desktop; the page must say it plainly.
 - **Losing sudo** breaks workflows that install system packages; the image
   must carry more.
 - **Sharing the machine:** one GPU without partitioning; CPU and memory
@@ -392,7 +485,8 @@ pilot fixes 2–4 days; the SSH gate 2–4 days.
   its own to that list.
 - **One person runs it all:** the maintainer's account, keys and approvals
   everywhere. Service accounts and the wiki reduce this.
-- **The VPN:** SSH (option A) needs it; HTTPS may too (decision 11).
+- **The VPN:** everything needs it (decision 10): a layer of protection,
+  and also no use from off-campus without it.
 - **Files leaving the server:** page downloads and the app's sftp copy files
   to laptops. Policy, not prevention, unless downloads are turned off.
 

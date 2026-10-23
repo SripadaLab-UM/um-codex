@@ -1979,8 +1979,9 @@ modes, rigor, and the frontend.
 - Running on the lab's servers instead of people's computers (a browser
   page per project, containers on the lab's compute server, Standard or High
   compute): proposed in
-  [spikes/2026-10-22-lab-servers.md](spikes/2026-10-22-lab-servers.md), not
-  decided. Until then, UM-Codex runs on the person's own computer.
+  [spikes/2026-10-22-lab-servers.md](spikes/2026-10-22-lab-servers.md); the
+  direction is decided and a spike ran, nothing is built yet. Until then,
+  UM-Codex runs on the person's own computer.
 - Linux hosts: not in v0. The articles cover Linux, and adding it later is
   mostly the installer.
 - An install site like DataLab's: later. Until then, the README has the two
