@@ -61,7 +61,10 @@ The three questions:
    the person's container and the page is code-server with OpenAI's Codex
    extension (on Open VSX, with a Linux build). OpenAI's own browser and
    remote modes don't fit: they need ChatGPT accounts and run through
-   OpenAI's cloud, not the U-M GPT Toolkit (details below).
+   OpenAI's cloud, not the U-M GPT Toolkit (details below). The Codex
+   **desktop app** itself can also be shown in a browser, by running its
+   Linux build in the container and streaming the screen (spike 2, below):
+   it works, but as an optional extra, not the main page.
 3. **Normal or high compute at sign-in or per project?** Per project, like a
    setup's internet switch, with a personal default chosen at first sign-in.
    Both tiers run on the compute server (the web server is too small, and
@@ -460,6 +463,79 @@ to 127.0.0.1 on the Mac, and a headless Chromium drove the page.
 and the spike's folders were removed. Kept on the compute server: the
 pulled release agent and nginx images, an empty UM-Codex folder on local
 disk, and the NAS `um-codex` folder with the maintainer's empty `projects`.
+
+## Spike 2: the Codex desktop app, streamed to the browser (2026-10-23)
+
+Asked by the maintainer: can the Codex desktop app itself run in a browser?
+OpenAI has no browser version, but it ships the app for Linux (a public
+preview since 2026-08-11: `chatgpt_amd64.deb` from
+`persistent.oaistatic.com/codex-app-prod/linux/deb/latest/`, package
+`chatgpt`, version 26.1016.61520 that day, 525 MB, 1.7 GB installed; Ubuntu
+24.04, which is the agent image's base, is supported). So the app can run
+in the person's container on a virtual screen, shown in the browser.
+
+**What ran.** The same set-up as the first spike (tunnel, relay, gateway,
+the person's uid, no capabilities, 10 CPUs and 100 GB, internet off), with
+an image adding the `.deb` (checksum-pinned; its install script adds
+OpenAI's apt repository, which the image then removes, so the version stays
+put), TigerVNC's `Xvnc` (on the container's own localhost, no password:
+only code-server's proxy reaches it), the openbox window manager, and noVNC
+with websockify. The app ran as `chatgpt --no-sandbox --disable-gpu` (its
+Chromium sandbox can't work with no capabilities; the container is the
+sandbox), with `--shm-size 1g`. noVNC was opened through code-server's port
+proxy (`/proxy/6080/vnc.html`), so it sat behind the same way in as the
+page.
+
+**What it showed (VERIFIED, live):**
+- The app started with **no sign-in**. It opened on ChatGPT's "What type of
+  work do you do?" onboarding (Skip works), then in **ChatGPT Work** mode;
+  its menu switches to **Codex**. Its footer named the provider "U-M GPT
+  Toolkit (through UM-Codex)", from UM-Codex's enforced settings, and it
+  offered only Full access and the setup's model (5.6 Terra).
+- Creating a project used a GTK folder picker inside the container
+  (`/work` was listed). A prompt made `hello2.py`, ran it and answered "4 10
+  codex-cli 0.157.1 10", with the app's own edit card (Undo, View changes).
+  Model calls went through the gateway and relay as before.
+- The app runs **its own bundled Codex, 0.163.0-alpha.11.1**, not the
+  image's pinned 0.157.1 (the `codex` in the shell is still 0.157.1). It
+  still obeyed `/etc/codex` (provider, permissions). Pointing it at the
+  image's Codex (`CODEX_CLI_PATH`) wasn't tried.
+- Memory: the container used about 1.0 GB in all with the app, Xvnc and
+  code-server idle (the app's processes about 0.8 GB of that, its Codex
+  0.3 GB). The image grew by 2.7 GB (9.0 GB in all with code-server).
+- Keyboard: real key presses reach the app through noVNC. The test browser
+  could only send text by synthetic key events (its "insert text" is
+  ignored by noVNC, as is Ctrl+V from it); a person typing in a real browser
+  has no such problem. Copy and paste between the person's computer and the
+  app goes through noVNC's clipboard panel, by hand.
+
+**Not checked:** the app's in-app browser for dashboards (it would run in
+the container, on the virtual screen), approvals in the app, the app with
+the internet on (it would then reach OpenAI's services from the container,
+as the Mac app does), and how it feels over the VPN from home.
+
+### The two pages compared
+
+| | code-server + Codex panel (spike 1) | Desktop app, streamed (spike 2) |
+|---|---|---|
+| Looks like | VS Code in the browser, Codex in a side panel (the same chat UI as the app) | the Codex desktop app, exactly |
+| How it's drawn | the browser draws it, so text and typing are local | a compressed picture from the server: some lag over the network (not timed) |
+| Codex it runs | the image's pinned Codex (by setting) | the app's own bundled alpha, changing with each app version |
+| Files | editor, file tree, drag-and-drop upload, download | the app's views; no upload or download through the stream |
+| Copy and paste | normal | through noVNC's clipboard panel |
+| Dashboards | code-server's `/proxy/<port>/`, checked | the app's in-app browser on the virtual screen (not checked) |
+| Extra per project | ~0.2 GB memory (code-server) | ~0.8 GB memory, and about a fifth of a CPU at rest |
+| Image | +1.6 GB | +2.7 GB more |
+| Supported by OpenAI | the extension, yes; in code-server, not documented | the Linux app is a preview; streaming it, not documented |
+
+**Recommendation:** keep code-server with the Codex panel as the page. Offer
+the streamed app as an optional **App view** button on a project only if
+people ask for it. If so: pin the `.deb`, check each app update the way this
+spike did (its bundled Codex changes with it), and use KasmVNC rather than
+TigerVNC + noVNC for seamless copy and paste and better image quality.
+
+**Cleaned up:** the container, its networks and sockets, the spike image
+and folders. Nothing new was kept.
 
 ## Risks
 
